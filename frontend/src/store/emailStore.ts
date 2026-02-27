@@ -45,6 +45,10 @@ interface EmailStore {
   notification: { type: 'success' | 'error'; message: string } | null
   showNotification: (type: 'success' | 'error', message: string) => void
   clearNotification: () => void
+
+  // Theme
+  theme: 'dark' | 'light'
+  toggleTheme: () => void
 }
 
 export const useEmailStore = create<EmailStore>((set, get) => ({
@@ -101,5 +105,13 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     set({ notification: { type, message } })
     setTimeout(() => set({ notification: null }), 4000)
   },
-  clearNotification: () => set({ notification: null })
+  clearNotification: () => set({ notification: null }),
+
+  // Theme — persisted in localStorage, defaults to dark
+  theme: (localStorage.getItem('hermes-theme') as 'dark' | 'light') || 'dark',
+  toggleTheme: () => set((s) => {
+    const next = s.theme === 'dark' ? 'light' : 'dark'
+    localStorage.setItem('hermes-theme', next)
+    return { theme: next }
+  }),
 }))
