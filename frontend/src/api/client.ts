@@ -1,0 +1,119 @@
+import axios from 'axios'
+import type { Account, EmailSummary, EmailBody, Folder } from '../types/email'
+
+const api = axios.create({
+  baseURL: '/api',
+  withCredentials: true
+})
+
+// ─── Auth / Accounts ─────────────────────────────────────────────────────────
+
+export const accountsApi = {
+  list: () => api.get<Account[]>('/auth/accounts').then(r => r.data),
+
+  addImap: (data: {
+    email: string
+    name?: string
+    password: string
+    imapHost: string
+    imapPort?: number
+    imapSecure?: boolean
+    smtpHost: string
+    smtpPort?: number
+    smtpSecure?: boolean
+  }) => api.post<{ account: Account }>('/auth/accounts/imap', data).then(r => r.data),
+
+  remove: (id: string) => api.delete(`/auth/accounts/${id}`).then(r => r.data),
+
+  getGmailAuthUrl: () => api.get<{ url: string }>('/auth/gmail').then(r => r.data),
+  getOutlookAuthUrl: () => api.get<{ url: string }>('/auth/outlook').then(r => r.data),
+}
+
+// ─── Emails ───────────────────────────────────────────────────────────────────
+
+export const emailsApi = {
+  list: (accountId: string, folder = 'INBOX', limit = 50) =>
+    api.get<EmailSummary[]>(`/emails/${accountId}`, { params: { folder, limit } }).then(r => r.data),
+
+  getBody: (accountId: string, emailId: string) =>
+    api.get<EmailBody>(`/emails/${accountId}/message/${emailId}`).then(r => r.data),
+
+  getFolders: (accountId: string) =>
+    api.get<Folder[]>(`/emails/${accountId}/folders`).then(r => r.data),
+
+  send: (accountId: string, data: {
+    to: string
+    cc?: string
+    bcc?: string
+    subject: string
+    text?: string
+    html?: string
+  }) => api.post(`/emails/${accountId}/send`, data).then(r => r.data),
+
+  delete: (accountId: string, emailId: string) =>
+    api.delete(`/emails/${accountId}/message/${emailId}`).then(r => r.data),
+}
+
+// ─── AI Suggestions (streaming) ───────────────────────────────────────────────
+
+export async function streamAiSuggestion(
+  params: {
+    subject: string
+    body: string
+    mode: string
+    customPrompt?: string
+    replyTo?: { from: string; subject: string; body: string }
+  },
+  onChunk: (text: string) => void,
+  onDone: () => void,
+  onError: (err: string) => void
+) {
+  const controller = new AbortController()
+
+  try {
+    const res = await fetch('/api/ai/suggest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+      signal: controller.signal
+    })
+
+    if (!res.ok) {
+      const data = await res.json()
+      onError(data.error || 'Request failed')
+      return controller
+    }
+
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      const chunk = decoder.decode(value)
+      const lines = chunk.split('\n')
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.text) onChunk(data.text)
+            if (data.done) onDone()
+            if (data.error) onError(data.error)
+          } catch {
+            // skip malformed
+          }
+        }
+      }
+    }
+
+    onDone()
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name !== 'AbortError') {
+      onError(err.message)
+    }
+  }
+
+  return controller
+}

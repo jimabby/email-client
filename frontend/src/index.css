@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: #e6edf3;
+  background: #0d1117;
+}
+
+/* Scrollbar — dark theme */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: #30363d; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+/* Email body rendered inside EmailViewer */
+.email-body {
+  font-family: 'Calibri', 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #c9d1d9;
+}
+.email-body img   { max-width: 100%; }
+.email-body a     { color: #f59e0b; }
+.email-body table { border-collapse: collapse; }
+.email-body blockquote {
+  border-left: 3px solid #30363d;
+  margin-left: 0;
+  padding-left: 1em;
+  color: #8b949e;
+}
+
+/* AI loading dots */
+@keyframes pulse-ai {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+.ai-loading-dot { animation: pulse-ai 1.2s ease-in-out infinite; }
+.ai-loading-dot:nth-child(2) { animation-delay: 0.2s; }
+.ai-loading-dot:nth-child(3) { animation-delay: 0.4s; }
