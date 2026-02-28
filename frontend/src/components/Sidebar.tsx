@@ -52,8 +52,12 @@ export function Sidebar() {
   }, [currentAccountId, accounts])
 
   const handleFolderClick = async (accountId: string, folderPath: string) => {
-    setCurrentAccount(accountId)
-    setCurrentFolder(folderPath)
+    const alreadyHere = currentAccountId === accountId && currentFolder === folderPath
+    if (alreadyHere && emails.length > 0) return  // already loaded, skip refetch
+    if (!alreadyHere) {
+      setCurrentAccount(accountId)
+      setCurrentFolder(folderPath)
+    }
     setLoadingEmails(true)
     try {
       setEmails(await emailsApi.list(accountId, folderPath))

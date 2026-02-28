@@ -91,7 +91,7 @@ export function EmailList() {
     if (!currentAccountId) return
     setLoadingBody(true)
     try {
-      setSelectedEmailBody(await emailsApi.getBody(currentAccountId, email.id))
+      setSelectedEmailBody(await emailsApi.getBody(currentAccountId, email.id, email.folder))
     } catch { setSelectedEmailBody(null) }
     finally { setLoadingBody(false) }
   }

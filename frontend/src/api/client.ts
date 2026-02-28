@@ -35,8 +35,10 @@ export const emailsApi = {
   list: (accountId: string, folder = 'INBOX', limit = 50) =>
     api.get<EmailSummary[]>(`/emails/${accountId}`, { params: { folder, limit } }).then(r => r.data),
 
-  getBody: (accountId: string, emailId: string) =>
-    api.get<EmailBody>(`/emails/${accountId}/message/${emailId}`).then(r => r.data),
+  getBody: (accountId: string, emailId: string, folder?: string) =>
+    api.get<EmailBody>(`/emails/${accountId}/message/${emailId}`, {
+      params: folder ? { folder } : {}
+    }).then(r => r.data),
 
   getFolders: (accountId: string) =>
     api.get<Folder[]>(`/emails/${accountId}/folders`).then(r => r.data),
@@ -50,8 +52,10 @@ export const emailsApi = {
     html?: string
   }) => api.post(`/emails/${accountId}/send`, data).then(r => r.data),
 
-  delete: (accountId: string, emailId: string) =>
-    api.delete(`/emails/${accountId}/message/${emailId}`).then(r => r.data),
+  delete: (accountId: string, emailId: string, folder?: string) =>
+    api.delete(`/emails/${accountId}/message/${emailId}`, {
+      params: folder ? { folder } : {}
+    }).then(r => r.data),
 }
 
 // ─── AI Suggestions (streaming) ───────────────────────────────────────────────

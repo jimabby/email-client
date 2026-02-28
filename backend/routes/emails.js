@@ -69,10 +69,10 @@ router.get('/:accountId/message/:emailId', async (req, res) => {
       const outlookId = emailId.includes('-') ? emailId.split('-').slice(1).join('-') : emailId;
       body = await service.fetchEmailBody(account, outlookId);
     } else {
-      // IMAP: emailId format is "accountId-uid-folder"
-      const parts = emailId.split('-');
+      // IMAP: emailId format is "accountId::uid", folder passed as ?folder= query param
+      const parts = emailId.split('::');
       const uid = parseInt(parts[1]);
-      const folder = parts.slice(2).join('-') || 'INBOX';
+      const folder = req.query.folder || 'INBOX';
       body = await service.fetchEmailBody(account, uid, folder);
     }
 
@@ -85,6 +85,11 @@ router.get('/:accountId/message/:emailId', async (req, res) => {
         } else if (account.type === 'outlook') {
           const outlookId = emailId.includes('-') ? emailId.split('-').slice(1).join('-') : emailId;
           await service.markAsRead(account, outlookId);
+        } else {
+          const parts = emailId.split('::');
+          const uid = parseInt(parts[1]);
+          const folder = req.query.folder || 'INBOX';
+          await service.markAsRead(account, uid, folder);
         }
       }
     } catch (e) {
@@ -127,9 +132,9 @@ router.delete('/:accountId/message/:emailId', async (req, res) => {
   try {
     if (account.type === 'imap') {
       const service = require('../services/imapService');
-      const parts = req.params.emailId.split('-');
+      const parts = req.params.emailId.split('::');
       const uid = parseInt(parts[1]);
-      const folder = parts.slice(2).join('-') || 'INBOX';
+      const folder = req.query.folder || 'INBOX';
       await service.deleteEmail(account, uid, folder);
     }
     res.json({ success: true });

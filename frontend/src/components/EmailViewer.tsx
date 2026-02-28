@@ -1,6 +1,7 @@
 import { format, parseISO } from 'date-fns'
 import DOMPurify from 'dompurify'
 import { useEmailStore } from '../store/emailStore'
+import { emailsApi } from '../api/client'
 
 function formatFullDate(dateStr: string): string {
   try { return format(parseISO(dateStr), 'EEEE, MMMM d, yyyy h:mm a') }
@@ -16,7 +17,7 @@ function getInitials(from: string): string {
 }
 
 export function EmailViewer() {
-  const { selectedEmail, selectedEmailBody, isLoadingBody, openCompose } = useEmailStore()
+  const { selectedEmail, selectedEmailBody, isLoadingBody, openCompose, removeEmail, showNotification } = useEmailStore()
 
   if (!selectedEmail) {
     return (
@@ -63,6 +64,17 @@ export function EmailViewer() {
     replyTo: body ? { id: selectedEmail.id, from: body.from, to: body.to, subject: body.subject, date: body.date, html: body.html, text: body.text } : undefined
   })
 
+  const handleDelete = async () => {
+    if (!selectedEmail) return
+    try {
+      await emailsApi.delete(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder)
+      removeEmail(selectedEmail.id)
+      showNotification('success', 'Email deleted')
+    } catch {
+      showNotification('error', 'Failed to delete email')
+    }
+  }
+
   const handleForward = () => openCompose({
     accountId: selectedEmail.accountId,
     subject: `Fwd: ${selectedEmail.subject.replace(/^Fwd:\s*/i, '')}`,
@@ -98,7 +110,7 @@ export function EmailViewer() {
           Forward
         </button>
         <div className="flex-1" />
-        <button className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors" title="Delete">
+        <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors" title="Delete">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
       </div>

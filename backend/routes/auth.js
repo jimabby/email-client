@@ -44,9 +44,14 @@ router.post('/accounts/imap', async (req, res) => {
 });
 
 // Delete account
-router.delete('/accounts/:id', (req, res) => {
+router.delete('/accounts/:id', async (req, res) => {
   const ok = store.removeAccount(req.params.id);
   if (!ok) return res.status(404).json({ error: 'Account not found' });
+  // Close any cached IMAP connection for this account
+  try {
+    const imapService = require('../services/imapService');
+    await imapService.closeConnection(req.params.id);
+  } catch {}
   res.json({ success: true });
 });
 

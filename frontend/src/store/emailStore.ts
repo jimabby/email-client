@@ -24,6 +24,7 @@ interface EmailStore {
   setEmails: (emails: EmailSummary[]) => void
   setLoadingEmails: (loading: boolean) => void
   markEmailRead: (id: string) => void
+  removeEmail: (id: string) => void
 
   // Selected email
   selectedEmail: EmailSummary | null
@@ -71,6 +72,11 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   setLoadingEmails: (loading) => set({ isLoadingEmails: loading }),
   markEmailRead: (id) => set((s) => ({
     emails: s.emails.map(e => e.id === id ? { ...e, read: true } : e)
+  })),
+  removeEmail: (id) => set((s) => ({
+    emails: s.emails.filter(e => e.id !== id),
+    selectedEmail: s.selectedEmail?.id === id ? null : s.selectedEmail,
+    selectedEmailBody: s.selectedEmail?.id === id ? null : s.selectedEmailBody,
   })),
 
   selectedEmail: null,
