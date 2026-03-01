@@ -6,7 +6,7 @@ import { ComposeModal } from './components/ComposeModal'
 import { AccountModal } from './components/AccountModal'
 import { HermesLogo } from './components/HermesLogo'
 import { useEmailStore } from './store/emailStore'
-import { accountsApi } from './api/client'
+import { accountsApi, aiApi } from './api/client'
 
 function Notification() {
   const { notification, clearNotification } = useEmailStore()
@@ -95,7 +95,13 @@ function TopBar() {
 }
 
 export default function App() {
-  const { isComposeOpen, showAccountModal, setAccounts, setCurrentAccount, showNotification, theme } = useEmailStore()
+  const { isComposeOpen, showAccountModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig } = useEmailStore()
+
+  useEffect(() => {
+    aiApi.getSettings().then(({ provider, configured }) => {
+      if (provider) setAiConfig(provider, configured)
+    }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)

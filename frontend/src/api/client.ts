@@ -58,6 +58,19 @@ export const emailsApi = {
     }).then(r => r.data),
 }
 
+// ─── AI Settings ──────────────────────────────────────────────────────────────
+
+export const aiApi = {
+  getSettings: () =>
+    api.get<{ provider: 'claude' | 'openai' | 'gemini' | null; configured: boolean }>('/ai/settings').then(r => r.data),
+
+  saveSettings: (provider: 'claude' | 'openai' | 'gemini', apiKey: string) =>
+    api.post('/ai/settings', { provider, apiKey }).then(r => r.data),
+
+  clearSettings: () =>
+    api.delete('/ai/settings').then(r => r.data),
+}
+
 // ─── AI Suggestions (streaming) ───────────────────────────────────────────────
 
 export async function streamAiSuggestion(

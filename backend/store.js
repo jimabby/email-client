@@ -12,7 +12,7 @@ function loadStore() {
   } catch (e) {
     console.error('Failed to load store:', e.message);
   }
-  return { accounts: [] };
+  return { accounts: [], aiSettings: {} };
 }
 
 function saveStore(data) {
@@ -59,5 +59,14 @@ module.exports = {
     store.accounts.splice(idx, 1);
     saveStore(store);
     return true;
+  },
+
+  getAiSettings() {
+    return store.aiSettings || {};
+  },
+
+  saveAiSettings({ provider, apiKey }) {
+    store.aiSettings = { provider, apiKey };
+    saveStore(store);
   }
 };

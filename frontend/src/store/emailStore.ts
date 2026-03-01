@@ -47,6 +47,11 @@ interface EmailStore {
   showNotification: (type: 'success' | 'error', message: string) => void
   clearNotification: () => void
 
+  // AI
+  aiProvider: 'claude' | 'openai' | 'gemini' | null
+  aiConfigured: boolean
+  setAiConfig: (provider: 'claude' | 'openai' | 'gemini' | null, configured: boolean) => void
+
   // Theme
   theme: 'dark' | 'light'
   toggleTheme: () => void
@@ -112,6 +117,11 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     setTimeout(() => set({ notification: null }), 4000)
   },
   clearNotification: () => set({ notification: null }),
+
+  // AI
+  aiProvider: null,
+  aiConfigured: false,
+  setAiConfig: (provider, configured) => set({ aiProvider: provider, aiConfigured: configured }),
 
   // Theme — persisted in localStorage, defaults to dark
   theme: (localStorage.getItem('hermes-theme') as 'dark' | 'light') || 'dark',

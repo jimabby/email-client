@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useEmailStore } from '../store/emailStore'
-import { accountsApi } from '../api/client'
+import { accountsApi, aiApi } from '../api/client'
 import type { Account } from '../types/email'
 
-type Tab = 'imap' | 'gmail' | 'outlook'
+type Tab = 'imap' | 'gmail' | 'outlook' | 'ai'
 
 const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHost: string; smtpPort: number }> = {
   'Gmail (App Password)': { imapHost: 'imap.gmail.com',        imapPort: 993, smtpHost: 'smtp.gmail.com',        smtpPort: 587 },
@@ -16,7 +16,7 @@ const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHos
 const inputCls = 'w-full px-3 py-2 text-sm bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md focus:outline-none focus:border-[#f59e0b]/60 transition-colors'
 
 export function AccountModal() {
-  const { setShowAccountModal, addAccount, showNotification } = useEmailStore()
+  const { setShowAccountModal, addAccount, showNotification, setAiConfig, aiProvider, aiConfigured } = useEmailStore()
   const [tab, setTab]       = useState<Tab>('imap')
   const [preset, setPreset] = useState('Gmail (App Password)')
   const [isLoading, setIsLoading] = useState(false)
@@ -26,6 +26,12 @@ export function AccountModal() {
     imapHost: 'imap.gmail.com', imapPort: 993, imapSecure: true,
     smtpHost: 'smtp.gmail.com', smtpPort: 587, smtpSecure: false,
   })
+
+  const [aiSelectedProvider, setAiSelectedProvider] = useState<'claude' | 'openai' | 'gemini'>(aiProvider || 'claude')
+  const [aiApiKey, setAiApiKey] = useState('')
+  const [aiSaving, setAiSaving] = useState(false)
+
+  useEffect(() => { setAiSelectedProvider(aiProvider || 'claude') }, [aiProvider])
 
   const update = (field: string, value: string | number | boolean) =>
     setForm(f => ({ ...f, [field]: value }))
@@ -62,17 +68,41 @@ export function AccountModal() {
     catch (err: unknown) { showNotification('error', err instanceof Error ? err.message : 'Failed to start Outlook OAuth') }
   }
 
+  const handleAiSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!aiApiKey.trim()) { showNotification('error', 'Please enter an API key'); return }
+    setAiSaving(true)
+    try {
+      await aiApi.saveSettings(aiSelectedProvider, aiApiKey)
+      setAiConfig(aiSelectedProvider, true)
+      setAiApiKey('')
+      const name = aiSelectedProvider === 'claude' ? 'Claude' : aiSelectedProvider === 'openai' ? 'ChatGPT' : 'Gemini'
+      showNotification('success', `${name} AI configured!`)
+    } catch (err: unknown) {
+      showNotification('error', err instanceof Error ? err.message : 'Failed to save AI settings')
+    } finally { setAiSaving(false) }
+  }
+
+  const handleAiClear = async () => {
+    try {
+      await aiApi.clearSettings()
+      setAiConfig(null, false)
+      showNotification('success', 'AI settings cleared')
+    } catch { showNotification('error', 'Failed to clear AI settings') }
+  }
+
   const tabs = [
     { id: 'imap' as Tab,    label: 'IMAP / SMTP', sub: 'Any provider' },
     { id: 'gmail' as Tab,   label: 'Gmail',        sub: 'OAuth' },
     { id: 'outlook' as Tab, label: 'Outlook',      sub: 'OAuth' },
+    { id: 'ai' as Tab,      label: 'AI',           sub: 'Claude / GPT / Gemini' },
   ]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl w-[480px] max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#d0d7de] dark:border-[#30363d]">
-          <h2 className="text-base font-semibold text-[#1f2328] dark:text-[#e6edf3]">Add Email Account</h2>
+          <h2 className="text-base font-semibold text-[#1f2328] dark:text-[#e6edf3]">Settings</h2>
           <button onClick={() => setShowAccountModal(false)} className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 2l12 12M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
@@ -81,13 +111,18 @@ export function AccountModal() {
         <div className="flex border-b border-[#d0d7de] dark:border-[#30363d] px-2 pt-2">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex-1 px-3 py-2 text-xs font-medium rounded-t-md transition-colors border-b-2
+              className={`flex-1 px-2 py-2 text-xs font-medium rounded-t-md transition-colors border-b-2
                 ${tab === t.id
                   ? 'border-[#f59e0b] text-[#b45309] dark:text-[#f59e0b] bg-[rgba(245,158,11,0.05)]'
                   : 'border-transparent text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
                 }`}
             >
-              <div>{t.label}</div>
+              <div className="flex items-center justify-center gap-1.5">
+                {t.id === 'ai' && aiConfigured && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                )}
+                {t.label}
+              </div>
               <div className="text-[9px] opacity-60 mt-0.5">{t.sub}</div>
             </button>
           ))}
@@ -224,6 +259,99 @@ export function AccountModal() {
               <div className="bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] rounded-md p-3 text-xs text-[#656d76] dark:text-[#8b949e]">
                 <strong className="text-[#1f2328] dark:text-[#e6edf3]">Note:</strong> Requires OUTLOOK_CLIENT_ID and OUTLOOK_CLIENT_SECRET in backend .env
               </div>
+            </div>
+          )}
+
+          {tab === 'ai' && (
+            <div className="space-y-5">
+              {/* Status banner */}
+              <div className={`flex items-center gap-3 p-3 rounded-lg border ${
+                aiConfigured
+                  ? 'bg-green-50 dark:bg-[rgba(46,160,67,0.1)] border-green-200 dark:border-[#238636]'
+                  : 'bg-[#f6f8fa] dark:bg-[#21262d] border-[#d0d7de] dark:border-[#30363d]'
+              }`}>
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${aiConfigured ? 'bg-green-500' : 'bg-[#818b98] dark:bg-[#484f58]'}`} />
+                <div className="flex-1 min-w-0">
+                  {aiConfigured ? (
+                    <>
+                      <p className="text-xs font-semibold text-green-700 dark:text-[#3fb950]">
+                        {aiProvider === 'claude' ? 'Claude (Anthropic)' : aiProvider === 'openai' ? 'ChatGPT (OpenAI)' : 'Gemini (Google)'} active
+                      </p>
+                      <p className="text-[11px] text-green-600 dark:text-[#3fb950]/70">AI suggestions are enabled in Compose</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs font-semibold text-[#656d76] dark:text-[#8b949e]">No AI configured</p>
+                      <p className="text-[11px] text-[#818b98] dark:text-[#484f58]">Add an API key below to enable AI suggestions</p>
+                    </>
+                  )}
+                </div>
+                {aiConfigured && (
+                  <button onClick={handleAiClear} className="text-[11px] text-[#cf222e] dark:text-[#f85149] hover:underline flex-shrink-0">
+                    Remove
+                  </button>
+                )}
+              </div>
+
+              {/* Provider cards */}
+              <div>
+                <label className="block text-[10px] font-semibold text-[#818b98] dark:text-[#484f58] uppercase tracking-wide mb-2">Choose Provider</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    { id: 'claude',  label: 'Claude',  sub: 'Anthropic', color: '#d97706', letter: 'C' },
+                    { id: 'openai',  label: 'ChatGPT', sub: 'OpenAI',    color: '#10a37f', letter: 'AI' },
+                    { id: 'gemini',  label: 'Gemini',  sub: 'Google',    color: '#4285F4', letter: 'G' },
+                  ] as const).map(p => (
+                    <button key={p.id} type="button" onClick={() => setAiSelectedProvider(p.id)}
+                      className={`flex flex-col items-center gap-2 p-3 rounded-lg border text-center transition-colors ${
+                        aiSelectedProvider === p.id
+                          ? 'border-[#f59e0b]/60 bg-[rgba(245,158,11,0.08)]'
+                          : 'border-[#d0d7de] dark:border-[#30363d] hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]'
+                      }`}
+                    >
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-[10px] font-bold" style={{ backgroundColor: p.color }}>{p.letter}</div>
+                      <div>
+                        <div className="text-xs font-semibold text-[#1f2328] dark:text-[#e6edf3]">{p.label}</div>
+                        <div className="text-[10px] text-[#656d76] dark:text-[#8b949e]">{p.sub}</div>
+                      </div>
+                      {aiSelectedProvider === p.id && (
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                          <circle cx="7" cy="7" r="6" fill="#f59e0b"/>
+                          <path d="M4 7l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* API key */}
+              <form onSubmit={handleAiSave} className="space-y-3">
+                <div>
+                  <label className="block text-[10px] font-semibold text-[#818b98] dark:text-[#484f58] uppercase tracking-wide mb-1">
+                    {aiSelectedProvider === 'claude' ? 'Anthropic API Key' : aiSelectedProvider === 'openai' ? 'OpenAI API Key' : 'Google AI API Key'}
+                  </label>
+                  <input
+                    type="password"
+                    value={aiApiKey}
+                    onChange={e => setAiApiKey(e.target.value)}
+                    className={inputCls}
+                    placeholder={aiSelectedProvider === 'claude' ? 'sk-ant-api03-…' : aiSelectedProvider === 'openai' ? 'sk-proj-…' : 'AIza…'}
+                  />
+                  <p className="mt-1.5 text-[10px] text-[#656d76] dark:text-[#8b949e]">
+                    {aiSelectedProvider === 'claude'
+                      ? 'Get your key at console.anthropic.com → API Keys'
+                      : aiSelectedProvider === 'openai'
+                      ? 'Get your key at platform.openai.com → API Keys'
+                      : 'Get your free key at aistudio.google.com → Get API key'
+                    }
+                  </p>
+                </div>
+                <button type="submit" disabled={aiSaving || !aiApiKey.trim()}
+                  className="w-full bg-[#f59e0b] text-[#0d1117] py-2.5 rounded-md text-sm font-bold hover:bg-[#fbbf24] transition-colors disabled:opacity-50">
+                  {aiSaving ? '⟳ Saving…' : `Save ${aiSelectedProvider === 'claude' ? 'Claude' : aiSelectedProvider === 'openai' ? 'ChatGPT' : 'Gemini'} Key`}
+                </button>
+              </form>
             </div>
           )}
         </div>

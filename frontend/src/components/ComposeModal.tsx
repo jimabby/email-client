@@ -16,7 +16,7 @@ const AI_MODES: { value: AiMode; label: string; icon: string; description: strin
 ]
 
 export function ComposeModal() {
-  const { composeData, accounts, closeCompose, showNotification } = useEmailStore()
+  const { composeData, accounts, closeCompose, showNotification, aiProvider, aiConfigured } = useEmailStore()
 
   const [to, setTo]           = useState(composeData?.to || '')
   const [cc, setCc]           = useState(composeData?.cc || '')
@@ -33,6 +33,7 @@ export function ComposeModal() {
   const [aiSuggestion, setAiSuggestion] = useState('')
   const [isAiLoading, setIsAiLoading]   = useState(false)
   const [aiDone, setAiDone]             = useState(false)
+  const [aiError, setAiError]           = useState('')
   const abortRef = useRef<{ abort: () => void } | null>(null)
 
   const handleSend = async () => {
@@ -54,7 +55,7 @@ export function ComposeModal() {
 
   const handleAiSuggest = useCallback(async () => {
     if (isAiLoading) { abortRef.current?.abort(); setIsAiLoading(false); return }
-    setIsAiLoading(true); setAiDone(false); setAiSuggestion('')
+    setIsAiLoading(true); setAiDone(false); setAiSuggestion(''); setAiError('')
     const replyTo = composeData?.replyTo
       ? { from: composeData.replyTo.from, subject: composeData.replyTo.subject, body: composeData.replyTo.text || '' }
       : undefined
@@ -62,10 +63,10 @@ export function ComposeModal() {
       { subject, body, mode: aiMode, customPrompt: aiMode === 'custom' ? customPrompt : undefined, replyTo },
       (text) => setAiSuggestion(prev => prev + text),
       () => { setIsAiLoading(false); setAiDone(true) },
-      (err) => { setIsAiLoading(false); showNotification('error', err) }
+      (err) => { setIsAiLoading(false); setAiError(err) }
     )
     abortRef.current = { abort: () => controller.abort() }
-  }, [subject, body, aiMode, customPrompt, composeData, isAiLoading, showNotification])
+  }, [subject, body, aiMode, customPrompt, composeData, isAiLoading])
 
   const applyAiSuggestion = () => {
     if (aiMode === 'subject') {
@@ -92,10 +93,17 @@ export function ComposeModal() {
           <div className="w-72 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl flex flex-col" style={{ height: '520px' }}>
             <div className="flex items-center justify-between px-4 py-3 border-b border-[#d0d7de] dark:border-[#30363d] rounded-t-xl bg-[#f6f8fa] dark:bg-[#1c2128]">
               <div className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
-                  <span className="text-[9px] text-white">✦</span>
+                <div className={`w-5 h-5 rounded-full flex items-center justify-center ${
+                  aiProvider === 'openai' ? 'bg-[#10a37f]' : aiProvider === 'gemini' ? 'bg-[#4285F4]' : 'bg-[#d97706]'
+                }`}>
+                  <span className="text-[9px] text-white font-bold">{aiProvider === 'openai' ? 'AI' : aiProvider === 'gemini' ? 'G' : 'C'}</span>
                 </div>
-                <span className="font-semibold text-sm text-[#1f2328] dark:text-[#e6edf3]">Claude AI</span>
+                <span className="font-semibold text-sm text-[#1f2328] dark:text-[#e6edf3]">
+                  {aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} AI
+                </span>
+                {!aiConfigured && (
+                  <span className="text-[9px] bg-amber-100 dark:bg-[rgba(245,158,11,0.15)] text-amber-700 dark:text-[#d97706] px-1.5 py-0.5 rounded font-medium">no key</span>
+                )}
               </div>
               <button onClick={() => setShowAiPanel(false)} className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
@@ -126,7 +134,7 @@ export function ComposeModal() {
                 <textarea
                   value={customPrompt}
                   onChange={e => setCustomPrompt(e.target.value)}
-                  placeholder="What should Claude do with this email?"
+                  placeholder={`What should ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} do with this email?`}
                   className="mt-2 w-full p-2 text-xs bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md resize-none focus:outline-none focus:border-violet-400"
                   rows={2}
                 />
@@ -141,14 +149,14 @@ export function ComposeModal() {
                     : 'bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-500 hover:to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed'
                   }`}
               >
-                {isAiLoading ? '⏹ Stop' : '✦ Ask Claude'}
+                {isAiLoading ? '⏹ Stop' : `✦ Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-3">
               {isAiLoading && !aiSuggestion && (
                 <div className="flex items-center gap-2 text-violet-500 text-xs">
-                  <span>Claude is thinking</span>
+                  <span>{aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} is thinking</span>
                   <span className="flex gap-1">
                     {[0,1,2].map(i => <span key={i} className="ai-loading-dot w-1 h-1 rounded-full bg-violet-500 inline-block" />)}
                   </span>
@@ -165,9 +173,15 @@ export function ComposeModal() {
                   </div>
                 </div>
               )}
-              {!aiSuggestion && !isAiLoading && (
+              {aiError && (
+                <div className="text-[11px] text-red-600 dark:text-[#f85149] bg-red-50 dark:bg-[#f85149]/10 border border-red-200 dark:border-[#f85149]/30 rounded-md p-2.5 leading-relaxed">
+                  <div className="font-semibold mb-0.5">Error</div>
+                  {aiError}
+                </div>
+              )}
+              {!aiSuggestion && !isAiLoading && !aiError && (
                 <div className="text-[11px] text-[#818b98] dark:text-[#484f58] text-center py-4 leading-relaxed">
-                  Select a mode and click<br/>"Ask Claude" to get started.
+                  Select a mode and click<br/>"{`Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}" to get started.
                 </div>
               )}
             </div>
