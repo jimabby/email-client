@@ -32,8 +32,13 @@ export const accountsApi = {
 // ─── Emails ───────────────────────────────────────────────────────────────────
 
 export const emailsApi = {
-  list: (accountId: string, folder = 'INBOX', limit = 50) =>
-    api.get<EmailSummary[]>(`/emails/${accountId}`, { params: { folder, limit } }).then(r => r.data),
+  list: (accountId: string, folder = 'INBOX', limit = 50, pageToken?: string | null) =>
+    api.get<{ emails: EmailSummary[]; nextToken: string | null }>(`/emails/${accountId}`, {
+      params: { folder, limit, ...(pageToken ? { pageToken } : {}) }
+    }).then(r => r.data),
+
+  search: (accountId: string, query: string, folder?: string, limit = 50) =>
+    api.get<EmailSummary[]>(`/emails/${accountId}/search`, { params: { q: query, folder, limit } }).then(r => r.data),
 
   getBody: (accountId: string, emailId: string, folder?: string) =>
     api.get<EmailBody>(`/emails/${accountId}/message/${emailId}`, {
@@ -56,6 +61,21 @@ export const emailsApi = {
   delete: (accountId: string, emailId: string, folder?: string) =>
     api.delete(`/emails/${accountId}/message/${emailId}`, {
       params: folder ? { folder } : {}
+    }).then(r => r.data),
+
+  markUnread: (accountId: string, emailId: string, folder?: string) =>
+    api.post(`/emails/${accountId}/message/${emailId}/unread`, {}, {
+      params: folder ? { folder } : {}
+    }).then(r => r.data),
+
+  star: (accountId: string, emailId: string, starred: boolean, folder?: string) =>
+    api.post(`/emails/${accountId}/message/${emailId}/star`, { starred }, {
+      params: folder ? { folder } : {}
+    }).then(r => r.data),
+
+  move: (accountId: string, emailId: string, targetFolder: string, sourceFolder?: string) =>
+    api.post(`/emails/${accountId}/message/${emailId}/move`, { folder: targetFolder }, {
+      params: sourceFolder ? { folder: sourceFolder } : {}
     }).then(r => r.data),
 
   categorize: (emails: { id: string; from: string; subject: string; snippet?: string }[]) =>

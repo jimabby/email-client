@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import DOMPurify from 'dompurify'
 import { useEmailStore } from '../store/emailStore'
@@ -16,8 +17,22 @@ function getInitials(from: string): string {
   return name.slice(0, 2).toUpperCase()
 }
 
+const StarIcon = ({ filled }: { filled?: boolean }) => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? '#f59e0b' : 'none'}>
+    <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
+      stroke="#f59e0b" strokeWidth="1.3" strokeLinejoin="round"/>
+  </svg>
+)
+
 export function EmailViewer() {
-  const { selectedEmail, selectedEmailBody, isLoadingBody, openCompose, removeEmail, showNotification } = useEmailStore()
+  const {
+    selectedEmail, selectedEmailBody, isLoadingBody,
+    openCompose, removeEmail, showNotification,
+    toggleStarLocal, markEmailUnread, setSelectedEmail,
+    folders, currentAccountId, currentFolder,
+  } = useEmailStore()
+
+  const [showMoveMenu, setShowMoveMenu] = useState(false)
 
   if (!selectedEmail) {
     return (
@@ -81,6 +96,39 @@ export function EmailViewer() {
     body: body ? `\n\n-------- Forwarded Message --------\nFrom: ${body.from}\nDate: ${body.date}\nSubject: ${body.subject}\n\n${body.text || ''}` : ''
   })
 
+  const handleStar = async () => {
+    const newStarred = !selectedEmail.starred
+    toggleStarLocal(selectedEmail.id)
+    try {
+      await emailsApi.star(selectedEmail.accountId, selectedEmail.id, newStarred, selectedEmail.folder)
+    } catch {
+      toggleStarLocal(selectedEmail.id) // revert
+      showNotification('error', 'Failed to update star')
+    }
+  }
+
+  const handleMarkUnread = async () => {
+    try {
+      await emailsApi.markUnread(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder)
+      markEmailUnread(selectedEmail.id)
+      setSelectedEmail(null)
+      showNotification('success', 'Marked as unread')
+    } catch {
+      showNotification('error', 'Failed to mark as unread')
+    }
+  }
+
+  const handleMove = async (targetFolder: string) => {
+    setShowMoveMenu(false)
+    try {
+      await emailsApi.move(selectedEmail.accountId, selectedEmail.id, targetFolder, selectedEmail.folder)
+      removeEmail(selectedEmail.id)
+      showNotification('success', `Moved to ${targetFolder}`)
+    } catch {
+      showNotification('error', 'Failed to move email')
+    }
+  }
+
   const sanitizedHtml = body?.html
     ? DOMPurify.sanitize(body.html, {
         ALLOWED_TAGS: ['p','div','span','a','b','i','em','strong','br','ul','ol','li','h1','h2','h3','h4','h5','h6','table','tr','td','th','tbody','thead','img','blockquote','pre','code','hr','font'],
@@ -89,6 +137,9 @@ export function EmailViewer() {
     : null
 
   const toolBtn = 'flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors'
+
+  const accountFolders = (currentAccountId ? folders[currentAccountId] : null) || []
+  const movableFolders = accountFolders.filter(f => f.path !== currentFolder && f.path !== '__starred__')
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
@@ -110,6 +161,60 @@ export function EmailViewer() {
           Forward
         </button>
         <div className="flex-1" />
+
+        {/* Star */}
+        <button
+          onClick={handleStar}
+          title={selectedEmail.starred ? 'Unstar' : 'Star'}
+          className={`p-1.5 rounded-md transition-colors ${selectedEmail.starred ? 'text-[#f59e0b]' : 'text-[#818b98] dark:text-[#484f58] hover:text-[#f59e0b]'} hover:bg-[#eaeef2] dark:hover:bg-[#21262d]`}
+        >
+          <StarIcon filled={selectedEmail.starred} />
+        </button>
+
+        {/* Mark unread */}
+        <button
+          onClick={handleMarkUnread}
+          title="Mark as unread"
+          className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/>
+            <path d="M2 4l6 5 6-5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+            <circle cx="13" cy="4" r="2.5" fill="#f59e0b"/>
+          </svg>
+        </button>
+
+        {/* Move to folder */}
+        {movableFolders.length > 0 && (
+          <div className="relative">
+            <button
+              onClick={() => setShowMoveMenu(v => !v)}
+              title="Move to folder"
+              className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+                <path d="M8 8v4M6 10l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+            {showMoveMenu && (
+              <div className="absolute right-0 top-full mt-1 w-40 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-lg shadow-xl z-20 py-1">
+                <div className="px-3 py-1.5 text-[9px] font-semibold text-[#818b98] dark:text-[#484f58] uppercase tracking-wide">Move to</div>
+                {movableFolders.map(f => (
+                  <button
+                    key={f.path}
+                    onClick={() => handleMove(f.path)}
+                    className="w-full text-left px-3 py-1.5 text-xs text-[#24292f] dark:text-[#c9d1d9] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] transition-colors"
+                  >
+                    {f.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Delete */}
         <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors" title="Delete">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
@@ -138,7 +243,7 @@ export function EmailViewer() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="flex-1 overflow-y-auto px-6 py-5" onClick={() => setShowMoveMenu(false)}>
         {sanitizedHtml ? (
           <div className="email-body" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
         ) : body?.text ? (

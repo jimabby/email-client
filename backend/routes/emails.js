@@ -10,20 +10,50 @@ function getService(accountType) {
   return require('../services/imapService');
 }
 
-// GET /api/emails/:accountId?folder=INBOX&limit=50
+// Extract provider-specific ID from composite email IDs.
+// Gmail/Outlook: "{uuid}-{msgId}" — UUID has 4 dashes (5 segments) → slice(5)
+// IMAP:          "{accountId}::{uid}"
+function gmailOrOutlookId(emailId) {
+  return emailId.split('-').slice(5).join('-');
+}
+function imapUid(emailId) {
+  return parseInt(emailId.split('::')[1]);
+}
+
+// GET /api/emails/:accountId?folder=INBOX&limit=50&pageToken=...
 router.get('/:accountId', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   const folder = req.query.folder || 'INBOX';
   const limit = parseInt(req.query.limit) || 50;
+  const pageToken = req.query.pageToken || null;
 
   try {
     const service = getService(account.type);
-    const emails = await service.fetchEmails(account, folder, limit);
-    res.json(emails);
+    const result = await service.fetchEmails(account, folder, limit, pageToken);
+    res.json(result); // { emails, nextToken }
   } catch (err) {
     console.error('Fetch emails error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/emails/:accountId/search?q=...&folder=INBOX&limit=50
+router.get('/:accountId/search', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const query = req.query.q || '';
+  const folder = req.query.folder || 'INBOX';
+  const limit = parseInt(req.query.limit) || 50;
+
+  try {
+    const service = getService(account.type);
+    const emails = await service.searchEmails(account, query, folder, limit);
+    res.json(emails);
+  } catch (err) {
+    console.error('Search emails error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -36,7 +66,6 @@ router.get('/:accountId/folders', async (req, res) => {
   try {
     const service = getService(account.type);
     if (!service.getFolders) {
-      // Default folders for services that don't support listing
       return res.json([
         { name: 'Inbox', path: 'INBOX' },
         { name: 'Sent', path: 'Sent' },
@@ -58,45 +87,30 @@ router.get('/:accountId/message/:emailId', async (req, res) => {
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   const emailId = req.params.emailId;
+  const folder = req.query.folder || 'INBOX';
 
   try {
     const service = getService(account.type);
 
     let body;
     if (account.type === 'gmail') {
-      // emailId format is "{accountUUID}-{gmailMsgId}"; UUID has 4 dashes (5 segments), so slice(5) gives the gmailMsgId
-      const gmailId = emailId.split('-').slice(5).join('-');
-      body = await service.fetchEmailBody(account, gmailId);
+      body = await service.fetchEmailBody(account, gmailOrOutlookId(emailId));
     } else if (account.type === 'outlook') {
-      const outlookId = emailId.split('-').slice(5).join('-');
-      body = await service.fetchEmailBody(account, outlookId);
+      body = await service.fetchEmailBody(account, gmailOrOutlookId(emailId));
     } else {
-      // IMAP: emailId format is "accountId::uid", folder passed as ?folder= query param
-      const parts = emailId.split('::');
-      const uid = parseInt(parts[1]);
-      const folder = req.query.folder || 'INBOX';
-      body = await service.fetchEmailBody(account, uid, folder);
+      body = await service.fetchEmailBody(account, imapUid(emailId), folder);
     }
 
-    // Mark as read
+    // Mark as read (best-effort)
     try {
       if (service.markAsRead) {
-        if (account.type === 'gmail') {
-          const gmailId = emailId.split('-').slice(5).join('-');
-          await service.markAsRead(account, gmailId);
-        } else if (account.type === 'outlook') {
-          const outlookId = emailId.split('-').slice(5).join('-');
-          await service.markAsRead(account, outlookId);
+        if (account.type === 'imap') {
+          await service.markAsRead(account, imapUid(emailId), folder);
         } else {
-          const parts = emailId.split('::');
-          const uid = parseInt(parts[1]);
-          const folder = req.query.folder || 'INBOX';
-          await service.markAsRead(account, uid, folder);
+          await service.markAsRead(account, gmailOrOutlookId(emailId));
         }
       }
-    } catch (e) {
-      // Don't fail if mark-as-read fails
-    }
+    } catch { /* ignore */ }
 
     res.json(body);
   } catch (err) {
@@ -111,10 +125,7 @@ router.post('/:accountId/send', async (req, res) => {
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   const { to, cc, bcc, subject, text, html, attachments } = req.body;
-
-  if (!to || !subject) {
-    return res.status(400).json({ error: 'to and subject are required' });
-  }
+  if (!to || !subject) return res.status(400).json({ error: 'to and subject are required' });
 
   try {
     const service = getService(account.type);
@@ -134,16 +145,70 @@ router.delete('/:accountId/message/:emailId', async (req, res) => {
   try {
     const service = getService(account.type);
     if (account.type === 'imap') {
-      const parts = req.params.emailId.split('::');
-      const uid = parseInt(parts[1]);
-      const folder = req.query.folder || 'INBOX';
-      await service.deleteEmail(account, uid, folder);
+      await service.deleteEmail(account, imapUid(req.params.emailId), req.query.folder || 'INBOX');
+    } else {
+      await service.deleteEmail(account, gmailOrOutlookId(req.params.emailId));
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/emails/:accountId/message/:emailId/unread
+router.post('/:accountId/message/:emailId/unread', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  try {
+    const service = getService(account.type);
+    if (account.type === 'imap') {
+      await service.markAsUnread(account, imapUid(req.params.emailId), req.query.folder || 'INBOX');
+    } else {
+      await service.markAsUnread(account, gmailOrOutlookId(req.params.emailId));
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/emails/:accountId/message/:emailId/star
+router.post('/:accountId/message/:emailId/star', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const { starred } = req.body;
+
+  try {
+    const service = getService(account.type);
+    if (account.type === 'imap') {
+      await service.toggleStar(account, imapUid(req.params.emailId), req.query.folder || 'INBOX', starred);
+    } else {
+      await service.toggleStar(account, gmailOrOutlookId(req.params.emailId), starred);
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/emails/:accountId/message/:emailId/move
+router.post('/:accountId/message/:emailId/move', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const { folder: toFolder } = req.body;
+  if (!toFolder) return res.status(400).json({ error: 'folder is required' });
+
+  try {
+    const service = getService(account.type);
+    if (account.type === 'imap') {
+      await service.moveEmail(account, imapUid(req.params.emailId), req.query.folder || 'INBOX', toFolder);
     } else if (account.type === 'gmail') {
-      const gmailId = req.params.emailId.split('-').slice(5).join('-');
-      await service.deleteEmail(account, gmailId);
-    } else if (account.type === 'outlook') {
-      const outlookId = req.params.emailId.split('-').slice(5).join('-');
-      await service.deleteEmail(account, outlookId);
+      await service.moveEmail(account, gmailOrOutlookId(req.params.emailId), req.query.folder || 'INBOX', toFolder);
+    } else {
+      await service.moveEmail(account, gmailOrOutlookId(req.params.emailId), toFolder);
     }
     res.json({ success: true });
   } catch (err) {
@@ -157,11 +222,9 @@ router.post('/categorize', async (req, res) => {
   if (!Array.isArray(emails)) return res.status(400).json({ error: 'emails array required' });
 
   const cached = store.getEmailCategories();
-  // Invalidate stale entries that used old category names (Updates, Forums)
   const uncached = emails.filter(e => !cached[e.id] || !VALID_CATEGORIES.has(cached[e.id]));
 
   if (uncached.length) {
-    // Try AI first; fall back to rule-based if no API key or AI call fails
     let fresh = await categorizeEmailsWithAI(uncached);
     if (!fresh) fresh = categorizeEmails(uncached);
     store.saveEmailCategories(fresh);

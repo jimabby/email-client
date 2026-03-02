@@ -3,7 +3,7 @@ import { useEmailStore } from '../store/emailStore'
 import { accountsApi, aiApi } from '../api/client'
 import type { Account } from '../types/email'
 
-type Tab = 'imap' | 'gmail' | 'outlook' | 'ai'
+type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature'
 
 const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHost: string; smtpPort: number }> = {
   'Gmail (App Password)': { imapHost: 'imap.gmail.com',        imapPort: 993, smtpHost: 'smtp.gmail.com',        smtpPort: 587 },
@@ -16,7 +16,7 @@ const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHos
 const inputCls = 'w-full px-3 py-2 text-sm bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md focus:outline-none focus:border-[#f59e0b]/60 transition-colors'
 
 export function AccountModal() {
-  const { setShowAccountModal, addAccount, showNotification, setAiConfig, aiProvider, aiConfigured } = useEmailStore()
+  const { setShowAccountModal, addAccount, showNotification, setAiConfig, aiProvider, aiConfigured, signature, setSignature } = useEmailStore()
   const [tab, setTab]       = useState<Tab>('imap')
   const [preset, setPreset] = useState('Gmail (App Password)')
   const [isLoading, setIsLoading] = useState(false)
@@ -30,6 +30,8 @@ export function AccountModal() {
   const [aiSelectedProvider, setAiSelectedProvider] = useState<'claude' | 'openai' | 'gemini'>(aiProvider || 'claude')
   const [aiApiKey, setAiApiKey] = useState('')
   const [aiSaving, setAiSaving] = useState(false)
+
+  const [signatureText, setSignatureText] = useState(signature)
 
   useEffect(() => { setAiSelectedProvider(aiProvider || 'claude') }, [aiProvider])
 
@@ -91,11 +93,17 @@ export function AccountModal() {
     } catch { showNotification('error', 'Failed to clear AI settings') }
   }
 
+  const handleSignatureSave = () => {
+    setSignature(signatureText)
+    showNotification('success', 'Signature saved!')
+  }
+
   const tabs = [
-    { id: 'imap' as Tab,    label: 'IMAP / SMTP', sub: 'Any provider' },
-    { id: 'gmail' as Tab,   label: 'Gmail',        sub: 'OAuth' },
-    { id: 'outlook' as Tab, label: 'Outlook',      sub: 'OAuth' },
-    { id: 'ai' as Tab,      label: 'AI',           sub: 'Claude / GPT / Gemini' },
+    { id: 'imap' as Tab,      label: 'IMAP / SMTP', sub: 'Any provider' },
+    { id: 'gmail' as Tab,     label: 'Gmail',        sub: 'OAuth' },
+    { id: 'outlook' as Tab,   label: 'Outlook',      sub: 'OAuth' },
+    { id: 'ai' as Tab,        label: 'AI',           sub: 'Claude / GPT / Gemini' },
+    { id: 'signature' as Tab, label: 'Signature',    sub: 'Email footer' },
   ]
 
   return (
@@ -259,6 +267,43 @@ export function AccountModal() {
               <div className="bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] rounded-md p-3 text-xs text-[#656d76] dark:text-[#8b949e]">
                 <strong className="text-[#1f2328] dark:text-[#e6edf3]">Note:</strong> Requires OUTLOOK_CLIENT_ID and OUTLOOK_CLIENT_SECRET in backend .env
               </div>
+            </div>
+          )}
+
+          {tab === 'signature' && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-semibold text-[#818b98] dark:text-[#484f58] uppercase tracking-wide mb-2">
+                  Email Signature
+                </label>
+                <p className="text-xs text-[#656d76] dark:text-[#8b949e] mb-3">
+                  This will be automatically appended to new emails (not replies).
+                </p>
+                <textarea
+                  value={signatureText}
+                  onChange={e => setSignatureText(e.target.value)}
+                  placeholder="Best regards,&#10;Your Name"
+                  rows={6}
+                  className="w-full px-3 py-2 text-sm bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md focus:outline-none focus:border-[#f59e0b]/60 transition-colors resize-none font-sans"
+                />
+              </div>
+              {signatureText !== signature && (
+                <div className="text-[10px] text-[#818b98] dark:text-[#484f58]">Unsaved changes</div>
+              )}
+              <button
+                onClick={handleSignatureSave}
+                className="w-full bg-[#f59e0b] text-[#0d1117] py-2.5 rounded-md text-sm font-bold hover:bg-[#fbbf24] transition-colors"
+              >
+                Save Signature
+              </button>
+              {signature && (
+                <button
+                  onClick={() => { setSignatureText(''); setSignature(''); showNotification('success', 'Signature cleared') }}
+                  className="w-full py-2 rounded-md text-sm text-[#cf222e] dark:text-[#f85149] border border-[#cf222e]/30 dark:border-[#f85149]/30 hover:bg-red-50 dark:hover:bg-[#f85149]/10 transition-colors"
+                >
+                  Clear Signature
+                </button>
+              )}
             </div>
           )}
 

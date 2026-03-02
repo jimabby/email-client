@@ -73,14 +73,8 @@ const FOLDER_MAP = {
   'Junk': 'junkemail'
 };
 
-async function fetchEmails(account, folder = 'INBOX', limit = 50) {
-  const folderPath = FOLDER_MAP[folder] || folder;
-  const data = await graphRequest(
-    account.accessToken,
-    `/me/mailFolders/${folderPath}/messages?$top=${limit}&$select=id,from,toRecipients,subject,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc`
-  );
-
-  return (data.value || []).map(msg => ({
+function _outlookMsgToSummary(account, msg, folder) {
+  return {
     id: `${account.id}-${msg.id}`,
     outlookId: msg.id,
     from: msg.from?.emailAddress
@@ -90,10 +84,29 @@ async function fetchEmails(account, folder = 'INBOX', limit = 50) {
     subject: msg.subject || '(no subject)',
     date: msg.receivedDateTime || new Date().toISOString(),
     read: msg.isRead,
+    starred: msg.flag?.flagStatus === 'flagged',
     folder,
     accountId: account.id,
     snippet: msg.bodyPreview || ''
-  }));
+  };
+}
+
+const SELECT_FIELDS = 'id,from,toRecipients,subject,receivedDateTime,isRead,flag,bodyPreview';
+
+async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = null) {
+  const folderPath = FOLDER_MAP[folder] || folder;
+  const url = pageToken || `/me/mailFolders/${folderPath}/messages?$top=${limit}&$select=${SELECT_FIELDS}&$orderby=receivedDateTime desc`;
+  const data = await graphRequest(account.accessToken, url);
+  const emails = (data.value || []).map(msg => _outlookMsgToSummary(account, msg, folder));
+  return { emails, nextToken: data['@odata.nextLink'] || null };
+}
+
+async function searchEmails(account, query, limit = 50) {
+  const data = await graphRequest(
+    account.accessToken,
+    `/me/messages?$search="${encodeURIComponent(query)}"&$top=${limit}&$select=${SELECT_FIELDS}`
+  ).catch(() => ({ value: [] }));
+  return (data.value || []).map(msg => _outlookMsgToSummary(account, msg, 'search'));
 }
 
 async function fetchEmailBody(account, outlookId) {
@@ -165,18 +178,35 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
 }
 
 async function markAsRead(account, outlookId) {
+  await graphRequest(account.accessToken, `/me/messages/${outlookId}`, 'PATCH', { isRead: true });
+}
+
+async function markAsUnread(account, outlookId) {
+  await graphRequest(account.accessToken, `/me/messages/${outlookId}`, 'PATCH', { isRead: false });
+}
+
+async function toggleStar(account, outlookId, starred) {
   await graphRequest(account.accessToken, `/me/messages/${outlookId}`, 'PATCH', {
-    isRead: true
+    flag: { flagStatus: starred ? 'flagged' : 'notFlagged' }
   });
+}
+
+async function moveEmail(account, outlookId, toFolder) {
+  const destinationId = FOLDER_MAP[toFolder] || toFolder;
+  await graphRequest(account.accessToken, `/me/messages/${outlookId}/move`, 'POST', { destinationId });
 }
 
 module.exports = {
   getAuthUrl,
   handleCallback,
   fetchEmails,
+  searchEmails,
   fetchEmailBody,
   getFolders,
   sendEmail,
   markAsRead,
+  markAsUnread,
+  toggleStar,
+  moveEmail,
   deleteEmail,
 };

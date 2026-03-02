@@ -91,49 +91,51 @@ function extractBody(payload) {
   return { html, text };
 }
 
-async function fetchEmails(account, folder = 'INBOX', limit = 50) {
-  const gmail = getGmailClient(account);
-  const labelId = folder === 'INBOX' ? 'INBOX' :
-    folder === 'Sent' ? 'SENT' :
-    folder === 'Drafts' ? 'DRAFT' :
-    folder === 'Trash' ? 'TRASH' : 'INBOX';
+function folderToLabelId(folder) {
+  if (folder === 'Sent' || folder === 'SENT') return 'SENT';
+  if (folder === 'Drafts' || folder === 'DRAFT') return 'DRAFT';
+  if (folder === 'Trash' || folder === 'TRASH') return 'TRASH';
+  if (folder === 'INBOX') return 'INBOX';
+  return folder;
+}
 
-  const listRes = await gmail.users.messages.list({
-    userId: 'me',
-    labelIds: [labelId],
-    maxResults: limit
+async function _fetchMessageMeta(gmail, account, msgId, folder) {
+  const detail = await gmail.users.messages.get({
+    userId: 'me', id: msgId, format: 'metadata',
+    metadataHeaders: ['From', 'To', 'Subject', 'Date']
   });
+  const headers = detail.data.payload?.headers || [];
+  const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+  return {
+    id: `${account.id}-${msgId}`,
+    gmailId: msgId,
+    from: getHeader('From'),
+    to: [getHeader('To')],
+    subject: getHeader('Subject') || '(no subject)',
+    date: getHeader('Date') ? new Date(getHeader('Date')).toISOString() : new Date().toISOString(),
+    read: !detail.data.labelIds?.includes('UNREAD'),
+    starred: detail.data.labelIds?.includes('STARRED') ?? false,
+    folder,
+    accountId: account.id,
+    snippet: detail.data.snippet || ''
+  };
+}
 
+async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = null) {
+  const gmail = getGmailClient(account);
+  const listParams = { userId: 'me', labelIds: [folderToLabelId(folder)], maxResults: limit };
+  if (pageToken) listParams.pageToken = pageToken;
+  const listRes = await gmail.users.messages.list(listParams);
   const messages = listRes.data.messages || [];
+  const emails = await Promise.all(messages.map(msg => _fetchMessageMeta(gmail, account, msg.id, folder)));
+  return { emails, nextToken: listRes.data.nextPageToken || null };
+}
 
-  const emails = await Promise.all(
-    messages.slice(0, limit).map(async (msg) => {
-      const detail = await gmail.users.messages.get({
-        userId: 'me',
-        id: msg.id,
-        format: 'metadata',
-        metadataHeaders: ['From', 'To', 'Subject', 'Date']
-      });
-
-      const headers = detail.data.payload?.headers || [];
-      const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
-
-      return {
-        id: `${account.id}-${msg.id}`,
-        gmailId: msg.id,
-        from: getHeader('From'),
-        to: [getHeader('To')],
-        subject: getHeader('Subject') || '(no subject)',
-        date: getHeader('Date') ? new Date(getHeader('Date')).toISOString() : new Date().toISOString(),
-        read: !detail.data.labelIds?.includes('UNREAD'),
-        folder,
-        accountId: account.id,
-        snippet: detail.data.snippet || ''
-      };
-    })
-  );
-
-  return emails;
+async function searchEmails(account, query, limit = 50) {
+  const gmail = getGmailClient(account);
+  const listRes = await gmail.users.messages.list({ userId: 'me', q: query, maxResults: limit });
+  const messages = listRes.data.messages || [];
+  return Promise.all(messages.map(msg => _fetchMessageMeta(gmail, account, msg.id, 'search')));
 }
 
 async function fetchEmailBody(account, gmailId) {
@@ -281,9 +283,34 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
 async function markAsRead(account, gmailId) {
   const gmail = getGmailClient(account);
   await gmail.users.messages.modify({
-    userId: 'me',
-    id: gmailId,
+    userId: 'me', id: gmailId,
     requestBody: { removeLabelIds: ['UNREAD'] }
+  });
+}
+
+async function markAsUnread(account, gmailId) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.modify({
+    userId: 'me', id: gmailId,
+    requestBody: { addLabelIds: ['UNREAD'] }
+  });
+}
+
+async function toggleStar(account, gmailId, starred) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.modify({
+    userId: 'me', id: gmailId,
+    requestBody: starred ? { addLabelIds: ['STARRED'] } : { removeLabelIds: ['STARRED'] }
+  });
+}
+
+async function moveEmail(account, gmailId, fromFolder, toFolder) {
+  const gmail = getGmailClient(account);
+  const fromLabel = folderToLabelId(fromFolder);
+  const toLabel = folderToLabelId(toFolder);
+  await gmail.users.messages.modify({
+    userId: 'me', id: gmailId,
+    requestBody: { addLabelIds: [toLabel], removeLabelIds: [fromLabel] }
   });
 }
 
@@ -291,9 +318,13 @@ module.exports = {
   getAuthUrl,
   handleCallback,
   fetchEmails,
+  searchEmails,
   fetchEmailBody,
   getFolders,
   sendEmail,
   markAsRead,
+  markAsUnread,
+  toggleStar,
+  moveEmail,
   deleteEmail,
 };

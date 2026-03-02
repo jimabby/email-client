@@ -22,9 +22,24 @@ interface EmailStore {
   emails: EmailSummary[]
   isLoadingEmails: boolean
   setEmails: (emails: EmailSummary[]) => void
+  appendEmails: (emails: EmailSummary[]) => void
   setLoadingEmails: (loading: boolean) => void
   markEmailRead: (id: string) => void
+  markEmailUnread: (id: string) => void
   removeEmail: (id: string) => void
+  toggleStarLocal: (id: string) => void
+
+  // Pagination
+  nextToken: string | null
+  setNextToken: (token: string | null) => void
+  isLoadingMore: boolean
+  setLoadingMore: (v: boolean) => void
+
+  // Search
+  searchResults: EmailSummary[] | null
+  setSearchResults: (results: EmailSummary[] | null) => void
+  isSearching: boolean
+  setIsSearching: (v: boolean) => void
 
   // Selected email
   selectedEmail: EmailSummary | null
@@ -63,6 +78,14 @@ interface EmailStore {
   setPendingReport: (report: { subject: string; html: string; text: string } | null) => void
   clearPendingReport: () => void
 
+  // Signature (localStorage-persisted)
+  signature: string
+  setSignature: (sig: string) => void
+
+  // Contacts autocomplete (localStorage-persisted)
+  contacts: string[]
+  addContacts: (addresses: string[]) => void
+
   // Theme
   theme: 'dark' | 'light'
   toggleTheme: () => void
@@ -76,8 +99,8 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
 
   currentAccountId: null,
   currentFolder: 'INBOX',
-  setCurrentAccount: (id) => set({ currentAccountId: id, selectedEmail: null, selectedEmailBody: null }),
-  setCurrentFolder: (folder) => set({ currentFolder: folder, selectedEmail: null, selectedEmailBody: null }),
+  setCurrentAccount: (id) => set({ currentAccountId: id, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null }),
+  setCurrentFolder: (folder) => set({ currentFolder: folder, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null }),
 
   folders: {},
   setFolders: (accountId, folders) => set((s) => ({ folders: { ...s.folders, [accountId]: folders } })),
@@ -85,15 +108,33 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   emails: [],
   isLoadingEmails: false,
   setEmails: (emails) => set({ emails }),
+  appendEmails: (emails) => set((s) => ({ emails: [...s.emails, ...emails] })),
   setLoadingEmails: (loading) => set({ isLoadingEmails: loading }),
   markEmailRead: (id) => set((s) => ({
     emails: s.emails.map(e => e.id === id ? { ...e, read: true } : e)
+  })),
+  markEmailUnread: (id) => set((s) => ({
+    emails: s.emails.map(e => e.id === id ? { ...e, read: false } : e)
   })),
   removeEmail: (id) => set((s) => ({
     emails: s.emails.filter(e => e.id !== id),
     selectedEmail: s.selectedEmail?.id === id ? null : s.selectedEmail,
     selectedEmailBody: s.selectedEmail?.id === id ? null : s.selectedEmailBody,
   })),
+  toggleStarLocal: (id) => set((s) => ({
+    emails: s.emails.map(e => e.id === id ? { ...e, starred: !e.starred } : e),
+    selectedEmail: s.selectedEmail?.id === id ? { ...s.selectedEmail, starred: !s.selectedEmail.starred } : s.selectedEmail,
+  })),
+
+  nextToken: null,
+  setNextToken: (token) => set({ nextToken: token }),
+  isLoadingMore: false,
+  setLoadingMore: (v) => set({ isLoadingMore: v }),
+
+  searchResults: null,
+  setSearchResults: (results) => set({ searchResults: results }),
+  isSearching: false,
+  setIsSearching: (v) => set({ isSearching: v }),
 
   selectedEmail: null,
   selectedEmailBody: null,
@@ -144,6 +185,26 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   pendingReport: null,
   setPendingReport: (report) => set({ pendingReport: report }),
   clearPendingReport: () => set({ pendingReport: null }),
+
+  // Signature — persisted in localStorage
+  signature: localStorage.getItem('hermes-signature') || '',
+  setSignature: (sig) => {
+    localStorage.setItem('hermes-signature', sig)
+    set({ signature: sig })
+  },
+
+  // Contacts autocomplete — persisted in localStorage
+  contacts: (() => {
+    try { return JSON.parse(localStorage.getItem('hermes-contacts') || '[]') } catch { return [] }
+  })(),
+  addContacts: (addresses) => set((s) => {
+    const existing = new Set(s.contacts)
+    const fresh = addresses.filter(a => a && !existing.has(a))
+    if (!fresh.length) return {}
+    const merged = [...fresh, ...s.contacts].slice(0, 200)
+    localStorage.setItem('hermes-contacts', JSON.stringify(merged))
+    return { contacts: merged }
+  }),
 
   // Theme — persisted in localStorage, defaults to dark
   theme: (localStorage.getItem('hermes-theme') as 'dark' | 'light') || 'dark',

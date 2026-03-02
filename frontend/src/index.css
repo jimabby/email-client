@@ -61,6 +61,34 @@ body {
   color: #8b949e;
 }
 
+/* TipTap rich text editor */
+.ProseMirror {
+  outline: none;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #24292f;
+  padding: 12px 16px;
+  min-height: 120px;
+}
+.dark .ProseMirror { color: #c9d1d9; }
+.ProseMirror p { margin: 0 0 0.5em; }
+.ProseMirror p:last-child { margin-bottom: 0; }
+.ProseMirror ul, .ProseMirror ol { padding-left: 1.4em; margin: 0.25em 0; }
+.ProseMirror li { margin: 0.15em 0; }
+.ProseMirror a { color: #b45309; text-decoration: underline; }
+.dark .ProseMirror a { color: #f59e0b; }
+.ProseMirror strong { font-weight: 600; }
+.ProseMirror em { font-style: italic; }
+.ProseMirror u { text-decoration: underline; }
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: #818b98;
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
 /* AI loading dots */
 @keyframes pulse-ai {
   0%, 100% { opacity: 1; }

@@ -98,19 +98,18 @@ function getTransporter(account) {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-async function fetchEmails(account, folder = 'INBOX', limit = 50) {
+async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = null) {
   return getConn(account).run(async (client) => {
     const emails = [];
     const mailbox = await client.mailboxOpen(folder);
     const total = mailbox.exists;
-    if (total === 0) return [];
+    if (total === 0) return { emails: [], nextToken: null };
 
-    const start = Math.max(1, total - limit + 1);
-    for await (const msg of client.fetch(`${start}:${total}`, {
-      envelope: true,
-      bodyStructure: true,
-      uid: true,
-      flags: true
+    // pageToken is the upper ceiling (sequence number) for load-more
+    const ceiling = pageToken ? parseInt(pageToken) : total;
+    const start = Math.max(1, ceiling - limit + 1);
+    for await (const msg of client.fetch(`${start}:${ceiling}`, {
+      envelope: true, uid: true, flags: true
     })) {
       emails.unshift({
         id: `${account.id}::${msg.uid}`,
@@ -122,6 +121,37 @@ async function fetchEmails(account, folder = 'INBOX', limit = 50) {
         subject: msg.envelope.subject || '(no subject)',
         date: msg.envelope.date?.toISOString() || new Date().toISOString(),
         read: msg.flags.has('\\Seen'),
+        starred: msg.flags.has('\\Flagged'),
+        folder,
+        accountId: account.id
+      });
+    }
+    return { emails, nextToken: start > 1 ? String(start - 1) : null };
+  });
+}
+
+async function searchEmails(account, query, folder = 'INBOX', limit = 50) {
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(folder);
+    const uids = await client.search(
+      { or: [{ from: query }, { subject: query }] },
+      { uid: true }
+    );
+    if (!uids || uids.length === 0) return [];
+    const recentUids = uids.slice(-limit);
+    const emails = [];
+    for await (const msg of client.fetch(recentUids, { envelope: true, uid: true, flags: true }, { uid: true })) {
+      emails.unshift({
+        id: `${account.id}::${msg.uid}`,
+        uid: msg.uid,
+        from: msg.envelope.from?.[0]
+          ? `${msg.envelope.from[0].name || ''} <${msg.envelope.from[0].address}>`.trim()
+          : 'Unknown',
+        to: (msg.envelope.to || []).map(a => a.address),
+        subject: msg.envelope.subject || '(no subject)',
+        date: msg.envelope.date?.toISOString() || new Date().toISOString(),
+        read: msg.flags.has('\\Seen'),
+        starred: msg.flags.has('\\Flagged'),
         folder,
         accountId: account.id
       });
@@ -187,6 +217,32 @@ async function markAsRead(account, uid, folder = 'INBOX') {
   });
 }
 
+async function markAsUnread(account, uid, folder = 'INBOX') {
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(folder);
+    await client.messageFlagsRemove(String(uid), ['\\Seen'], { uid: true });
+  });
+}
+
+async function toggleStar(account, uid, folder = 'INBOX', starred) {
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(folder);
+    if (starred) {
+      await client.messageFlagsAdd(String(uid), ['\\Flagged'], { uid: true });
+    } else {
+      await client.messageFlagsRemove(String(uid), ['\\Flagged'], { uid: true });
+    }
+  });
+}
+
+async function moveEmail(account, uid, fromFolder, toFolder) {
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(fromFolder);
+    await client.messageCopy(String(uid), toFolder, { uid: true });
+    await client.messageDelete(String(uid), { uid: true });
+  });
+}
+
 async function deleteEmail(account, uid, folder = 'INBOX') {
   return getConn(account).run(async (client) => {
     await client.mailboxOpen(folder);
@@ -214,10 +270,14 @@ async function testConnection(account) {
 
 module.exports = {
   fetchEmails,
+  searchEmails,
   fetchEmailBody,
   getFolders,
   sendEmail,
   markAsRead,
+  markAsUnread,
+  toggleStar,
+  moveEmail,
   deleteEmail,
   testConnection,
   closeConnection

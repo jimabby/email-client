@@ -18,6 +18,7 @@ export interface EmailSummary {
   subject: string;
   date: string;
   read: boolean;
+  starred?: boolean;
   folder: string;
   accountId: string;
   snippet?: string;

@@ -1,4 +1,9 @@
-import { useState, useRef, useCallback, type ChangeEvent } from 'react'
+import { useState, useRef, useCallback, useEffect, type ChangeEvent } from 'react'
+import { useEditor, EditorContent } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
+import Underline from '@tiptap/extension-underline'
+import Link from '@tiptap/extension-link'
+import Placeholder from '@tiptap/extension-placeholder'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi, streamAiSuggestion } from '../api/client'
 import type { AiMode } from '../types/email'
@@ -15,18 +20,145 @@ const AI_MODES: { value: AiMode; label: string; icon: string; description: strin
   { value: 'custom',   label: 'Custom',        icon: '🎯', description: 'Give your own instruction' },
 ]
 
+// ─── Contact Autocomplete Field ───────────────────────────────────────────────
+
+function ContactField({
+  label, value, onChange, contacts, placeholder
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  contacts: string[]
+  placeholder?: string
+}) {
+  const [suggestions, setSuggestions] = useState<string[]>([])
+  const [activeIdx, setActiveIdx] = useState(-1)
+  const ref = useRef<HTMLDivElement>(null)
+
+  const handleChange = (v: string) => {
+    onChange(v)
+    // Only autocomplete the last token (after the last comma)
+    const lastToken = v.split(',').pop()?.trim() || ''
+    if (lastToken.length >= 1) {
+      const filtered = contacts.filter(c => c.toLowerCase().includes(lastToken.toLowerCase())).slice(0, 6)
+      setSuggestions(filtered)
+      setActiveIdx(-1)
+    } else {
+      setSuggestions([])
+    }
+  }
+
+  const selectSuggestion = (suggestion: string) => {
+    const parts = value.split(',')
+    parts[parts.length - 1] = ' ' + suggestion
+    onChange(parts.join(',').replace(/^,\s*/, '') + ', ')
+    setSuggestions([])
+    setActiveIdx(-1)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!suggestions.length) return
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, suggestions.length - 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, 0)) }
+    else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (activeIdx >= 0) { e.preventDefault(); selectSuggestion(suggestions[activeIdx]) }
+      else { setSuggestions([]) }
+    } else if (e.key === 'Escape') { setSuggestions([]) }
+  }
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setSuggestions([]) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  return (
+    <div ref={ref} className="relative flex-1">
+      <input
+        type="text"
+        value={value}
+        onChange={e => handleChange(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        className="w-full text-sm bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none"
+      />
+      {suggestions.length > 0 && (
+        <div className="absolute left-0 top-full mt-1 w-64 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-lg shadow-xl z-50 py-1 max-h-40 overflow-y-auto">
+          {suggestions.map((s, i) => (
+            <button
+              key={s}
+              onMouseDown={e => { e.preventDefault(); selectSuggestion(s) }}
+              className={`w-full text-left px-3 py-1.5 text-xs truncate transition-colors ${
+                i === activeIdx ? 'bg-[#eaeef2] dark:bg-[#21262d] text-[#1f2328] dark:text-[#e6edf3]' : 'text-[#24292f] dark:text-[#c9d1d9] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── TipTap Toolbar ───────────────────────────────────────────────────────────
+
+function RichToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
+  if (!editor) return null
+
+  const btn = (active: boolean) =>
+    `px-1.5 py-1 rounded text-xs font-semibold transition-colors ${
+      active
+        ? 'bg-[#eaeef2] dark:bg-[#21262d] text-[#1f2328] dark:text-[#e6edf3]'
+        : 'text-[#818b98] dark:text-[#484f58] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+    }`
+
+  const setLink = () => {
+    const prev = editor.getAttributes('link').href
+    const url = window.prompt('Enter URL', prev || 'https://')
+    if (!url) { editor.chain().focus().unsetLink().run(); return }
+    editor.chain().focus().setLink({ href: url }).run()
+  }
+
+  return (
+    <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128]">
+      <button type="button" onClick={() => editor.chain().focus().toggleBold().run()} className={btn(editor.isActive('bold'))} title="Bold">B</button>
+      <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={`${btn(editor.isActive('italic'))} italic`} title="Italic">I</button>
+      <button type="button" onClick={() => editor.chain().focus().toggleUnderline().run()} className={`${btn(editor.isActive('underline'))} underline`} title="Underline">U</button>
+      <div className="w-px h-4 bg-[#d0d7de] dark:bg-[#30363d] mx-1" />
+      <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={btn(editor.isActive('bulletList'))} title="Bullet list">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><circle cx="2" cy="3.5" r="1" fill="currentColor"/><line x1="5" y1="3.5" x2="12" y2="3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="2" cy="7" r="1" fill="currentColor"/><line x1="5" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="2" cy="10.5" r="1" fill="currentColor"/><line x1="5" y1="10.5" x2="12" y2="10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+      </button>
+      <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={btn(editor.isActive('orderedList'))} title="Ordered list">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><text x="0" y="5" fontSize="5" fill="currentColor">1.</text><line x1="5" y1="3.5" x2="12" y2="3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><text x="0" y="9" fontSize="5" fill="currentColor">2.</text><line x1="5" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><text x="0" y="13" fontSize="5" fill="currentColor">3.</text><line x1="5" y1="10.5" x2="12" y2="10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+      </button>
+      <div className="w-px h-4 bg-[#d0d7de] dark:bg-[#30363d] mx-1" />
+      <button type="button" onClick={setLink} className={btn(editor.isActive('link'))} title="Insert link">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5.5 8.5a3.5 3.5 0 005 0l2-2a3.5 3.5 0 00-5-5L6.5 2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M8.5 5.5a3.5 3.5 0 00-5 0l-2 2a3.5 3.5 0 005 5l1-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+      </button>
+    </div>
+  )
+}
+
+// ─── Main Compose Modal ───────────────────────────────────────────────────────
+
 export function ComposeModal() {
-  const { composeData, accounts, closeCompose, showNotification, aiProvider, aiConfigured } = useEmailStore()
+  const {
+    composeData, accounts, closeCompose, showNotification,
+    aiProvider, aiConfigured, signature, contacts, addContacts,
+  } = useEmailStore()
+
+  const isReply = !!composeData?.replyTo
 
   const [to, setTo]           = useState(composeData?.to || '')
   const [cc, setCc]           = useState(composeData?.cc || '')
   const [bcc, setBcc]         = useState(composeData?.bcc || '')
   const [subject, setSubject] = useState(composeData?.subject || '')
-  const [body, setBody]       = useState(composeData?.body || '')
   const [accountId, setAccountId] = useState(composeData?.accountId || accounts[0]?.id || '')
   const [showCcBcc, setShowCcBcc] = useState(!!(composeData?.cc || composeData?.bcc))
   const [isSending, setIsSending] = useState(false)
-  const [attachments, setAttachments]   = useState<File[]>([])
+  const [attachments, setAttachments] = useState<File[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [showAiPanel, setShowAiPanel]   = useState(false)
@@ -37,6 +169,30 @@ export function ComposeModal() {
   const [aiDone, setAiDone]             = useState(false)
   const [aiError, setAiError]           = useState('')
   const abortRef = useRef<{ abort: () => void } | null>(null)
+
+  // Build initial content: reply body stays as-is; new emails get signature
+  const initialHtml = (() => {
+    const base = composeData?.body || ''
+    if (!isReply && signature) {
+      return base + `<p></p><p>--<br>${signature.replace(/\n/g, '<br>')}</p>`
+    }
+    return base
+  })()
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit,
+      Underline,
+      Link.configure({ openOnClick: false }),
+      Placeholder.configure({ placeholder: 'Write your email…' }),
+    ],
+    content: initialHtml,
+    editorProps: {
+      attributes: {
+        class: 'flex-1 px-4 py-3 text-sm text-[#24292f] dark:text-[#c9d1d9] leading-relaxed focus:outline-none min-h-[120px]',
+      },
+    },
+  })
 
   const readFileAsBase64 = (file: File): Promise<{ filename: string; contentType: string; content: string }> =>
     new Promise((resolve) => {
@@ -50,7 +206,7 @@ export function ComposeModal() {
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) setAttachments(prev => [...prev, ...Array.from(e.target.files!)])
-    e.target.value = '' // reset so same file can be re-added
+    e.target.value = ''
   }
 
   const handleSend = async () => {
@@ -58,13 +214,16 @@ export function ComposeModal() {
     if (!accountId) { showNotification('error', 'Please select an account'); return }
     setIsSending(true)
     try {
+      const html = editor?.getHTML() || ''
+      const text = editor?.getText() || ''
       const attachmentData = attachments.length ? await Promise.all(attachments.map(readFileAsBase64)) : undefined
       await emailsApi.send(accountId, {
         to, cc: cc || undefined, bcc: bcc || undefined, subject,
-        html: `<div style="font-family: Calibri, sans-serif; font-size: 14px; white-space: pre-wrap;">${body.replace(/\n/g, '<br>')}</div>`,
-        text: body,
-        attachments: attachmentData
+        html, text, attachments: attachmentData
       })
+      // Save contacts for autocomplete
+      const parseAddresses = (s: string) => s.split(',').map(a => a.trim()).filter(Boolean)
+      addContacts([...parseAddresses(to), ...parseAddresses(cc), ...parseAddresses(bcc)])
       showNotification('success', 'Email sent!')
       closeCompose()
     } catch (err: unknown) {
@@ -75,6 +234,7 @@ export function ComposeModal() {
   const handleAiSuggest = useCallback(async () => {
     if (isAiLoading) { abortRef.current?.abort(); setIsAiLoading(false); return }
     setIsAiLoading(true); setAiDone(false); setAiSuggestion(''); setAiError('')
+    const bodyText = editor?.getText() || ''
     const replyTo = composeData?.replyTo
       ? {
           from: composeData.replyTo.from,
@@ -85,29 +245,29 @@ export function ComposeModal() {
         }
       : undefined
     const controller = await streamAiSuggestion(
-      { subject, body, mode: aiMode, customPrompt: aiMode === 'custom' ? customPrompt : undefined, replyTo },
+      { subject, body: bodyText, mode: aiMode, customPrompt: aiMode === 'custom' ? customPrompt : undefined, replyTo },
       (text) => setAiSuggestion(prev => prev + text),
       () => { setIsAiLoading(false); setAiDone(true) },
       (err) => { setIsAiLoading(false); setAiError(err) }
     )
     abortRef.current = { abort: () => controller.abort() }
-  }, [subject, body, aiMode, customPrompt, composeData, isAiLoading])
+  }, [subject, editor, aiMode, customPrompt, composeData, isAiLoading])
 
   const applyAiSuggestion = () => {
     if (aiMode === 'subject') {
       const first = aiSuggestion.split('\n').filter(l => l.trim())[0]?.replace(/^\d+\.\s*/, '').trim()
       if (first) setSubject(first)
-    } else { setBody(aiSuggestion) }
+    } else {
+      editor?.commands.setContent(`<p>${aiSuggestion.replace(/\n/g, '</p><p>')}</p>`)
+    }
     setAiSuggestion(''); setAiDone(false)
     showNotification('success', 'AI suggestion applied!')
   }
 
   if (!composeData) return null
 
-  // Shared class snippets
   const rowCls   = 'flex items-center gap-2 px-4 py-2.5 border-b border-[#d0d7de] dark:border-[#30363d]'
   const labelCls = 'text-[11px] text-[#818b98] dark:text-[#484f58] w-12 flex-shrink-0'
-  const inputCls = 'flex-1 text-sm bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none'
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-end p-4 pointer-events-none">
@@ -227,7 +387,7 @@ export function ComposeModal() {
         )}
 
         {/* Compose window */}
-        <div className="w-[540px] bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl flex flex-col" style={{ height: '520px' }}>
+        <div className="w-[540px] bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl flex flex-col" style={{ height: '540px' }}>
           <div className="flex items-center justify-between px-4 py-3 bg-[#f6f8fa] dark:bg-[#1c2128] border-b border-[#d0d7de] dark:border-[#30363d] rounded-t-xl">
             <span className="text-[#1f2328] dark:text-[#e6edf3] font-semibold text-sm">
               {composeData.replyTo ? 'Reply' : 'New Message'}
@@ -255,24 +415,25 @@ export function ComposeModal() {
 
             <div className={rowCls}>
               <span className={labelCls}>To</span>
-              <input type="email" value={to} onChange={e => setTo(e.target.value)} placeholder="recipient@example.com" className={inputCls} multiple />
-              <button onClick={() => setShowCcBcc(!showCcBcc)} className="text-[10px] text-[#818b98] dark:text-[#484f58] hover:text-[#f59e0b] transition-colors">Cc Bcc</button>
+              <ContactField value={to} onChange={setTo} contacts={contacts} placeholder="recipient@example.com" label="To" />
+              <button onClick={() => setShowCcBcc(!showCcBcc)} className="text-[10px] text-[#818b98] dark:text-[#484f58] hover:text-[#f59e0b] transition-colors flex-shrink-0">Cc Bcc</button>
             </div>
             {showCcBcc && (
               <>
                 <div className={rowCls}>
                   <span className={labelCls}>Cc</span>
-                  <input type="text" value={cc} onChange={e => setCc(e.target.value)} placeholder="cc@example.com" className={inputCls} />
+                  <ContactField value={cc} onChange={setCc} contacts={contacts} placeholder="cc@example.com" label="Cc" />
                 </div>
                 <div className={rowCls}>
                   <span className={labelCls}>Bcc</span>
-                  <input type="text" value={bcc} onChange={e => setBcc(e.target.value)} placeholder="bcc@example.com" className={inputCls} />
+                  <ContactField value={bcc} onChange={setBcc} contacts={contacts} placeholder="bcc@example.com" label="Bcc" />
                 </div>
               </>
             )}
             <div className={rowCls}>
               <span className={labelCls}>Subject</span>
-              <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject" className={`${inputCls} font-medium`} />
+              <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject"
+                className="flex-1 text-sm font-medium bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none" />
             </div>
             {composeData.replyTo && (
               <div className="px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128]">
@@ -293,12 +454,12 @@ export function ComposeModal() {
                 ))}
               </div>
             )}
-            <textarea
-              value={body}
-              onChange={e => setBody(e.target.value)}
-              placeholder="Write your email…"
-              className="flex-1 px-4 py-3 text-sm bg-transparent text-[#24292f] dark:text-[#c9d1d9] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none resize-none font-sans leading-relaxed"
-            />
+
+            {/* Rich text toolbar + editor */}
+            <RichToolbar editor={editor} />
+            <div className="flex-1 overflow-y-auto">
+              <EditorContent editor={editor} className="h-full" />
+            </div>
 
             <div className="flex items-center gap-2 px-4 py-2.5 border-t border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128] rounded-b-xl">
               <button onClick={handleSend} disabled={isSending}
@@ -309,7 +470,6 @@ export function ComposeModal() {
                 }
               </button>
               <div className="flex-1" />
-              {/* Hidden file input */}
               <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
               <button
                 onClick={() => fileInputRef.current?.click()}

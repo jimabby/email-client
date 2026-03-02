@@ -8,6 +8,12 @@ const DraftsIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="n
 const TrashIcon  = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
 const SpamIcon   = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
 const FolderIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
+const StarIcon   = ({ filled }: { filled?: boolean }) => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? '#f59e0b' : 'none'}>
+    <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
+      stroke="#f59e0b" strokeWidth="1.3" strokeLinejoin="round"/>
+  </svg>
+)
 
 const FOLDER_ICON_MAP: Record<string, React.FC> = {
   INBOX: InboxIcon, Inbox: InboxIcon, inbox: InboxIcon,
@@ -34,7 +40,7 @@ export function Sidebar() {
     currentAccountId, currentFolder,
     setCurrentAccount, setCurrentFolder,
     folders, setFolders,
-    emails, setEmails, setLoadingEmails,
+    emails, setEmails, setLoadingEmails, setNextToken,
     openCompose, setShowAccountModal,
   } = useEmailStore()
 
@@ -53,14 +59,17 @@ export function Sidebar() {
 
   const handleFolderClick = async (accountId: string, folderPath: string) => {
     const alreadyHere = currentAccountId === accountId && currentFolder === folderPath
-    if (alreadyHere && emails.length > 0) return  // already loaded, skip refetch
+    if (alreadyHere && emails.length > 0) return
     if (!alreadyHere) {
       setCurrentAccount(accountId)
       setCurrentFolder(folderPath)
     }
+    if (folderPath === '__starred__') return // starred is a local filter — no fetch needed
     setLoadingEmails(true)
     try {
-      setEmails(await emailsApi.list(accountId, folderPath))
+      const { emails: fetched, nextToken } = await emailsApi.list(accountId, folderPath)
+      setEmails(fetched)
+      setNextToken(nextToken)
     } catch (err) { console.error(err) }
     finally { setLoadingEmails(false) }
   }
@@ -77,6 +86,9 @@ export function Sidebar() {
 
   const unreadCount = (accountId: string, folderPath: string) =>
     emails.filter(e => e.accountId === accountId && e.folder === folderPath && !e.read).length
+
+  const starredCount = (accountId: string) =>
+    emails.filter(e => e.accountId === accountId && e.starred).length
 
   return (
     <aside className="flex flex-col h-full bg-[#f6f8fa] dark:bg-[#161b22] border-r border-[#d0d7de] dark:border-[#30363d] w-52 flex-shrink-0">
@@ -111,6 +123,7 @@ export function Sidebar() {
             const isActive = currentAccountId === account.id
             const initials = (account.name || account.email).slice(0, 2).toUpperCase()
             const dotColor = ACCOUNT_COLOR[account.type] || 'bg-gray-500'
+            const starred = starredCount(account.id)
 
             return (
               <div key={account.id} className="mb-1">
@@ -139,6 +152,26 @@ export function Sidebar() {
 
                 {isActive && (
                   <div className="mt-0.5 ml-1">
+                    {/* Starred virtual folder */}
+                    <button
+                      onClick={() => { setCurrentAccount(account.id); setCurrentFolder('__starred__') }}
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors mb-0.5
+                        ${currentFolder === '__starred__'
+                          ? 'bg-[rgba(245,158,11,0.12)] text-[#b45309] dark:text-[#f59e0b] font-semibold'
+                          : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+                        }`}
+                    >
+                      <span className={currentFolder === '__starred__' ? 'text-[#b45309] dark:text-[#f59e0b]' : 'text-[#818b98] dark:text-[#484f58]'}>
+                        <StarIcon filled={currentFolder === '__starred__'} />
+                      </span>
+                      <span className="flex-1">Starred</span>
+                      {starred > 0 && (
+                        <span className="text-[9px] font-bold bg-[#f59e0b] text-[#0d1117] rounded-full px-1.5 py-0.5 leading-none">
+                          {starred > 99 ? '99+' : starred}
+                        </span>
+                      )}
+                    </button>
+
                     {accountFolders.map(folder => {
                       const isActiveFolder = currentFolder === folder.path
                       const unread = isActiveFolder ? 0 : unreadCount(account.id, folder.path)
