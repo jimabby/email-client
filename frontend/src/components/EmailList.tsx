@@ -41,7 +41,7 @@ function StarBtn({ starred, onClick }: { starred?: boolean; onClick: (e: React.M
   return (
     <button
       onClick={onClick}
-      className="opacity-0 group-hover:opacity-100 flex-shrink-0 transition-all p-0.5"
+      className={`flex-shrink-0 transition-all p-0.5 rounded ${starred ? 'opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100'}`}
       title={starred ? 'Unstar' : 'Star'}
     >
       <svg width="12" height="12" viewBox="0 0 16 16" fill={starred ? '#f59e0b' : 'none'}>
@@ -61,14 +61,15 @@ function EmailRow({ email, isSelected, onClick, onStar }: {
   return (
     <div
       onClick={onClick}
-      className={`group flex items-start gap-3 px-3 py-3 cursor-pointer border-b border-[#eaeef2] dark:border-[#21262d] transition-colors relative
+      className={`group flex items-start gap-3 px-3 py-2.5 cursor-pointer border-b border-[#eaeef2] dark:border-[#21262d] transition-colors relative
         ${isSelected
-          ? 'bg-[#fff8ec] dark:bg-[#1c2128] border-l-2 border-l-[#f59e0b]'
-          : 'hover:bg-[#f6f8fa] dark:hover:bg-[#161b22] border-l-2 border-l-transparent'
+          ? 'bg-[#fff8ec] dark:bg-[#1c2128] border-l-[3px] border-l-[#f59e0b]'
+          : 'hover:bg-[#f6f8fa] dark:hover:bg-[#161b22] border-l-[3px] border-l-transparent'
         }`}
     >
+      {/* Avatar */}
       <div
-        className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 mt-0.5"
+        className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 mt-0.5 ring-2 ring-white dark:ring-[#0d1117]"
         style={{ backgroundColor: getAvatarColor(email.from) }}
       >
         {getInitials(email.from)}
@@ -76,24 +77,24 @@ function EmailRow({ email, isSelected, onClick, onStar }: {
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2 mb-0.5">
-          <span className={`text-xs truncate ${!email.read ? 'font-bold text-[#1f2328] dark:text-[#e6edf3]' : 'text-[#656d76] dark:text-[#8b949e]'}`}>
+          <span className={`text-xs truncate ${!email.read ? 'font-bold text-[#1f2328] dark:text-[#e6edf3]' : 'font-medium text-[#656d76] dark:text-[#8b949e]'}`}>
             {getSenderName(email.from)}
           </span>
           <div className="flex items-center gap-1 flex-shrink-0">
             <StarBtn starred={email.starred} onClick={onStar} />
-            <span className="text-[10px] text-[#818b98] dark:text-[#484f58]">{formatDate(email.date)}</span>
+            <span className={`text-[10px] ${!email.read ? 'text-[#f59e0b] font-semibold' : 'text-[#818b98] dark:text-[#484f58]'}`}>{formatDate(email.date)}</span>
           </div>
         </div>
-        <div className={`text-xs truncate ${!email.read ? 'font-semibold text-[#24292f] dark:text-[#c9d1d9]' : 'text-[#656d76] dark:text-[#8b949e]'}`}>
-          {email.subject}
+        <div className={`text-[11.5px] truncate mb-0.5 ${!email.read ? 'font-semibold text-[#24292f] dark:text-[#c9d1d9]' : 'text-[#656d76] dark:text-[#8b949e]'}`}>
+          {email.subject || '(no subject)'}
         </div>
         {email.snippet && (
-          <div className="text-[11px] text-[#818b98] dark:text-[#484f58] truncate mt-0.5">{email.snippet}</div>
+          <div className="text-[11px] text-[#afb8c1] dark:text-[#484f58] truncate leading-tight">{email.snippet}</div>
         )}
       </div>
 
       {!email.read && (
-        <div className="w-1.5 h-1.5 rounded-full bg-[#f59e0b] flex-shrink-0 mt-2" />
+        <div className="w-2 h-2 rounded-full bg-[#f59e0b] flex-shrink-0 mt-2 shadow-sm shadow-amber-200 dark:shadow-none" />
       )}
     </div>
   )
@@ -229,9 +230,10 @@ export function EmailList() {
   return (
     <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
       {/* Header */}
-      <div className="px-3 py-2 border-b border-[#d0d7de] dark:border-[#30363d] flex items-center gap-2 flex-shrink-0">
+      <div className="px-3 py-2.5 border-b border-[#d0d7de] dark:border-[#30363d] flex items-center gap-2 flex-shrink-0 bg-[#f6f8fa] dark:bg-[#161b22]">
         {showSearch ? (
-          <div className="flex-1 flex items-center gap-1.5">
+          <div className="flex-1 flex items-center gap-2">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="text-[#818b98] dark:text-[#484f58] flex-shrink-0"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
             <input
               autoFocus
               type="text"
@@ -239,31 +241,32 @@ export function EmailList() {
               onChange={e => setSearchInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSearchResults(null) } }}
               placeholder="Search emails…"
-              className="flex-1 text-xs bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md px-2 py-1 focus:outline-none focus:border-[#f59e0b]"
+              className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none"
             />
             <button onClick={() => { setShowSearch(false); setSearchInput(''); setSearchResults(null) }}
-              className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5 flex-shrink-0">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
             </button>
           </div>
         ) : (
           <>
             <h2 className="font-semibold text-[#1f2328] dark:text-[#e6edf3] text-sm flex-1">{folderLabel}</h2>
-            {searchResults !== null && (
-              <span className="text-[10px] text-[#818b98] dark:text-[#484f58]">{searchResults.length} results</span>
+            {searchResults !== null ? (
+              <span className="text-[10px] bg-[#eaeef2] dark:bg-[#21262d] text-[#656d76] dark:text-[#8b949e] px-1.5 py-0.5 rounded-full font-medium">
+                {searchResults.length} results
+              </span>
+            ) : (
+              <span className="text-[10px] text-[#afb8c1] dark:text-[#484f58] tabular-nums">{visibleEmails.length}</span>
             )}
-            <span className="text-[#818b98] dark:text-[#484f58] text-xs">{visibleEmails.length}</span>
-            {/* Search icon */}
             {currentAccountId && !isStarred && (
               <button onClick={() => setShowSearch(true)} title="Search"
-                className="p-1 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded transition-colors">
+                className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
               </button>
             )}
-            {/* Refresh icon */}
             {currentAccountId && !isStarred && (
               <button onClick={handleRefresh} title="Refresh"
-                className="p-1 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded transition-colors">
+                className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
             )}
@@ -305,15 +308,15 @@ export function EmailList() {
 
             {/* Load more */}
             {nextToken && !searchResults && !isStarred && (
-              <div className="px-3 py-3 flex justify-center border-t border-[#eaeef2] dark:border-[#21262d]">
+              <div className="px-4 py-4 flex justify-center">
                 <button
                   onClick={handleLoadMore}
                   disabled={isLoadingMore}
-                  className="flex items-center gap-1.5 px-4 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-5 py-2 text-xs font-medium text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] bg-[#f6f8fa] dark:bg-[#161b22] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] rounded-full transition-colors disabled:opacity-50"
                 >
                   {isLoadingMore
                     ? <><svg className="animate-spin" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/></svg> Loading…</>
-                    : 'Load more'
+                    : 'Load more emails'
                   }
                 </button>
               </div>

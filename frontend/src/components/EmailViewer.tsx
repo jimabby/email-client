@@ -36,19 +36,27 @@ export function EmailViewer() {
 
   if (!selectedEmail) {
     return (
-      <div className="flex flex-col items-center justify-center h-full bg-white dark:bg-[#0d1117] text-center p-8">
-        <div className="w-16 h-16 rounded-full bg-[#f6f8fa] dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] flex items-center justify-center mb-4">
-          <svg width="28" height="28" viewBox="0 0 60 40" fill="none">
-            <path d="M16,13 C11,8 4,9 2,15"  stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" strokeOpacity="0.4"/>
-            <path d="M16,19 C11,14 4,15 2,20" stroke="#f59e0b" strokeWidth="1.8" strokeLinecap="round" strokeOpacity="0.4"/>
-            <path d="M44,13 C49,8 56,9 58,15"  stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" strokeOpacity="0.4"/>
-            <path d="M44,19 C49,14 56,15 58,20" stroke="#f59e0b" strokeWidth="1.8" strokeLinecap="round" strokeOpacity="0.4"/>
-            <rect x="15" y="8" width="30" height="24" rx="3" fill="#eaeef2" className="dark:fill-[#21262d]"/>
-            <path d="M15,8 L30,22 L45,8" fill="none" stroke="#d0d7de" strokeWidth="1.3" strokeLinejoin="round"/>
-          </svg>
+      <div className="flex flex-col items-center justify-center h-full bg-white dark:bg-[#0d1117] text-center p-8 select-none">
+        <div className="relative mb-5">
+          <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[#fef3c7] to-[#fde68a] dark:from-[#1c2128] dark:to-[#21262d] border border-[#f59e0b]/20 dark:border-[#30363d] flex items-center justify-center shadow-sm">
+            <svg width="40" height="27" viewBox="0 0 60 40" fill="none">
+              <path d="M16,13 C11,8 4,9 2,15"  stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round"/>
+              <path d="M16,19 C11,14 4,15 2,20" stroke="#f59e0b" strokeWidth="1.8" strokeLinecap="round" strokeOpacity="0.6"/>
+              <path d="M44,13 C49,8 56,9 58,15"  stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round"/>
+              <path d="M44,19 C49,14 56,15 58,20" stroke="#f59e0b" strokeWidth="1.8" strokeLinecap="round" strokeOpacity="0.6"/>
+              <rect x="15" y="8" width="30" height="24" rx="3" fill="url(#emptyGold)"/>
+              <path d="M15,8 L30,22 L45,8" fill="none" stroke="#92400e" strokeWidth="1.3" strokeLinejoin="round" strokeOpacity="0.5"/>
+              <defs>
+                <linearGradient id="emptyGold" x1="15" y1="8" x2="45" y2="32" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="#fbbf24"/>
+                  <stop offset="100%" stopColor="#d97706"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
         </div>
-        <h3 className="text-base font-semibold text-[#1f2328] dark:text-[#e6edf3] mb-1">Select a message</h3>
-        <p className="text-[#656d76] dark:text-[#8b949e] text-xs">Choose an email from the list to read it here</p>
+        <h3 className="text-[15px] font-semibold text-[#1f2328] dark:text-[#e6edf3] mb-1.5">No message selected</h3>
+        <p className="text-[#818b98] dark:text-[#8b949e] text-xs leading-relaxed max-w-[180px]">Choose an email from the list to read it here</p>
       </div>
     )
   }
@@ -136,7 +144,9 @@ export function EmailViewer() {
       })
     : null
 
-  const toolBtn = 'flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors'
+  const toolBtn = 'flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors'
+  const iconBtn = 'p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors'
+  const divider = <div className="w-px h-4 bg-[#d0d7de] dark:bg-[#30363d] mx-0.5 flex-shrink-0" />
 
   const accountFolders = (currentAccountId ? folders[currentAccountId] : null) || []
   const movableFolders = accountFolders.filter(f => f.path !== currentFolder && f.path !== '__starred__')
@@ -144,7 +154,8 @@ export function EmailViewer() {
   return (
     <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
       {/* Toolbar */}
-      <div className="flex items-center gap-1 px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
+      <div className="flex items-center gap-0.5 px-3 py-2 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
+        {/* Reply group */}
         <button onClick={handleReply} className={toolBtn}>
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M5 3L1 6.5M1 6.5L5 10M1 6.5h8a3 3 0 010 6h-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Reply
@@ -160,23 +171,19 @@ export function EmailViewer() {
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M8 3l4 3.5M12 6.5L8 10M12 6.5H4a3 3 0 000 6h1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Forward
         </button>
-        <div className="flex-1" />
 
-        {/* Star */}
+        {divider}
+
+        {/* Actions group */}
         <button
           onClick={handleStar}
           title={selectedEmail.starred ? 'Unstar' : 'Star'}
-          className={`p-1.5 rounded-md transition-colors ${selectedEmail.starred ? 'text-[#f59e0b]' : 'text-[#818b98] dark:text-[#484f58] hover:text-[#f59e0b]'} hover:bg-[#eaeef2] dark:hover:bg-[#21262d]`}
+          className={`${iconBtn} ${selectedEmail.starred ? '!text-[#f59e0b]' : ''}`}
         >
           <StarIcon filled={selectedEmail.starred} />
         </button>
 
-        {/* Mark unread */}
-        <button
-          onClick={handleMarkUnread}
-          title="Mark as unread"
-          className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors"
-        >
+        <button onClick={handleMarkUnread} title="Mark as unread" className={iconBtn}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/>
             <path d="M2 4l6 5 6-5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
@@ -184,27 +191,22 @@ export function EmailViewer() {
           </svg>
         </button>
 
-        {/* Move to folder */}
         {movableFolders.length > 0 && (
           <div className="relative">
-            <button
-              onClick={() => setShowMoveMenu(v => !v)}
-              title="Move to folder"
-              className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors"
-            >
+            <button onClick={() => setShowMoveMenu(v => !v)} title="Move to folder" className={iconBtn}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
                 <path d="M8 8v4M6 10l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
             {showMoveMenu && (
-              <div className="absolute right-0 top-full mt-1 w-40 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-lg shadow-xl z-20 py-1">
-                <div className="px-3 py-1.5 text-[9px] font-semibold text-[#818b98] dark:text-[#484f58] uppercase tracking-wide">Move to</div>
+              <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl z-20 py-1.5 overflow-hidden">
+                <div className="px-3 py-1 text-[9px] font-bold text-[#818b98] dark:text-[#484f58] uppercase tracking-widest">Move to</div>
                 {movableFolders.map(f => (
                   <button
                     key={f.path}
                     onClick={() => handleMove(f.path)}
-                    className="w-full text-left px-3 py-1.5 text-xs text-[#24292f] dark:text-[#c9d1d9] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] transition-colors"
+                    className="w-full text-left px-3 py-2 text-xs text-[#24292f] dark:text-[#c9d1d9] hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors"
                   >
                     {f.name}
                   </button>
@@ -214,8 +216,10 @@ export function EmailViewer() {
           </div>
         )}
 
+        {divider}
+
         {/* Delete */}
-        <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors" title="Delete">
+        <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#fff0ee] dark:hover:bg-[#f85149]/10 rounded-md transition-colors" title="Delete">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
       </div>

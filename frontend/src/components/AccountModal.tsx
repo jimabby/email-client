@@ -108,35 +108,48 @@ export function AccountModal() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl w-[480px] max-h-[90vh] flex flex-col">
+      <div className="bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl w-[580px] max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#d0d7de] dark:border-[#30363d]">
           <h2 className="text-base font-semibold text-[#1f2328] dark:text-[#e6edf3]">Settings</h2>
-          <button onClick={() => setShowAccountModal(false)} className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 2l12 12M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          <button onClick={() => setShowAccountModal(false)} className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors p-1 rounded-md hover:bg-[#eaeef2] dark:hover:bg-[#21262d]">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 2l12 12M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
         </div>
 
-        <div className="flex border-b border-[#d0d7de] dark:border-[#30363d] px-2 pt-2">
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex-1 px-2 py-2 text-xs font-medium rounded-t-md transition-colors border-b-2
-                ${tab === t.id
-                  ? 'border-[#f59e0b] text-[#b45309] dark:text-[#f59e0b] bg-[rgba(245,158,11,0.05)]'
-                  : 'border-transparent text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
-                }`}
-            >
-              <div className="flex items-center justify-center gap-1.5">
-                {t.id === 'ai' && aiConfigured && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                )}
-                {t.label}
-              </div>
-              <div className="text-[9px] opacity-60 mt-0.5">{t.sub}</div>
-            </button>
-          ))}
-        </div>
+        {/* Body: left nav + right content */}
+        <div className="flex flex-1 min-h-0">
+          {/* Left nav */}
+          <div className="w-44 flex-shrink-0 border-r border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128] p-2 flex flex-col gap-0.5">
+            <div className="text-[9px] font-bold text-[#818b98] dark:text-[#484f58] uppercase tracking-widest px-2 py-1.5">Add Account</div>
+            {tabs.filter(t => ['imap','gmail','outlook'].includes(t.id)).map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`w-full flex flex-col items-start px-3 py-2 rounded-lg text-left transition-colors
+                  ${tab === t.id
+                    ? 'bg-white dark:bg-[#161b22] text-[#1f2328] dark:text-[#e6edf3] shadow-sm border border-[#d0d7de] dark:border-[#30363d]'
+                    : 'text-[#656d76] dark:text-[#8b949e] hover:bg-white/60 dark:hover:bg-[#161b22]/60 hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+                  }`}
+              >
+                <span className="text-xs font-medium">{t.label}</span>
+                <span className="text-[10px] opacity-60 mt-0.5">{t.sub}</span>
+              </button>
+            ))}
+            <div className="mt-2 mb-0.5 text-[9px] font-bold text-[#818b98] dark:text-[#484f58] uppercase tracking-widest px-2 py-1.5">Preferences</div>
+            {tabs.filter(t => ['ai','signature'].includes(t.id)).map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors
+                  ${tab === t.id
+                    ? 'bg-white dark:bg-[#161b22] text-[#1f2328] dark:text-[#e6edf3] shadow-sm border border-[#d0d7de] dark:border-[#30363d]'
+                    : 'text-[#656d76] dark:text-[#8b949e] hover:bg-white/60 dark:hover:bg-[#161b22]/60 hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+                  }`}
+              >
+                <span className="text-xs font-medium flex-1">{t.label}</span>
+                {t.id === 'ai' && aiConfigured && <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />}
+              </button>
+            ))}
+          </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
+          {/* Right content */}
+          <div className="flex-1 overflow-y-auto p-6">
           {tab === 'imap' && (
             <form onSubmit={handleImapSubmit} className="space-y-4">
               <div>
@@ -399,6 +412,7 @@ export function AccountModal() {
               </form>
             </div>
           )}
+          </div>
         </div>
       </div>
     </div>
