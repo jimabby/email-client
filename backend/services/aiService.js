@@ -57,8 +57,8 @@ function geminiRequest(apiKey, options, body) {
   return new Promise((resolve, reject) => {
     const req = https.request({
       hostname: 'generativelanguage.googleapis.com',
-      headers: { 'X-goog-api-key': apiKey, ...options.headers },
       ...options,
+      headers: { 'X-goog-api-key': apiKey, ...(options.headers || {}) },
     }, (response) => {
       let data = '';
       response.on('data', chunk => { data += chunk; });
@@ -243,6 +243,122 @@ function streamOpenAI(apiKey, systemPrompt, userMessage, res) {
   });
 }
 
+// ─── Non-streaming helpers (used for batch categorization) ────────────────────
+
+async function callClaude(apiKey, systemPrompt, userMessage) {
+  const client = new Anthropic({ apiKey });
+  const msg = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }]
+  });
+  return msg.content[0].text;
+}
+
+function callOpenAI(apiKey, systemPrompt, userMessage) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage }
+      ]
+    });
+    const req = https.request({
+      hostname: 'api.openai.com',
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, (response) => {
+      let data = '';
+      response.on('data', chunk => { data += chunk; });
+      response.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (response.statusCode !== 200) reject(new Error(json.error?.message || `OpenAI error ${response.statusCode}`));
+          else resolve(json.choices[0].message.content);
+        } catch (e) { reject(e); }
+      });
+      response.on('error', reject);
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function callGemini(apiKey, systemPrompt, userMessage) {
+  const model = await getGeminiModel(apiKey);
+  const body = JSON.stringify({
+    contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userMessage}` }] }]
+  });
+  const result = await geminiRequest(apiKey, {
+    path: `/v1beta/models/${model}:generateContent`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+  }, body);
+  const json = JSON.parse(result.body);
+  if (result.status !== 200) throw new Error(json.error?.message || `Gemini error ${result.status}`);
+  return json.candidates[0].content.parts[0].text;
+}
+
+const CATEGORY_SYSTEM_PROMPT = `You are an email categorization assistant. Categorize each email into exactly one of these categories:
+- Primary: personal emails, work correspondence, direct messages
+- Social: social media notifications (Facebook, Twitter, Instagram, Discord, Reddit, YouTube, etc.)
+- Jobs: job alerts, job applications, recruiters, LinkedIn job notifications, career emails
+- Promotions: marketing emails, newsletters, sales, discounts, advertisements
+- Receipts: order confirmations, invoices, payment receipts, shipping notifications, booking confirmations
+
+Return ONLY a valid JSON object mapping each email id to its category. Example: {"id1":"Receipts","id2":"Primary"}
+No markdown, no explanation, just the JSON.`;
+
+const VALID_AI_CATEGORIES = new Set(['Primary', 'Social', 'Jobs', 'Promotions', 'Receipts']);
+
+async function categorizeEmailsWithAI(emails) {
+  const { provider, apiKey } = store.getAiSettings();
+  if (!provider || !apiKey) return null; // No AI configured — caller falls back to rules
+
+  // Build compact email list to minimise tokens
+  const emailList = emails.map(e =>
+    `id:${e.id} | from:${(e.from || '').slice(0, 60)} | subject:${(e.subject || '').slice(0, 80)} | snippet:${(e.snippet || '').slice(0, 80)}`
+  ).join('\n');
+  const userMessage = `Categorize these emails:\n${emailList}`;
+
+  let text;
+  try {
+    if (provider === 'openai') {
+      text = await callOpenAI(apiKey, CATEGORY_SYSTEM_PROMPT, userMessage);
+    } else if (provider === 'gemini') {
+      text = await callGemini(apiKey, CATEGORY_SYSTEM_PROMPT, userMessage);
+    } else {
+      const key = apiKey || process.env.ANTHROPIC_API_KEY;
+      text = await callClaude(key, CATEGORY_SYSTEM_PROMPT, userMessage);
+    }
+  } catch (err) {
+    console.error('[Categorize] AI error:', err.message);
+    return null; // Fall back to rule-based
+  }
+
+  // Parse JSON — may be wrapped in a markdown code block
+  try {
+    const jsonStr = text.match(/\{[\s\S]*\}/)?.[0];
+    if (!jsonStr) return null;
+    const raw = JSON.parse(jsonStr);
+    const result = {};
+    for (const [id, cat] of Object.entries(raw)) {
+      result[id] = VALID_AI_CATEGORIES.has(cat) ? cat : 'Primary';
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 async function streamSuggestion(res, params) {
@@ -282,4 +398,4 @@ async function streamSuggestion(res, params) {
   }
 }
 
-module.exports = { streamSuggestion, listGeminiModels };
+module.exports = { streamSuggestion, listGeminiModels, categorizeEmailsWithAI };

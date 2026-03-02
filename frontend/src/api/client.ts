@@ -50,12 +50,19 @@ export const emailsApi = {
     subject: string
     text?: string
     html?: string
+    attachments?: { filename: string; contentType: string; content: string }[]
   }) => api.post(`/emails/${accountId}/send`, data).then(r => r.data),
 
   delete: (accountId: string, emailId: string, folder?: string) =>
     api.delete(`/emails/${accountId}/message/${emailId}`, {
       params: folder ? { folder } : {}
     }).then(r => r.data),
+
+  categorize: (emails: { id: string; from: string; subject: string; snippet?: string }[]) =>
+    api.post<{ categories: Record<string, string> }>('/emails/categorize', { emails }).then(r => r.data),
+
+  getDailyReport: () =>
+    api.get<{ subject: string; html: string; text: string; date: string } | null>('/emails/daily-report').then(r => r.data),
 }
 
 // ─── AI Settings ──────────────────────────────────────────────────────────────

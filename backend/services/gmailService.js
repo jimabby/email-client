@@ -150,6 +150,41 @@ async function fetchEmailBody(account, gmailId) {
 
   const { html, text } = extractBody(detail.data.payload);
 
+  // Extract attachments from payload parts
+  const attachments = [];
+  function collectAttachments(part) {
+    if (!part) return;
+    if (part.filename && part.body) {
+      const att = {
+        filename: part.filename,
+        contentType: part.mimeType || 'application/octet-stream',
+        size: part.body.size || 0,
+        content: null,
+        attachmentId: part.body.attachmentId || null,
+      };
+      // Small attachments: data is inline (base64url → base64)
+      if (part.body.data) {
+        att.content = part.body.data.replace(/-/g, '+').replace(/_/g, '/');
+      }
+      attachments.push(att);
+    }
+    if (part.parts) part.parts.forEach(collectAttachments);
+  }
+  collectAttachments(detail.data.payload);
+
+  // Fetch content for large attachments that only have an attachmentId
+  await Promise.all(attachments.map(async (att) => {
+    if (!att.content && att.attachmentId) {
+      try {
+        const res = await gmail.users.messages.attachments.get({
+          userId: 'me', messageId: gmailId, id: att.attachmentId
+        });
+        att.content = res.data.data.replace(/-/g, '+').replace(/_/g, '/');
+      } catch { /* skip if fetch fails */ }
+    }
+    delete att.attachmentId;
+  }));
+
   return {
     gmailId,
     from: getHeader('From'),
@@ -159,8 +194,13 @@ async function fetchEmailBody(account, gmailId) {
     date: getHeader('Date') ? new Date(getHeader('Date')).toISOString() : '',
     html,
     text,
-    attachments: []
+    attachments,
   };
+}
+
+async function deleteEmail(account, gmailId) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.trash({ userId: 'me', id: gmailId });
 }
 
 async function getFolders(account) {
@@ -172,22 +212,64 @@ async function getFolders(account) {
     .map(l => ({ name: l.name, path: l.id }));
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html }) {
-  const gmail = getGmailClient(account);
+function wrapBase64(b64) {
+  return b64.match(/.{1,76}/g)?.join('\r\n') || b64;
+}
 
-  const messageParts = [
+async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments }) {
+  const gmail = getGmailClient(account);
+  const hasAttachments = attachments && attachments.length > 0;
+
+  const headers = [
     `From: ${account.name || account.email} <${account.email}>`,
     `To: ${Array.isArray(to) ? to.join(', ') : to}`,
-    cc ? `Cc: ${cc}` : '',
-    bcc ? `Bcc: ${bcc}` : '',
+    cc  ? `Cc: ${cc}`   : null,
+    bcc ? `Bcc: ${bcc}` : null,
     `Subject: ${subject}`,
     'MIME-Version: 1.0',
-    'Content-Type: text/html; charset=utf-8',
-    '',
-    html || text || ''
-  ].filter(Boolean).join('\r\n');
+  ].filter(Boolean);
 
-  const encodedMessage = Buffer.from(messageParts).toString('base64')
+  let rawMessage;
+
+  if (hasAttachments) {
+    const boundary = `----=_Part_${Date.now()}`;
+    const bodyB64 = wrapBase64(Buffer.from(html || text || '').toString('base64'));
+
+    const bodyPart = [
+      `--${boundary}`,
+      'Content-Type: text/html; charset=utf-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      bodyB64,
+    ].join('\r\n');
+
+    const attachmentParts = attachments.map(a => [
+      `--${boundary}`,
+      `Content-Type: ${a.contentType}; name="${a.filename}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${a.filename}"`,
+      '',
+      wrapBase64(a.content),
+    ].join('\r\n'));
+
+    rawMessage = [
+      ...headers,
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      '',
+      bodyPart,
+      ...attachmentParts,
+      `--${boundary}--`,
+    ].join('\r\n');
+  } else {
+    rawMessage = [
+      ...headers,
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      html || text || '',
+    ].join('\r\n');
+  }
+
+  const encodedMessage = Buffer.from(rawMessage).toString('base64')
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
   await gmail.users.messages.send({
@@ -212,5 +294,6 @@ module.exports = {
   fetchEmailBody,
   getFolders,
   sendEmail,
-  markAsRead
+  markAsRead,
+  deleteEmail,
 };

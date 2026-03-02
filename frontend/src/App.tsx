@@ -6,7 +6,8 @@ import { ComposeModal } from './components/ComposeModal'
 import { AccountModal } from './components/AccountModal'
 import { HermesLogo } from './components/HermesLogo'
 import { useEmailStore } from './store/emailStore'
-import { accountsApi, aiApi } from './api/client'
+import { accountsApi, aiApi, emailsApi } from './api/client'
+import { DailyReportModal } from './components/DailyReportModal'
 
 function Notification() {
   const { notification, clearNotification } = useEmailStore()
@@ -95,11 +96,16 @@ function TopBar() {
 }
 
 export default function App() {
-  const { isComposeOpen, showAccountModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig } = useEmailStore()
+  const { isComposeOpen, showAccountModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport } = useEmailStore()
 
   useEffect(() => {
     aiApi.getSettings().then(({ provider, configured }) => {
       if (provider) setAiConfig(provider, configured)
+    }).catch(() => {})
+
+    // Check for pending daily report
+    emailsApi.getDailyReport().then(report => {
+      if (report) setPendingReport(report)
     }).catch(() => {})
   }, [])
 
@@ -130,17 +136,18 @@ export default function App() {
       <div className="flex flex-1 min-h-0">
         <Sidebar />
 
-        <div className="w-72 flex-shrink-0 border-r border-[#d0d7de] dark:border-[#30363d] flex flex-col overflow-hidden">
+        <div className="flex-[1] min-w-0 border-r border-[#d0d7de] dark:border-[#30363d] flex flex-col overflow-hidden">
           <EmailList />
         </div>
 
-        <div className="flex-1 min-w-0 overflow-hidden">
+        <div className="flex-[2] min-w-0 overflow-hidden">
           <EmailViewer />
         </div>
       </div>
 
       {isComposeOpen && <ComposeModal />}
       {showAccountModal && <AccountModal />}
+      <DailyReportModal />
       <Notification />
     </div>
   )

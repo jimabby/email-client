@@ -156,6 +156,22 @@ export function EmailViewer() {
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
                   <span className="text-[#24292f] dark:text-[#c9d1d9]">{att.filename}</span>
                   <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(att.size / 1024)}KB)</span>
+                  {att.content && (
+                    <button
+                      title="Download"
+                      onClick={() => {
+                        const bytes = Uint8Array.from(atob(att.content!), c => c.charCodeAt(0))
+                        const blob = new Blob([bytes], { type: att.contentType })
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url; a.download = att.filename; a.click()
+                        URL.revokeObjectURL(url)
+                      }}
+                      className="text-[#f59e0b] hover:text-[#d97706] transition-colors"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

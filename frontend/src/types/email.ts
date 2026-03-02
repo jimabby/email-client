@@ -31,7 +31,7 @@ export interface EmailBody {
   date: string;
   html?: string;
   text?: string;
-  attachments?: { filename: string; contentType: string; size: number }[];
+  attachments?: { filename: string; contentType: string; size: number; content?: string | null }[];
 }
 
 export interface Folder {
@@ -40,6 +40,9 @@ export interface Folder {
 }
 
 export type AiMode = 'improve' | 'concise' | 'complete' | 'grammar' | 'formal' | 'friendly' | 'subject' | 'reply' | 'custom';
+
+export type EmailCategory = 'All' | 'Primary' | 'Social' | 'Jobs' | 'Promotions' | 'Receipts';
+export const EMAIL_CATEGORIES: EmailCategory[] = ['All', 'Primary', 'Social', 'Jobs', 'Promotions', 'Receipts'];
 
 export interface ComposeData {
   to: string;

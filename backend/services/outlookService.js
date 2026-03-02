@@ -97,10 +97,19 @@ async function fetchEmails(account, folder = 'INBOX', limit = 50) {
 }
 
 async function fetchEmailBody(account, outlookId) {
-  const msg = await graphRequest(
-    account.accessToken,
-    `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body`
-  );
+  const [msg, attData] = await Promise.all([
+    graphRequest(account.accessToken, `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body,hasAttachments`),
+    graphRequest(account.accessToken, `/me/messages/${outlookId}/attachments`).catch(() => ({ value: [] })),
+  ]);
+
+  const attachments = (attData?.value || [])
+    .filter(a => a['@odata.type'] === '#microsoft.graph.fileAttachment')
+    .map(a => ({
+      filename: a.name,
+      contentType: a.contentType,
+      size: a.size,
+      content: a.contentBytes || null,
+    }));
 
   return {
     outlookId,
@@ -113,8 +122,12 @@ async function fetchEmailBody(account, outlookId) {
     date: msg.receivedDateTime || '',
     html: msg.body?.contentType === 'html' ? msg.body.content : '',
     text: msg.body?.contentType === 'text' ? msg.body.content : '',
-    attachments: []
+    attachments,
   };
+}
+
+async function deleteEmail(account, outlookId) {
+  await graphRequest(account.accessToken, `/me/messages/${outlookId}`, 'DELETE');
 }
 
 async function getFolders(account) {
@@ -125,7 +138,7 @@ async function getFolders(account) {
   }));
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html }) {
+async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments }) {
   const toArray = Array.isArray(to) ? to : [to];
 
   await graphRequest(account.accessToken, '/me/sendMail', 'POST', {
@@ -139,7 +152,13 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html }) {
         emailAddress: { address: addr }
       })),
       ccRecipients: cc ? [{ emailAddress: { address: cc } }] : [],
-      bccRecipients: bcc ? [{ emailAddress: { address: bcc } }] : []
+      bccRecipients: bcc ? [{ emailAddress: { address: bcc } }] : [],
+      attachments: (attachments || []).map(a => ({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: a.filename,
+        contentBytes: a.content,
+        contentType: a.contentType
+      }))
     },
     saveToSentItems: true
   });
@@ -158,5 +177,6 @@ module.exports = {
   fetchEmailBody,
   getFolders,
   sendEmail,
-  markAsRead
+  markAsRead,
+  deleteEmail,
 };

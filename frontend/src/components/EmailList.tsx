@@ -1,7 +1,9 @@
+import { useEffect, useRef } from 'react'
 import { format, isToday, isYesterday, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi } from '../api/client'
 import type { EmailSummary } from '../types/email'
+import { CategoryTabs } from './CategoryTabs'
 
 function formatDate(dateStr: string): string {
   try {
@@ -82,8 +84,26 @@ export function EmailList() {
     emails, isLoadingEmails,
     selectedEmail, setSelectedEmail,
     setSelectedEmailBody, setLoadingBody,
-    markEmailRead, currentAccountId, currentFolder
+    markEmailRead, currentAccountId, currentFolder,
+    emailCategories, setEmailCategories, activeCategory,
   } = useEmailStore()
+
+  // Categorize newly loaded emails
+  const lastCategorizedKey = useRef('')
+  useEffect(() => {
+    if (!emails.length || currentFolder !== 'INBOX') return
+    const uncached = emails.filter(e => !emailCategories[e.id])
+    if (!uncached.length) return
+
+    // Deduplicate rapid re-runs
+    const key = uncached.map(e => e.id).join(',')
+    if (key === lastCategorizedKey.current) return
+    lastCategorizedKey.current = key
+
+    emailsApi.categorize(uncached.map(e => ({ id: e.id, from: e.from, subject: e.subject, snippet: e.snippet })))
+      .then(({ categories }) => setEmailCategories(categories as Record<string, any>))
+      .catch(() => {/* silent — categorization is best-effort */})
+  }, [emails, currentFolder])
 
   const handleSelectEmail = async (email: EmailSummary) => {
     setSelectedEmail(email)
@@ -95,6 +115,13 @@ export function EmailList() {
     } catch { setSelectedEmailBody(null) }
     finally { setLoadingBody(false) }
   }
+
+  const isInbox = currentFolder === 'INBOX'
+
+  // Filter by active category tab (inbox only)
+  const visibleEmails = isInbox && activeCategory !== 'All'
+    ? emails.filter(e => emailCategories[e.id] === activeCategory)
+    : emails
 
   if (isLoadingEmails) {
     return (
@@ -121,11 +148,13 @@ export function EmailList() {
     <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
       <div className="px-3 py-3 border-b border-[#d0d7de] dark:border-[#30363d] flex items-center gap-3">
         <h2 className="font-semibold text-[#1f2328] dark:text-[#e6edf3] text-sm">{folderLabel}</h2>
-        <span className="text-[#818b98] dark:text-[#484f58] text-xs">{emails.length}</span>
+        <span className="text-[#818b98] dark:text-[#484f58] text-xs">{visibleEmails.length}</span>
       </div>
 
+      {isInbox && <CategoryTabs />}
+
       <div className="flex-1 overflow-y-auto">
-        {emails.length === 0 ? (
+        {visibleEmails.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
             <div className="w-12 h-12 rounded-full bg-[#eaeef2] dark:bg-[#21262d] flex items-center justify-center mb-3 text-[#818b98] dark:text-[#484f58]">
               <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
@@ -138,7 +167,7 @@ export function EmailList() {
             </p>
           </div>
         ) : (
-          emails.map(email => (
+          visibleEmails.map(email => (
             <EmailRow
               key={email.id}
               email={email}

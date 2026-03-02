@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, type ChangeEvent } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi, streamAiSuggestion } from '../api/client'
 import type { AiMode } from '../types/email'
@@ -26,6 +26,8 @@ export function ComposeModal() {
   const [accountId, setAccountId] = useState(composeData?.accountId || accounts[0]?.id || '')
   const [showCcBcc, setShowCcBcc] = useState(!!(composeData?.cc || composeData?.bcc))
   const [isSending, setIsSending] = useState(false)
+  const [attachments, setAttachments]   = useState<File[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [showAiPanel, setShowAiPanel]   = useState(false)
   const [aiMode, setAiMode]             = useState<AiMode>('improve')
@@ -36,15 +38,32 @@ export function ComposeModal() {
   const [aiError, setAiError]           = useState('')
   const abortRef = useRef<{ abort: () => void } | null>(null)
 
+  const readFileAsBase64 = (file: File): Promise<{ filename: string; contentType: string; content: string }> =>
+    new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(',')[1]
+        resolve({ filename: file.name, contentType: file.type || 'application/octet-stream', content: base64 })
+      }
+      reader.readAsDataURL(file)
+    })
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) setAttachments(prev => [...prev, ...Array.from(e.target.files!)])
+    e.target.value = '' // reset so same file can be re-added
+  }
+
   const handleSend = async () => {
     if (!to || !subject) { showNotification('error', 'Please fill in To and Subject fields'); return }
     if (!accountId) { showNotification('error', 'Please select an account'); return }
     setIsSending(true)
     try {
+      const attachmentData = attachments.length ? await Promise.all(attachments.map(readFileAsBase64)) : undefined
       await emailsApi.send(accountId, {
         to, cc: cc || undefined, bcc: bcc || undefined, subject,
         html: `<div style="font-family: Calibri, sans-serif; font-size: 14px; white-space: pre-wrap;">${body.replace(/\n/g, '<br>')}</div>`,
-        text: body
+        text: body,
+        attachments: attachmentData
       })
       showNotification('success', 'Email sent!')
       closeCompose()
@@ -57,7 +76,13 @@ export function ComposeModal() {
     if (isAiLoading) { abortRef.current?.abort(); setIsAiLoading(false); return }
     setIsAiLoading(true); setAiDone(false); setAiSuggestion(''); setAiError('')
     const replyTo = composeData?.replyTo
-      ? { from: composeData.replyTo.from, subject: composeData.replyTo.subject, body: composeData.replyTo.text || '' }
+      ? {
+          from: composeData.replyTo.from,
+          subject: composeData.replyTo.subject,
+          body: composeData.replyTo.text
+            || composeData.replyTo.html?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+            || ''
+        }
       : undefined
     const controller = await streamAiSuggestion(
       { subject, body, mode: aiMode, customPrompt: aiMode === 'custom' ? customPrompt : undefined, replyTo },
@@ -256,6 +281,18 @@ export function ComposeModal() {
                 </div>
               </div>
             )}
+            {attachments.length > 0 && (
+              <div className="px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d] flex flex-wrap gap-1.5">
+                {attachments.map((f, i) => (
+                  <div key={i} className="flex items-center gap-1 bg-[#eaeef2] dark:bg-[#21262d] rounded px-2 py-1 text-[11px] text-[#1f2328] dark:text-[#e6edf3]">
+                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                    <span className="max-w-[120px] truncate">{f.name}</span>
+                    <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(f.size / 1024)}KB)</span>
+                    <button onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="ml-0.5 text-[#818b98] hover:text-[#cf222e] dark:hover:text-[#f85149]">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <textarea
               value={body}
               onChange={e => setBody(e.target.value)}
@@ -272,6 +309,18 @@ export function ComposeModal() {
                 }
               </button>
               <div className="flex-1" />
+              {/* Hidden file input */}
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach files"
+                className="p-2 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors relative"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M14 7.5L7.5 14A5 5 0 01.5 7L6.5 1A3.5 3.5 0 0111.5 6L5.5 12A2 2 0 012.5 9L8 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                {attachments.length > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-[#f59e0b] text-[#0d1117] rounded-full text-[8px] font-bold flex items-center justify-center">{attachments.length}</span>
+                )}
+              </button>
               <button
                 onClick={() => setShowAiPanel(!showAiPanel)}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-semibold transition-all border

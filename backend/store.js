@@ -68,5 +68,31 @@ module.exports = {
   saveAiSettings({ provider, apiKey }) {
     store.aiSettings = { provider, apiKey };
     saveStore(store);
+  },
+
+  // ─── Email categories cache ───────────────────────────────────────────────
+  getEmailCategories() {
+    return store.categories || {};
+  },
+
+  saveEmailCategories(map) {
+    if (!store.categories) store.categories = {};
+    Object.assign(store.categories, map);
+    saveStore(store);
+  },
+
+  // ─── Daily report (one-shot, cleared after read) ──────────────────────────
+  getPendingReport() {
+    return store.pendingReport || null;
+  },
+
+  savePendingReport(report) {
+    store.pendingReport = report;
+    saveStore(store);
+  },
+
+  clearPendingReport() {
+    delete store.pendingReport;
+    saveStore(store);
   }
 };

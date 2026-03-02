@@ -153,7 +153,8 @@ async function fetchEmailBody(account, uid, folder = 'INBOX') {
       attachments: (parsed.attachments || []).map(a => ({
         filename: a.filename,
         contentType: a.contentType,
-        size: a.size
+        size: a.size,
+        content: a.content ? a.content.toString('base64') : null,
       }))
     };
   });
@@ -166,25 +167,30 @@ async function getFolders(account) {
   });
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html }) {
+async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments }) {
   const transporter = getTransporter(account);
   return transporter.sendMail({
     from: `${account.name || account.email} <${account.email}>`,
-    to, cc, bcc, subject, text, html
+    to, cc, bcc, subject, text, html,
+    attachments: (attachments || []).map(a => ({
+      filename: a.filename,
+      content: Buffer.from(a.content, 'base64'),
+      contentType: a.contentType
+    }))
   });
 }
 
 async function markAsRead(account, uid, folder = 'INBOX') {
   return getConn(account).run(async (client) => {
     await client.mailboxOpen(folder);
-    await client.messageFlagsAdd({ uid: true }, [uid], ['\\Seen'], { uid: true });
+    await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true });
   });
 }
 
 async function deleteEmail(account, uid, folder = 'INBOX') {
   return getConn(account).run(async (client) => {
     await client.mailboxOpen(folder);
-    await client.messageDelete({ uid: true }, [uid], { uid: true });
+    await client.messageDelete(String(uid), { uid: true });
   });
 }
 

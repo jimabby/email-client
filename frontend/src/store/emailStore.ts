@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Account, EmailSummary, EmailBody, Folder, ComposeData } from '../types/email'
+import type { Account, EmailSummary, EmailBody, Folder, ComposeData, EmailCategory } from '../types/email'
 
 interface EmailStore {
   // Accounts
@@ -51,6 +51,17 @@ interface EmailStore {
   aiProvider: 'claude' | 'openai' | 'gemini' | null
   aiConfigured: boolean
   setAiConfig: (provider: 'claude' | 'openai' | 'gemini' | null, configured: boolean) => void
+
+  // Categorization
+  emailCategories: Record<string, EmailCategory>
+  activeCategory: EmailCategory
+  setEmailCategories: (categories: Record<string, EmailCategory>) => void
+  setActiveCategory: (category: EmailCategory) => void
+
+  // Daily report
+  pendingReport: { subject: string; html: string; text: string } | null
+  setPendingReport: (report: { subject: string; html: string; text: string } | null) => void
+  clearPendingReport: () => void
 
   // Theme
   theme: 'dark' | 'light'
@@ -122,6 +133,17 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   aiProvider: null,
   aiConfigured: false,
   setAiConfig: (provider, configured) => set({ aiProvider: provider, aiConfigured: configured }),
+
+  // Categorization
+  emailCategories: {},
+  activeCategory: 'All',
+  setEmailCategories: (categories) => set((s) => ({ emailCategories: { ...s.emailCategories, ...categories } })),
+  setActiveCategory: (category) => set({ activeCategory: category }),
+
+  // Daily report
+  pendingReport: null,
+  setPendingReport: (report) => set({ pendingReport: report }),
+  clearPendingReport: () => set({ pendingReport: null }),
 
   // Theme — persisted in localStorage, defaults to dark
   theme: (localStorage.getItem('hermes-theme') as 'dark' | 'light') || 'dark',

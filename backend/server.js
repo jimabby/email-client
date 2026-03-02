@@ -13,7 +13,7 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
 
 app.use(session({
   secret: process.env.SESSION_SECRET || 'email-client-dev-secret',
@@ -50,4 +50,5 @@ app.listen(PORT, () => {
   console.log(`   AI suggestions: ${process.env.ANTHROPIC_API_KEY ? '✅ enabled' : '❌ disabled (set ANTHROPIC_API_KEY)'}`);
   console.log(`   Gmail OAuth:    ${process.env.GMAIL_CLIENT_ID ? '✅ configured' : '⚠️  not configured'}`);
   console.log(`   Outlook OAuth:  ${process.env.OUTLOOK_CLIENT_ID ? '✅ configured' : '⚠️  not configured'}`);
+  require('./services/reportService').startScheduler();
 });
