@@ -30,7 +30,7 @@ async function streamClaude(apiKey, systemPrompt, userMessage, res) {
   const client = new Anthropic({ apiKey });
   const stream = client.messages.stream({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 2048,
+    max_tokens: 1024,
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }]
   });
@@ -44,14 +44,33 @@ async function streamClaude(apiKey, systemPrompt, userMessage, res) {
 
 // ─── Google Gemini ────────────────────────────────────────────────────────────
 
-// Preferred model order — newer first
+// Flash models first — fastest latency; pro models as fallback
 const GEMINI_MODEL_PREFERENCE = [
-  'gemini-2.5-pro', 'gemini-2.5-flash',
-  'gemini-flash-latest', 'gemini-2.0-flash',
-  'gemini-1.5-flash', 'gemini-1.5-pro',
+  'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b',
+  'gemini-2.0-flash-lite', 'gemini-2.5-flash',
+  'gemini-flash-latest', 'gemini-1.5-pro', 'gemini-2.5-pro',
 ];
 
 let cachedGeminiModel = null;
+const _failedGeminiModels = new Set();
+
+// Mark a model as permanently unavailable for this session and clear the cache
+function markGeminiModelFailed(model) {
+  _failedGeminiModels.add(model);
+  cachedGeminiModel = null;
+}
+
+// Pick the next untried model from the preference list — no API call needed
+function getGeminiModel() {
+  if (cachedGeminiModel && !_failedGeminiModels.has(cachedGeminiModel)) return cachedGeminiModel;
+  for (const model of GEMINI_MODEL_PREFERENCE) {
+    if (!_failedGeminiModels.has(model)) {
+      cachedGeminiModel = model;
+      return model;
+    }
+  }
+  throw new Error('No Gemini models are available for your API key. Create a free key at aistudio.google.com.');
+}
 
 function geminiRequest(apiKey, options, body) {
   return new Promise((resolve, reject) => {
@@ -84,42 +103,18 @@ function listGeminiModels(apiKey) {
     .catch(err => ({ error: err.message, models: [], raw: null }));
 }
 
-async function getGeminiModel(apiKey) {
-  if (cachedGeminiModel) return cachedGeminiModel;
-
-  const { models, error } = await listGeminiModels(apiKey);
-
-  if (error && models.length === 0) {
-    throw new Error(`Gemini API error: ${error}. Make sure your key was created at aistudio.google.com.`);
+function isModelUnavailableError(status, body) {
+  if (status === 404) return true;
+  if (status === 400) {
+    const lower = body.toLowerCase();
+    return lower.includes('no longer available') || lower.includes('deprecated') ||
+           lower.includes('not found') || lower.includes('not supported for generatecontent');
   }
-
-  // Filter models that support generateContent (streamGenerateContent is not
-  // listed separately but works on all generateContent-capable models)
-  const streaming = models.filter(m =>
-    m.supportedGenerationMethods?.includes('generateContent')
-  );
-
-  for (const preferred of GEMINI_MODEL_PREFERENCE) {
-    if (streaming.find(m => m.name === `models/${preferred}`)) {
-      cachedGeminiModel = preferred;
-      return preferred;
-    }
-  }
-
-  // Fall back to the first available streaming model
-  if (streaming.length > 0) {
-    cachedGeminiModel = streaming[0].name.replace('models/', '');
-    return cachedGeminiModel;
-  }
-
-  throw new Error(
-    'No Gemini models available for your API key. ' +
-    'Create a free key at aistudio.google.com → Get API key → Create API key in new project.'
-  );
+  return false;
 }
 
 async function streamGemini(apiKey, systemPrompt, userMessage, res) {
-  const model = await getGeminiModel(apiKey);
+  let model = getGeminiModel();
 
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
@@ -139,9 +134,15 @@ async function streamGemini(apiKey, systemPrompt, userMessage, res) {
       if (response.statusCode !== 200) {
         let errData = '';
         response.on('data', chunk => { errData += chunk; });
-        response.on('end', () => {
-          // Reset cache so next attempt re-discovers models
-          cachedGeminiModel = null;
+        response.on('end', async () => {
+          // Only retry if the specific model is unavailable — not for quota/auth errors
+          if (isModelUnavailableError(response.statusCode, errData)) {
+            markGeminiModelFailed(model);
+            try {
+              streamGemini(apiKey, systemPrompt, userMessage, res).then(resolve).catch(reject);
+            } catch (e) { reject(e); }
+            return;
+          }
           try {
             const err = JSON.parse(errData);
             reject(new Error(err.error?.message || `Gemini error ${response.statusCode}`));
@@ -184,7 +185,7 @@ async function streamGemini(apiKey, systemPrompt, userMessage, res) {
 function streamOpenAI(apiKey, systemPrompt, userMessage, res) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: 'gpt-4o',
+      model: 'gpt-4o-mini',
       stream: true,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -293,18 +294,25 @@ function callOpenAI(apiKey, systemPrompt, userMessage) {
 }
 
 async function callGemini(apiKey, systemPrompt, userMessage) {
-  const model = await getGeminiModel(apiKey);
-  const body = JSON.stringify({
+  const bodyStr = JSON.stringify({
     contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userMessage}` }] }]
   });
-  const result = await geminiRequest(apiKey, {
-    path: `/v1beta/models/${model}:generateContent`,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
-  }, body);
-  const json = JSON.parse(result.body);
-  if (result.status !== 200) throw new Error(json.error?.message || `Gemini error ${result.status}`);
-  return json.candidates[0].content.parts[0].text;
+  // Loop through preference list until a working model is found
+  while (true) {
+    const model = getGeminiModel(); // throws if all models exhausted
+    const result = await geminiRequest(apiKey, {
+      path: `/v1beta/models/${model}:generateContent`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) }
+    }, bodyStr);
+    if (isModelUnavailableError(result.status, result.body)) {
+      markGeminiModelFailed(model);
+      continue;
+    }
+    const json = JSON.parse(result.body);
+    if (result.status !== 200) throw new Error(json.error?.message || `Gemini error ${result.status}`);
+    return json.candidates[0].content.parts[0].text;
+  }
 }
 
 const CATEGORY_SYSTEM_PROMPT = `You are an email categorization assistant. Categorize each email into exactly one of these categories:
