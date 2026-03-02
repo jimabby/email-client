@@ -1,9 +1,19 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, globalShortcut } = require('electron');
 const path = require('path');
+const fs   = require('fs');
 const http = require('http');
 
 let mainWindow;
 const BACKEND_PORT = 3001;
+
+// Resolve icon path (works both in dev and after packaging)
+function getIconPath() {
+  const candidates = [
+    path.join(__dirname, '../build/icons/icon.ico'),
+    path.join(process.resourcesPath || '', 'build/icons/icon.ico'),
+  ];
+  return candidates.find(p => fs.existsSync(p));
+}
 
 // Wait for the backend Express server to be ready
 function waitForBackend(maxRetries = 40) {
@@ -32,6 +42,8 @@ function waitForBackend(maxRetries = 40) {
 
 // Start the Express backend in the same Node.js process
 function startBackend() {
+  // Tell the backend where to store user data (writable AppData location)
+  process.env.HERMES_DATA_DIR = app.getPath('userData');
   const backendEntry = path.join(__dirname, '../backend/server.js');
   require(backendEntry);
 }
@@ -47,8 +59,9 @@ function createWindow() {
       contextIsolation: true,
     },
     title: 'Hermes',
+    icon: getIconPath(),
     show: false,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#0d1117',
   });
 
   mainWindow.loadURL(`http://localhost:${BACKEND_PORT}`);
@@ -56,6 +69,12 @@ function createWindow() {
   // Only show once the page has loaded (prevents white flash)
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    mainWindow.focus();  // ensure keyboard focus on Windows
+  });
+
+  // Ctrl+Shift+I to open DevTools (for debugging)
+  globalShortcut.register('CommandOrControl+Shift+I', () => {
+    if (mainWindow) mainWindow.webContents.toggleDevTools();
   });
 
   // Open external links in the system browser, not inside Electron
@@ -66,17 +85,24 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    globalShortcut.unregisterAll();
     mainWindow = null;
   });
 }
 
 app.whenReady().then(async () => {
+  // Set the app icon in the taskbar (Windows/Linux)
+  if (process.platform !== 'darwin') {
+    const icon = getIconPath();
+    if (icon) app.setAppUserModelId('com.hermes.app');
+  }
+
   try {
     startBackend();
     await waitForBackend();
     createWindow();
   } catch (err) {
-    console.error('Failed to start AI Mail:', err.message);
+    console.error('Failed to start Hermes:', err.message);
     app.quit();
   }
 });

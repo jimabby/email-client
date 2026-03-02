@@ -1,21 +1,40 @@
 {
-  "name": "ai-mail",
+  "name": "hermes",
   "version": "1.0.0",
-  "description": "AI Mail - Desktop Email Client with Claude AI",
+  "description": "Hermes — Desktop Email Client with AI",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
+    "make-icon": "node scripts/make-icon.js",
     "build:frontend": "cd frontend && npm run build",
     "pack": "npm run build:frontend && electron-builder --dir",
     "dist": "npm run build:frontend && electron-builder"
   },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.37.0",
+    "@azure/msal-node": "^2.0.0",
+    "@microsoft/microsoft-graph-client": "^3.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.0",
+    "express": "^4.18.0",
+    "express-session": "^1.17.3",
+    "googleapis": "^140.0.0",
+    "imapflow": "^1.0.0",
+    "mailparser": "^3.6.0",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^6.9.0",
+    "uuid": "^9.0.0"
+  },
   "devDependencies": {
-    "electron": "^28.0.0",
-    "electron-builder": "^24.0.0"
+    "@resvg/resvg-js": "^2.6.2",
+    "electron": "^30.5.1",
+    "electron-builder": "^24.0.0",
+    "png-to-ico": "^3.0.1"
   },
   "build": {
-    "appId": "com.aimail.app",
-    "productName": "AI Mail",
+    "appId": "com.hermes.app",
+    "productName": "Hermes",
+    "copyright": "Copyright © 2025 Hermes",
     "asar": false,
     "directories": {
       "output": "dist-electron"
@@ -23,16 +42,27 @@
     "files": [
       "electron/**/*",
       "backend/**/*",
-      "frontend/dist/**/*"
+      "!backend/node_modules/**/*",
+      "frontend/dist/**/*",
+      "node_modules/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icons/icon.ico"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "build/icons/512x512.png"
     },
     "linux": {
-      "target": "AppImage"
+      "target": "AppImage",
+      "icon": "build/icons/"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icons/icon.ico",
+      "uninstallerIcon": "build/icons/icon.ico"
     }
   }
 }

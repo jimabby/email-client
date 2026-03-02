@@ -2,7 +2,30 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-const STORE_FILE = path.join(__dirname, 'accounts.json');
+// In packaged Electron app, HERMES_DATA_DIR points to the writable AppData folder.
+// In dev mode it falls back to the backend directory.
+const DATA_DIR  = process.env.HERMES_DATA_DIR || __dirname;
+const STORE_FILE = path.join(DATA_DIR, 'accounts.json');
+
+// On first launch of a packaged app the user-data dir won't have accounts.json yet.
+// If there's a bundled seed file next to this module, copy it over once.
+function ensureDataDir() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (!fs.existsSync(STORE_FILE)) {
+      const bundled = path.join(__dirname, 'accounts.json');
+      if (fs.existsSync(bundled)) {
+        fs.copyFileSync(bundled, STORE_FILE);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to initialise data directory:', e.message);
+  }
+}
+
+ensureDataDir();
 
 function loadStore() {
   try {

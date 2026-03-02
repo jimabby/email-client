@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background rounded square -->
+  <rect width="512" height="512" rx="96" fill="#1a1a2e"/>
+
+  <!-- Left wing feathers (3 arcs, fanning outward) -->
+  <path d="M156,184 C112,142 46,148 22,196"  stroke="#f59e0b" stroke-width="22" stroke-linecap="round" fill="none"/>
+  <path d="M156,232 C112,190 46,196 22,244"  stroke="#f59e0b" stroke-width="17" stroke-linecap="round" fill="none" stroke-opacity="0.75"/>
+  <path d="M156,280 C112,238 46,244 22,292"  stroke="#f59e0b" stroke-width="12" stroke-linecap="round" fill="none" stroke-opacity="0.45"/>
+
+  <!-- Right wing feathers (mirror) -->
+  <path d="M356,184 C400,142 466,148 490,196"  stroke="#f59e0b" stroke-width="22" stroke-linecap="round" fill="none"/>
+  <path d="M356,232 C400,190 466,196 490,244"  stroke="#f59e0b" stroke-width="17" stroke-linecap="round" fill="none" stroke-opacity="0.75"/>
+  <path d="M356,280 C400,238 466,244 490,292"  stroke="#f59e0b" stroke-width="12" stroke-linecap="round" fill="none" stroke-opacity="0.45"/>
+
+  <!-- Envelope body -->
+  <rect x="136" y="158" width="240" height="196" rx="16" fill="url(#hermesGold)"/>
+
+  <!-- Envelope flap V -->
+  <path d="M136,158 L256,280 L376,158" fill="none" stroke="#92400e" stroke-width="10" stroke-linejoin="round" stroke-opacity="0.6"/>
+
+  <defs>
+    <linearGradient id="hermesGold" x1="136" y1="158" x2="376" y2="354" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+</svg>

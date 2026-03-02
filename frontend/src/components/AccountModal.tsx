@@ -56,18 +56,20 @@ export function AccountModal() {
       showNotification('success', `${form.email} added!`)
       setShowAccountModal(false)
     } catch (err: unknown) {
-      showNotification('error', err instanceof Error ? err.message : 'Failed to add account')
+      const msg = (err as any)?.response?.data?.error
+        || (err instanceof Error ? err.message : 'Failed to add account')
+      showNotification('error', msg)
     } finally { setIsLoading(false) }
   }
 
   const handleGmailOAuth = async () => {
     try { const { url } = await accountsApi.getGmailAuthUrl(); window.open(url, '_blank', 'width=500,height=600'); setShowAccountModal(false) }
-    catch (err: unknown) { showNotification('error', err instanceof Error ? err.message : 'Failed to start Gmail OAuth') }
+    catch (err: unknown) { showNotification('error', (err as any)?.response?.data?.error || (err instanceof Error ? err.message : 'Failed to start Gmail OAuth')) }
   }
 
   const handleOutlookOAuth = async () => {
     try { const { url } = await accountsApi.getOutlookAuthUrl(); window.open(url, '_blank', 'width=500,height=600'); setShowAccountModal(false) }
-    catch (err: unknown) { showNotification('error', err instanceof Error ? err.message : 'Failed to start Outlook OAuth') }
+    catch (err: unknown) { showNotification('error', (err as any)?.response?.data?.error || (err instanceof Error ? err.message : 'Failed to start Outlook OAuth')) }
   }
 
   const handleAiSave = async (e: React.FormEvent) => {
