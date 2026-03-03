@@ -111,9 +111,15 @@ export default function App() {
       if (provider) setAiConfig(provider, configured)
     }).catch(() => {})
 
-    emailsApi.getDailyReport().then(report => {
-      if (report) setPendingReport(report)
-    }).catch(() => {})
+    // Poll until a report arrives (backend generates it async on startup)
+    const checkReport = () => {
+      emailsApi.getDailyReport().then(report => {
+        if (report) setPendingReport(report)
+      }).catch(() => {})
+    }
+    checkReport()
+    const reportPoll = setInterval(checkReport, 30_000)
+    return () => clearInterval(reportPoll)
   }, [])
 
   useEffect(() => {

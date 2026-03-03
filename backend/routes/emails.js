@@ -243,4 +243,16 @@ router.get('/daily-report', (req, res) => {
   res.json(report || null);
 });
 
+// POST /api/emails/trigger-report — force-run the daily report immediately (for testing)
+router.post('/trigger-report', async (req, res) => {
+  const { runDailyReport } = require('../services/reportService');
+  store.saveLastReportDate(''); // reset so it runs
+  try {
+    await runDailyReport();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

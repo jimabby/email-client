@@ -19,6 +19,15 @@ function isYesterday(dateStr) {
   } catch { return false; }
 }
 
+function isOlderThanYesterday(dateStr) {
+  try {
+    const startOfYesterday = new Date();
+    startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+    startOfYesterday.setHours(0, 0, 0, 0);
+    return new Date(dateStr) < startOfYesterday;
+  } catch { return false; }
+}
+
 function formatDay(date) {
   return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
@@ -40,9 +49,25 @@ async function generateReport() {
   for (const account of accounts) {
     try {
       const service = getService(account.type);
-      const emails = await service.fetchEmails(account, 'INBOX', 100);
-      const fromYesterday = emails.filter(e => isYesterday(e.date));
-      allEmails.push(...fromYesterday.map(e => ({ ...e, accountEmail: account.email })));
+      let pageToken = null;
+      let done = false;
+      let found = 0;
+      while (!done) {
+        const { emails, nextToken } = await service.fetchEmails(account, 'INBOX', 100, pageToken);
+        for (const email of emails) {
+          if (isYesterday(email.date)) {
+            allEmails.push({ ...email, accountEmail: account.email });
+            found++;
+          } else if (isOlderThanYesterday(email.date)) {
+            done = true;
+            break;
+          }
+          // today's emails: skip and keep paginating
+        }
+        if (!nextToken || emails.length === 0) done = true;
+        pageToken = nextToken;
+      }
+      console.log(`[Report] ${account.email}: ${found} emails from yesterday`);
     } catch (err) {
       console.error(`[Report] Failed to fetch emails for ${account.email}:`, err.message);
     }
@@ -112,6 +137,8 @@ async function generateReport() {
 }
 
 async function runDailyReport() {
+  // Mark as run for today before generating, to prevent duplicate runs on restart
+  store.saveLastReportDate(new Date().toISOString().split('T')[0]);
   console.log('[Report] Generating daily report...');
   try {
     const report = await generateReport();
@@ -148,6 +175,16 @@ function startScheduler() {
   // Run at 9:00am every day
   cron.schedule('0 9 * * *', runDailyReport);
   console.log('📅 Daily report scheduler started (runs at 9:00am)');
+
+  // If app started after 9am and today's report hasn't run yet, send it now
+  const now = new Date();
+  if (now.getHours() >= 9) {
+    const todayStr = now.toISOString().split('T')[0];
+    if (store.getLastReportDate() !== todayStr) {
+      console.log('[Report] App started after 9am — running missed report now');
+      runDailyReport();
+    }
+  }
 }
 
-module.exports = { startScheduler };
+module.exports = { startScheduler, runDailyReport };

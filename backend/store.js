@@ -104,6 +104,16 @@ module.exports = {
     saveStore(store);
   },
 
+  // ─── Daily report run tracking ───────────────────────────────────────────
+  getLastReportDate() {
+    return store.lastReportDate || null;
+  },
+
+  saveLastReportDate(dateStr) {
+    store.lastReportDate = dateStr;
+    saveStore(store);
+  },
+
   // ─── Daily report (one-shot, cleared after read) ──────────────────────────
   getPendingReport() {
     return store.pendingReport || null;
