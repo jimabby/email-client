@@ -75,7 +75,13 @@ async function generateReport() {
 
   if (!allEmails.length) return null;
 
-  const categories = categorizeEmails(allEmails);
+  // Use AI-cached categories where available, rule-based as fallback
+  const cachedCategories = store.getEmailCategories();
+  const ruleCategories = categorizeEmails(allEmails);
+  const categories = {};
+  for (const email of allEmails) {
+    categories[email.id] = cachedCategories[email.id] || ruleCategories[email.id];
+  }
   const counts = { Primary: 0, Social: 0, Jobs: 0, Promotions: 0, Receipts: 0 };
   const unreadPrimary = [];
 
