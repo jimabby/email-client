@@ -94,6 +94,10 @@ interface EmailStore {
   contacts: string[]
   addContacts: (addresses: string[]) => void
 
+  // AI Chat
+  isChatOpen: boolean
+  toggleChat: () => void
+
   // Theme
   theme: 'dark' | 'light'
   toggleTheme: () => void
@@ -107,8 +111,8 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
 
   currentAccountId: null,
   currentFolder: 'INBOX',
-  setCurrentAccount: (id) => set({ currentAccountId: id, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null }),
-  setCurrentFolder: (folder) => set({ currentFolder: folder, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null }),
+  setCurrentAccount: (id) => set({ currentAccountId: id, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null, selectedEmailIds: [] }),
+  setCurrentFolder: (folder) => set({ currentFolder: folder, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null, selectedEmailIds: [] }),
 
   folders: {},
   setFolders: (accountId, folders) => set((s) => ({ folders: { ...s.folders, [accountId]: folders } })),
@@ -239,6 +243,10 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     localStorage.setItem('hermes-contacts', JSON.stringify(merged))
     return { contacts: merged }
   }),
+
+  // AI Chat
+  isChatOpen: false,
+  toggleChat: () => set((s) => ({ isChatOpen: !s.isChatOpen })),
 
   // Theme — persisted in localStorage, defaults to dark
   theme: (localStorage.getItem('hermes-theme') as 'dark' | 'light') || 'dark',

@@ -1,13 +1,15 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { EmailList } from './components/EmailList'
 import { EmailViewer } from './components/EmailViewer'
-import { ComposeModal } from './components/ComposeModal'
-import { AccountModal } from './components/AccountModal'
+import { AiChatPanel } from './components/AiChatPanel'
 import { HermesLogo } from './components/HermesLogo'
 import { useEmailStore } from './store/emailStore'
 import { accountsApi, aiApi, emailsApi } from './api/client'
-import { DailyReportModal } from './components/DailyReportModal'
+
+const ComposeModal = lazy(() => import('./components/ComposeModal').then(m => ({ default: m.ComposeModal })))
+const AccountModal = lazy(() => import('./components/AccountModal').then(m => ({ default: m.AccountModal })))
+const DailyReportModal = lazy(() => import('./components/DailyReportModal').then(m => ({ default: m.DailyReportModal })))
 
 function Notification() {
   const { notification, clearNotification } = useEmailStore()
@@ -73,7 +75,7 @@ function SettingsIcon() {
 }
 
 function TopBar() {
-  const { theme, toggleTheme, setShowAccountModal } = useEmailStore()
+  const { theme, toggleTheme, setShowAccountModal, isChatOpen, toggleChat, aiConfigured } = useEmailStore()
 
   return (
     <header className="h-11 bg-[#f6f8fa] dark:bg-[#161b22] border-b border-[#d0d7de] dark:border-[#30363d] flex items-center px-4 gap-3 flex-shrink-0">
@@ -83,6 +85,21 @@ function TopBar() {
       </div>
 
       <div className="flex-1" />
+
+      <button
+        onClick={toggleChat}
+        title="AI Assistant"
+        className={`p-1.5 rounded-md transition-colors ${isChatOpen
+          ? 'text-[#7c3aed] bg-[#f3f0ff] dark:bg-[#7c3aed]/20'
+          : 'text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
+        } ${!aiConfigured ? 'opacity-50' : ''}`}
+      >
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+          <path d="M8 1a7 7 0 100 14A7 7 0 008 1z" stroke="currentColor" strokeWidth="1.4"/>
+          <path d="M5.5 6.5C5.5 5.12 6.62 4 8 4s2.5 1.12 2.5 2.5c0 1.5-1.5 2-2 2.5v.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+          <circle cx="8" cy="11.5" r=".75" fill="currentColor"/>
+        </svg>
+      </button>
 
       <button
         onClick={toggleTheme}
@@ -104,7 +121,7 @@ function TopBar() {
 }
 
 export default function App() {
-  const { isComposeOpen, showAccountModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport } = useEmailStore()
+  const { isComposeOpen, showAccountModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport, isChatOpen } = useEmailStore()
 
   useEffect(() => {
     aiApi.getSettings().then(({ provider, configured }) => {
@@ -155,11 +172,19 @@ export default function App() {
         <div className="flex-[2] min-w-0 overflow-hidden">
           <EmailViewer />
         </div>
+
+        {isChatOpen && (
+          <div className="w-72 flex-shrink-0 overflow-hidden">
+            <AiChatPanel />
+          </div>
+        )}
       </div>
 
-      {isComposeOpen && <ComposeModal />}
-      {showAccountModal && <AccountModal />}
-      <DailyReportModal />
+      <Suspense fallback={null}>
+        {isComposeOpen && <ComposeModal />}
+        {showAccountModal && <AccountModal />}
+        <DailyReportModal />
+      </Suspense>
       <Notification />
     </div>
   )

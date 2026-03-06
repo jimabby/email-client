@@ -206,39 +206,45 @@ export function EmailList() {
   }
 
   const selectedEmails = emails.filter(e => selectedEmailIds.includes(e.id))
+  const selectedVisibleIds = selectedEmails.map(e => e.id)
+  const selectedVisibleCount = selectedVisibleIds.length
 
   const handleBulkDelete = async () => {
     if (!currentAccountId) return
+    if (!selectedVisibleCount) { clearEmailSelection(); return }
     try {
       await Promise.all(selectedEmails.map(e => emailsApi.delete(currentAccountId, e.id, e.folder)))
-      removeEmails(selectedEmailIds)
-      showNotification('success', `Deleted ${selectedEmailIds.length} email${selectedEmailIds.length > 1 ? 's' : ''}`)
+      removeEmails(selectedVisibleIds)
+      showNotification('success', `Deleted ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''}`)
     } catch { showNotification('error', 'Failed to delete some emails') }
   }
 
   const handleBulkMarkRead = async () => {
     if (!currentAccountId) return
+    if (!selectedVisibleCount) { clearEmailSelection(); return }
     try {
       await Promise.all(selectedEmails.map(e => emailsApi.markRead(currentAccountId, e.id, e.folder)))
-      markEmailsRead(selectedEmailIds)
+      markEmailsRead(selectedVisibleIds)
     } catch { showNotification('error', 'Failed to mark some emails as read') }
   }
 
   const handleBulkMarkUnread = async () => {
     if (!currentAccountId) return
+    if (!selectedVisibleCount) { clearEmailSelection(); return }
     try {
       await Promise.all(selectedEmails.map(e => emailsApi.markUnread(currentAccountId, e.id, e.folder)))
-      markEmailsUnread(selectedEmailIds)
+      markEmailsUnread(selectedVisibleIds)
     } catch { showNotification('error', 'Failed to mark some emails as unread') }
   }
 
   const handleBulkMove = async (targetFolder: string) => {
     if (!currentAccountId) return
+    if (!selectedVisibleCount) { clearEmailSelection(); return }
     setShowMoveMenu(false)
     try {
       await Promise.all(selectedEmails.map(e => emailsApi.move(currentAccountId, e.id, targetFolder, e.folder)))
-      removeEmails(selectedEmailIds)
-      showNotification('success', `Moved ${selectedEmailIds.length} email${selectedEmailIds.length > 1 ? 's' : ''} to ${targetFolder}`)
+      removeEmails(selectedVisibleIds)
+      showNotification('success', `Moved ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''} to ${targetFolder}`)
     } catch { showNotification('error', 'Failed to move some emails') }
   }
 

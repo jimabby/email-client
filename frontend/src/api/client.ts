@@ -105,6 +105,63 @@ export const aiApi = {
 
 // ─── AI Suggestions (streaming) ───────────────────────────────────────────────
 
+export async function streamAiChat(
+  params: {
+    messages: { role: 'user' | 'assistant'; content: string }[]
+    emailContext?: {
+      emails: { from: string; subject: string; date: string; read: boolean; category?: string }[]
+      currentEmail?: { from: string; subject: string; body: string } | null
+    }
+  },
+  onChunk: (text: string) => void,
+  onDone: () => void,
+  onError: (err: string) => void
+) {
+  const controller = new AbortController()
+  let didComplete = false
+
+  try {
+    const res = await fetch('/api/ai/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+      signal: controller.signal
+    })
+
+    if (!res.ok) {
+      const data = await res.json()
+      onError(data.error || 'Request failed')
+      return controller
+    }
+
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        try {
+          const data = JSON.parse(line.slice(6))
+          if (data.text) onChunk(data.text)
+          if (data.done && !didComplete) { didComplete = true; onDone() }
+          if (data.error) onError(data.error)
+        } catch {}
+      }
+    }
+    if (!didComplete) onDone()
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name !== 'AbortError') onError(err.message)
+  }
+
+  return controller
+}
+
 export async function streamAiSuggestion(
   params: {
     subject: string
@@ -118,6 +175,7 @@ export async function streamAiSuggestion(
   onError: (err: string) => void
 ) {
   const controller = new AbortController()
+  let didComplete = false
 
   try {
     const res = await fetch('/api/ai/suggest', {
@@ -133,22 +191,33 @@ export async function streamAiSuggestion(
       return controller
     }
 
-    const reader = res.body!.getReader()
+    if (!res.body) {
+      onError('Empty response body')
+      return controller
+    }
+
+    const reader = res.body.getReader()
     const decoder = new TextDecoder()
+    let buffer = ''
 
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
 
-      const chunk = decoder.decode(value)
-      const lines = chunk.split('\n')
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
 
-      for (const line of lines) {
+      for (const rawLine of lines) {
+        const line = rawLine.trimEnd()
         if (line.startsWith('data: ')) {
           try {
             const data = JSON.parse(line.slice(6))
             if (data.text) onChunk(data.text)
-            if (data.done) onDone()
+            if (data.done && !didComplete) {
+              didComplete = true
+              onDone()
+            }
             if (data.error) onError(data.error)
           } catch {
             // skip malformed
@@ -157,7 +226,22 @@ export async function streamAiSuggestion(
       }
     }
 
-    onDone()
+    const finalLine = buffer.trimEnd()
+    if (finalLine.startsWith('data: ')) {
+      try {
+        const data = JSON.parse(finalLine.slice(6))
+        if (data.text) onChunk(data.text)
+        if (data.error) onError(data.error)
+        if (data.done && !didComplete) {
+          didComplete = true
+          onDone()
+        }
+      } catch {
+        // skip malformed trailing line
+      }
+    }
+
+    if (!didComplete) onDone()
   } catch (err: unknown) {
     if (err instanceof Error && err.name !== 'AbortError') {
       onError(err.message)

@@ -367,6 +367,54 @@ async function categorizeEmailsWithAI(emails) {
   }
 }
 
+// ─── AI Chat ──────────────────────────────────────────────────────────────────
+
+async function streamChat(res, { messages, emailContext }) {
+  // Build system prompt from email context
+  const { emails = [], currentEmail } = emailContext || {};
+  let systemPrompt = `You are Hermes, an AI email assistant built into a desktop email client. Help the user understand, summarize, and find insights from their emails. Be concise and helpful.`;
+
+  if (emails.length) {
+    systemPrompt += `\n\nCurrent folder contains ${emails.length} email(s):\n`;
+    systemPrompt += emails.slice(0, 50).map(e =>
+      `- From: ${e.from} | Subject: ${e.subject} | Date: ${e.date} | ${e.read ? 'Read' : 'Unread'}${e.category ? ` | Category: ${e.category}` : ''}`
+    ).join('\n');
+  }
+
+  if (currentEmail) {
+    systemPrompt += `\n\nCurrently open email:\nFrom: ${currentEmail.from}\nSubject: ${currentEmail.subject}\nBody:\n${currentEmail.body}`;
+  }
+
+  // Build a single user message that includes conversation history
+  const history = messages.slice(0, -1).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n');
+  const latest = messages[messages.length - 1]?.content || '';
+  const userMessage = history ? `${history}\nUser: ${latest}` : latest;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  try {
+    const { provider, apiKey } = store.getAiSettings();
+
+    if (provider === 'openai') {
+      await streamOpenAI(apiKey, systemPrompt, userMessage, res);
+    } else if (provider === 'gemini') {
+      await streamGemini(apiKey, systemPrompt, userMessage, res);
+    } else {
+      const key = apiKey || process.env.ANTHROPIC_API_KEY;
+      await streamClaude(key, systemPrompt, userMessage, res);
+    }
+
+    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+  } catch (err) {
+    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+  } finally {
+    res.end();
+  }
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 async function streamSuggestion(res, params) {
@@ -406,4 +454,4 @@ async function streamSuggestion(res, params) {
   }
 }
 
-module.exports = { streamSuggestion, listGeminiModels, categorizeEmailsWithAI };
+module.exports = { streamSuggestion, streamChat, listGeminiModels, categorizeEmailsWithAI };

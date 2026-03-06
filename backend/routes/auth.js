@@ -1,6 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const store = require('../store');
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3001';
+
+function redirectToFrontend(res, params = {}) {
+  const target = new URL(FRONTEND_URL);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) target.searchParams.set(key, String(value));
+  });
+  return res.redirect(target.toString());
+}
 
 // ─── ACCOUNTS ───────────────────────────────────────────────────────────────
 
@@ -74,7 +83,7 @@ router.get('/gmail/callback', async (req, res) => {
   const { code, error } = req.query;
 
   if (error) {
-    return res.redirect(`http://localhost:5173?error=${encodeURIComponent(error)}`);
+    return redirectToFrontend(res, { error });
   }
 
   try {
@@ -99,10 +108,10 @@ router.get('/gmail/callback', async (req, res) => {
       });
     }
 
-    res.redirect('http://localhost:5173?auth=gmail&success=true');
+    redirectToFrontend(res, { auth: 'gmail', success: 'true' });
   } catch (err) {
     console.error('Gmail callback error:', err);
-    res.redirect(`http://localhost:5173?error=${encodeURIComponent(err.message)}`);
+    redirectToFrontend(res, { error: err.message });
   }
 });
 
@@ -125,7 +134,7 @@ router.get('/outlook/callback', async (req, res) => {
   const { code, error } = req.query;
 
   if (error) {
-    return res.redirect(`http://localhost:5173?error=${encodeURIComponent(error)}`);
+    return redirectToFrontend(res, { error });
   }
 
   try {
@@ -146,10 +155,10 @@ router.get('/outlook/callback', async (req, res) => {
       });
     }
 
-    res.redirect('http://localhost:5173?auth=outlook&success=true');
+    redirectToFrontend(res, { auth: 'outlook', success: 'true' });
   } catch (err) {
     console.error('Outlook callback error:', err);
-    res.redirect(`http://localhost:5173?error=${encodeURIComponent(err.message)}`);
+    redirectToFrontend(res, { error: err.message });
   }
 });
 

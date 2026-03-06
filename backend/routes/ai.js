@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { streamSuggestion, listGeminiModels } = require('../services/aiService');
+const { streamSuggestion, streamChat, listGeminiModels } = require('../services/aiService');
 const store = require('../store');
 
 // GET /api/ai/settings — return current provider (no API key exposed)
@@ -60,6 +60,25 @@ router.post('/suggest', async (req, res) => {
   }
 
   await streamSuggestion(res, { subject, body, mode, customPrompt, replyTo });
+});
+
+// POST /api/ai/chat
+router.post('/chat', async (req, res) => {
+  const { provider, apiKey } = store.getAiSettings();
+  const hasKey = apiKey || process.env.ANTHROPIC_API_KEY;
+
+  if (!hasKey) {
+    return res.status(400).json({
+      error: 'No AI configured. Open Settings → AI and enter your API key.'
+    });
+  }
+
+  const { messages, emailContext } = req.body;
+  if (!messages?.length) {
+    return res.status(400).json({ error: 'messages array is required' });
+  }
+
+  await streamChat(res, { messages, emailContext });
 });
 
 module.exports = router;
