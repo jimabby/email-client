@@ -52,21 +52,42 @@ function StarBtn({ starred, onClick }: { starred?: boolean; onClick: (e: React.M
   )
 }
 
-function EmailRow({ email, isSelected, onClick, onStar }: {
+function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar }: {
   email: EmailSummary
   isSelected: boolean
+  isChecked: boolean
+  onCheck: (e: React.MouseEvent) => void
   onClick: () => void
   onStar: (e: React.MouseEvent) => void
 }) {
   return (
     <div
       onClick={onClick}
-      className={`group flex items-start gap-3 px-3 py-2.5 cursor-pointer border-b border-[#eaeef2] dark:border-[#21262d] transition-colors relative
+      className={`group flex items-start gap-2 px-3 py-2.5 cursor-pointer border-b border-[#eaeef2] dark:border-[#21262d] transition-colors relative
         ${isSelected
           ? 'bg-[#fff8ec] dark:bg-[#1c2128] border-l-[3px] border-l-[#f59e0b]'
+          : isChecked
+          ? 'bg-[#ddf4ff] dark:bg-[#1c2128] border-l-[3px] border-l-[#0969da]'
           : 'hover:bg-[#f6f8fa] dark:hover:bg-[#161b22] border-l-[3px] border-l-transparent'
         }`}
     >
+      {/* Checkbox */}
+      <div
+        onClick={onCheck}
+        className={`flex-shrink-0 mt-2 w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-all
+          ${isChecked
+            ? 'bg-[#0969da] border-[#0969da]'
+            : 'border-[#d0d7de] dark:border-[#30363d] opacity-0 group-hover:opacity-100'
+          }`}
+        title={isChecked ? 'Deselect' : 'Select'}
+      >
+        {isChecked && (
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+            <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        )}
+      </div>
+
       {/* Avatar */}
       <div
         className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 mt-0.5 ring-2 ring-white dark:ring-[#0d1117]"
@@ -93,7 +114,7 @@ function EmailRow({ email, isSelected, onClick, onStar }: {
         )}
       </div>
 
-      {!email.read && (
+      {!email.read && !isChecked && (
         <div className="w-2 h-2 rounded-full bg-[#f59e0b] flex-shrink-0 mt-2 shadow-sm shadow-amber-200 dark:shadow-none" />
       )}
     </div>
@@ -111,10 +132,14 @@ export function EmailList() {
     searchResults, setSearchResults, isSearching, setIsSearching,
     setEmails, setLoadingEmails,
     toggleStarLocal,
+    selectedEmailIds, toggleEmailSelection, clearEmailSelection,
+    removeEmails, markEmailsRead, markEmailsUnread,
+    folders, showNotification,
   } = useEmailStore()
 
   const [searchInput, setSearchInput] = useState('')
   const [showSearch, setShowSearch] = useState(false)
+  const [showMoveMenu, setShowMoveMenu] = useState(false)
 
   // Categorize newly loaded emails
   const lastCategorizedKey = useRef('')
@@ -180,6 +205,43 @@ export function EmailList() {
     finally { setIsSearching(false) }
   }
 
+  const selectedEmails = emails.filter(e => selectedEmailIds.includes(e.id))
+
+  const handleBulkDelete = async () => {
+    if (!currentAccountId) return
+    try {
+      await Promise.all(selectedEmails.map(e => emailsApi.delete(currentAccountId, e.id, e.folder)))
+      removeEmails(selectedEmailIds)
+      showNotification('success', `Deleted ${selectedEmailIds.length} email${selectedEmailIds.length > 1 ? 's' : ''}`)
+    } catch { showNotification('error', 'Failed to delete some emails') }
+  }
+
+  const handleBulkMarkRead = async () => {
+    if (!currentAccountId) return
+    try {
+      await Promise.all(selectedEmails.map(e => emailsApi.markRead(currentAccountId, e.id, e.folder)))
+      markEmailsRead(selectedEmailIds)
+    } catch { showNotification('error', 'Failed to mark some emails as read') }
+  }
+
+  const handleBulkMarkUnread = async () => {
+    if (!currentAccountId) return
+    try {
+      await Promise.all(selectedEmails.map(e => emailsApi.markUnread(currentAccountId, e.id, e.folder)))
+      markEmailsUnread(selectedEmailIds)
+    } catch { showNotification('error', 'Failed to mark some emails as unread') }
+  }
+
+  const handleBulkMove = async (targetFolder: string) => {
+    if (!currentAccountId) return
+    setShowMoveMenu(false)
+    try {
+      await Promise.all(selectedEmails.map(e => emailsApi.move(currentAccountId, e.id, targetFolder, e.folder)))
+      removeEmails(selectedEmailIds)
+      showNotification('success', `Moved ${selectedEmailIds.length} email${selectedEmailIds.length > 1 ? 's' : ''} to ${targetFolder}`)
+    } catch { showNotification('error', 'Failed to move some emails') }
+  }
+
   const handleLoadMore = async () => {
     if (!currentAccountId || !nextToken || isLoadingMore) return
     setLoadingMore(true)
@@ -231,7 +293,47 @@ export function EmailList() {
     <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
       {/* Header */}
       <div className="px-3 py-2.5 border-b border-[#d0d7de] dark:border-[#30363d] flex items-center gap-2 flex-shrink-0 bg-[#f6f8fa] dark:bg-[#161b22]">
-        {showSearch ? (
+        {selectedEmailIds.length > 0 ? (
+          /* Selection toolbar */
+          <div className="flex-1 flex items-center gap-1">
+            <span className="text-xs font-semibold text-[#1f2328] dark:text-[#e6edf3] mr-1">{selectedEmailIds.length} selected</span>
+            <button onClick={handleBulkMarkRead} title="Mark as read"
+              className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 4l7 5 7-5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3"/></svg>
+            </button>
+            <button onClick={handleBulkMarkUnread} title="Mark as unread"
+              className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 4l7 5 7-5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><circle cx="13" cy="4" r="3" fill="#f59e0b"/></svg>
+            </button>
+            <div className="relative">
+              <button onClick={() => setShowMoveMenu(m => !m)} title="Move to folder"
+                className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.44a1 1 0 01.7.29L8 4h5.5A1.5 1.5 0 0115 5.5v7A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5v-9z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
+              </button>
+              {showMoveMenu && currentAccountId && (
+                <div className="absolute left-0 top-full mt-1 z-50 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-lg shadow-lg py-1 min-w-[140px]">
+                  {(folders[currentAccountId] || [
+                    { name: 'Inbox', path: 'INBOX' }, { name: 'Trash', path: 'Trash' },
+                    { name: 'Spam', path: 'Spam' }, { name: 'Archive', path: 'Archive' },
+                  ]).filter(f => f.path !== currentFolder).map(f => (
+                    <button key={f.path} onClick={() => handleBulkMove(f.path)}
+                      className="w-full text-left px-3 py-1.5 text-xs text-[#1f2328] dark:text-[#e6edf3] hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors">
+                      {f.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button onClick={handleBulkDelete} title="Delete"
+              className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3M2 4h12M5 4v9a1 1 0 001 1h4a1 1 0 001-1V4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </button>
+            <button onClick={clearEmailSelection} title="Deselect all"
+              className="ml-auto p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            </button>
+          </div>
+        ) : showSearch ? (
           <div className="flex-1 flex items-center gap-2">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="text-[#818b98] dark:text-[#484f58] flex-shrink-0"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
             <input
@@ -301,7 +403,9 @@ export function EmailList() {
                 key={email.id}
                 email={email}
                 isSelected={selectedEmail?.id === email.id}
-                onClick={() => handleSelectEmail(email)}
+                isChecked={selectedEmailIds.includes(email.id)}
+                onCheck={(e) => { e.stopPropagation(); toggleEmailSelection(email.id) }}
+                onClick={() => { if (selectedEmailIds.length > 0) { toggleEmailSelection(email.id) } else { handleSelectEmail(email) } }}
                 onStar={(e) => handleStar(email, e)}
               />
             ))}

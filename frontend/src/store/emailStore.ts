@@ -27,7 +27,15 @@ interface EmailStore {
   markEmailRead: (id: string) => void
   markEmailUnread: (id: string) => void
   removeEmail: (id: string) => void
+  removeEmails: (ids: string[]) => void
+  markEmailsRead: (ids: string[]) => void
+  markEmailsUnread: (ids: string[]) => void
   toggleStarLocal: (id: string) => void
+
+  // Multi-select
+  selectedEmailIds: string[]
+  toggleEmailSelection: (id: string) => void
+  clearEmailSelection: () => void
 
   // Pagination
   nextToken: string | null
@@ -121,6 +129,23 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     selectedEmail: s.selectedEmail?.id === id ? null : s.selectedEmail,
     selectedEmailBody: s.selectedEmail?.id === id ? null : s.selectedEmailBody,
   })),
+  removeEmails: (ids) => set((s) => {
+    const set_ = new Set(ids)
+    return {
+      emails: s.emails.filter(e => !set_.has(e.id)),
+      selectedEmail: set_.has(s.selectedEmail?.id ?? '') ? null : s.selectedEmail,
+      selectedEmailBody: set_.has(s.selectedEmail?.id ?? '') ? null : s.selectedEmailBody,
+      selectedEmailIds: [],
+    }
+  }),
+  markEmailsRead: (ids) => set((s) => {
+    const set_ = new Set(ids)
+    return { emails: s.emails.map(e => set_.has(e.id) ? { ...e, read: true } : e), selectedEmailIds: [] }
+  }),
+  markEmailsUnread: (ids) => set((s) => {
+    const set_ = new Set(ids)
+    return { emails: s.emails.map(e => set_.has(e.id) ? { ...e, read: false } : e), selectedEmailIds: [] }
+  }),
   toggleStarLocal: (id) => set((s) => ({
     emails: s.emails.map(e => e.id === id ? { ...e, starred: !e.starred } : e),
     selectedEmail: s.selectedEmail?.id === id ? { ...s.selectedEmail, starred: !s.selectedEmail.starred } : s.selectedEmail,
@@ -180,6 +205,15 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   activeCategory: 'All',
   setEmailCategories: (categories) => set((s) => ({ emailCategories: { ...s.emailCategories, ...categories } })),
   setActiveCategory: (category) => set({ activeCategory: category }),
+
+  // Multi-select
+  selectedEmailIds: [],
+  toggleEmailSelection: (id) => set((s) => ({
+    selectedEmailIds: s.selectedEmailIds.includes(id)
+      ? s.selectedEmailIds.filter(i => i !== id)
+      : [...s.selectedEmailIds, id]
+  })),
+  clearEmailSelection: () => set({ selectedEmailIds: [] }),
 
   // Daily report
   pendingReport: null,

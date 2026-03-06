@@ -63,6 +63,11 @@ export const emailsApi = {
       params: folder ? { folder } : {}
     }).then(r => r.data),
 
+  markRead: (accountId: string, emailId: string, folder?: string) =>
+    api.post(`/emails/${accountId}/message/${emailId}/read`, {}, {
+      params: folder ? { folder } : {}
+    }).then(r => r.data),
+
   markUnread: (accountId: string, emailId: string, folder?: string) =>
     api.post(`/emails/${accountId}/message/${emailId}/unread`, {}, {
       params: folder ? { folder } : {}

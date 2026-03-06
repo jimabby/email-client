@@ -155,6 +155,26 @@ router.delete('/:accountId/message/:emailId', async (req, res) => {
   }
 });
 
+// POST /api/emails/:accountId/message/:emailId/read
+router.post('/:accountId/message/:emailId/read', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  try {
+    const service = getService(account.type);
+    if (service.markAsRead) {
+      if (account.type === 'imap') {
+        await service.markAsRead(account, imapUid(req.params.emailId), req.query.folder || 'INBOX');
+      } else {
+        await service.markAsRead(account, gmailOrOutlookId(req.params.emailId));
+      }
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/emails/:accountId/message/:emailId/unread
 router.post('/:accountId/message/:emailId/unread', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
