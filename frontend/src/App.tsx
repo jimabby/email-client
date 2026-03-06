@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { EmailList } from './components/EmailList'
 import { EmailViewer } from './components/EmailViewer'
@@ -122,6 +122,56 @@ function TopBar() {
 
 export default function App() {
   const { isComposeOpen, showAccountModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport, isChatOpen } = useEmailStore()
+  const appLayoutVars = { '--sidebar-width': '13rem' } as CSSProperties
+  const splitRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<{ type: 'list' | 'chat'; startX: number; startWidth: number } | null>(null)
+  const [listPaneWidth, setListPaneWidth] = useState(380)
+  const [chatPaneWidth, setChatPaneWidth] = useState(288)
+
+  const onDragMove = useCallback((e: MouseEvent) => {
+    if (!dragRef.current) return
+
+    if (dragRef.current.type === 'list') {
+      const total = splitRef.current?.clientWidth || 0
+      const minList = 280
+      const minViewer = 360
+      const maxList = Math.max(minList, total - minViewer)
+      const next = Math.max(minList, Math.min(maxList, dragRef.current.startWidth + (e.clientX - dragRef.current.startX)))
+      setListPaneWidth(next)
+      return
+    }
+
+    const minChat = 220
+    const maxChat = 520
+    const next = Math.max(minChat, Math.min(maxChat, dragRef.current.startWidth + (dragRef.current.startX - e.clientX)))
+    setChatPaneWidth(next)
+  }, [])
+
+  const onDragEnd = useCallback(() => {
+    dragRef.current = null
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.removeEventListener('mousemove', onDragMove)
+    window.removeEventListener('mouseup', onDragEnd)
+  }, [onDragMove])
+
+  const startDrag = (type: 'list' | 'chat', startWidth: number) => (e: React.MouseEvent) => {
+    e.preventDefault()
+    dragRef.current = { type, startX: e.clientX, startWidth }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onDragMove)
+    window.addEventListener('mouseup', onDragEnd)
+  }
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener('mousemove', onDragMove)
+      window.removeEventListener('mouseup', onDragEnd)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [onDragEnd, onDragMove])
 
   useEffect(() => {
     aiApi.getSettings().then(({ provider, configured }) => {
@@ -159,22 +209,41 @@ export default function App() {
   }, [])
 
   return (
-    <div className={`flex flex-col h-screen overflow-hidden transition-colors duration-200 bg-white dark:bg-[#0d1117] ${theme === 'dark' ? 'dark' : ''}`}>
+    <div
+      style={appLayoutVars}
+      className={`flex flex-col h-screen overflow-hidden transition-colors duration-200 bg-white dark:bg-[#0d1117] ${theme === 'dark' ? 'dark' : ''}`}
+    >
       <TopBar />
 
       <div className="flex flex-1 min-h-0">
         <Sidebar />
 
-        <div className="flex-[1] min-w-0 border-r border-[#d0d7de] dark:border-[#30363d] flex flex-col overflow-hidden">
-          <EmailList />
-        </div>
+        <div ref={splitRef} className="flex flex-1 min-w-0">
+          <div style={{ width: `${listPaneWidth}px` }} className="min-w-0 border-r border-[#d0d7de] dark:border-[#30363d] flex flex-col overflow-hidden flex-shrink-0">
+            <EmailList />
+          </div>
 
-        <div className="flex-[2] min-w-0 overflow-hidden">
-          <EmailViewer />
+          <div
+            onMouseDown={startDrag('list', listPaneWidth)}
+            className="w-1 flex-shrink-0 cursor-col-resize bg-transparent hover:bg-[#d0d7de] dark:hover:bg-[#30363d] transition-colors"
+            title="Resize inbox and email content"
+          />
+
+          <div id="email-content-host" className="relative flex-1 min-w-0 overflow-hidden">
+            <EmailViewer />
+          </div>
         </div>
 
         {isChatOpen && (
-          <div className="w-72 flex-shrink-0 overflow-hidden">
+          <div
+            onMouseDown={startDrag('chat', chatPaneWidth)}
+            className="w-1 flex-shrink-0 cursor-col-resize bg-transparent hover:bg-[#d0d7de] dark:hover:bg-[#30363d] transition-colors"
+            title="Resize AI assistant"
+          />
+        )}
+
+        {isChatOpen && (
+          <div style={{ width: `${chatPaneWidth}px` }} className="flex-shrink-0 overflow-hidden">
             <AiChatPanel />
           </div>
         )}

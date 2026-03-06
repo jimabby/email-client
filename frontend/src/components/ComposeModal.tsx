@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, type ChangeEvent } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
+import { createPortal } from 'react-dom'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
@@ -161,6 +162,7 @@ export function ComposeModal() {
   const [attachments, setAttachments] = useState<File[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const [isExpanded, setIsExpanded]     = useState(false)
   const [showAiPanel, setShowAiPanel]   = useState(false)
   const [aiMode, setAiMode]             = useState<AiMode>('improve')
   const [customPrompt, setCustomPrompt] = useState('')
@@ -168,7 +170,9 @@ export function ComposeModal() {
   const [isAiLoading, setIsAiLoading]   = useState(false)
   const [aiDone, setAiDone]             = useState(false)
   const [aiError, setAiError]           = useState('')
+  const [expandedAiHeight, setExpandedAiHeight] = useState(220)
   const abortRef = useRef<{ abort: () => void } | null>(null)
+  const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(null)
 
   // Build initial content: reply body stays as-is; new emails get signature
   const initialHtml = (() => {
@@ -264,16 +268,348 @@ export function ComposeModal() {
     showNotification('success', 'AI suggestion applied!')
   }
 
+  const handleAiResizeMove = useCallback((e: MouseEvent) => {
+    if (!resizeDragRef.current) return
+    const delta = resizeDragRef.current.startY - e.clientY
+    const next = Math.max(140, Math.min(460, resizeDragRef.current.startHeight + delta))
+    setExpandedAiHeight(next)
+  }, [])
+
+  const handleAiResizeEnd = useCallback(() => {
+    resizeDragRef.current = null
+    window.removeEventListener('mousemove', handleAiResizeMove)
+    window.removeEventListener('mouseup', handleAiResizeEnd)
+  }, [handleAiResizeMove])
+
+  const handleAiResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault()
+    resizeDragRef.current = { startY: e.clientY, startHeight: expandedAiHeight }
+    window.addEventListener('mousemove', handleAiResizeMove)
+    window.addEventListener('mouseup', handleAiResizeEnd)
+  }
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener('mousemove', handleAiResizeMove)
+      window.removeEventListener('mouseup', handleAiResizeEnd)
+    }
+  }, [handleAiResizeEnd, handleAiResizeMove])
+
   if (!composeData) return null
 
   const rowCls   = 'flex items-center gap-2 px-4 py-2.5 border-b border-[#d0d7de] dark:border-[#30363d]'
   const labelCls = 'text-[11px] text-[#818b98] dark:text-[#484f58] w-12 flex-shrink-0'
 
+  // Shared AI panel content (used in both modes)
+  const aiPanelContent = (
+    <>
+      <div className="p-3 border-b border-[#d0d7de] dark:border-[#30363d]">
+        <p className="text-[10px] text-[#818b98] dark:text-[#484f58] mb-2 uppercase tracking-wide font-semibold">Mode</p>
+        <div className="grid grid-cols-3 gap-1">
+          {AI_MODES.map(mode => (
+            <button
+              key={mode.value}
+              onClick={() => setAiMode(mode.value)}
+              title={mode.description}
+              className={`flex flex-col items-center gap-0.5 p-1.5 rounded-md text-[10px] transition-colors border
+                ${aiMode === mode.value
+                  ? 'bg-violet-50 dark:bg-[rgba(139,92,246,0.15)] text-violet-600 dark:text-violet-400 border-violet-300 dark:border-violet-500/30'
+                  : 'text-[#656d76] dark:text-[#8b949e] border-transparent hover:bg-[#eaeef2] dark:hover:bg-[#21262d] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+                }`}
+            >
+              <span>{mode.icon}</span>
+              <span className="leading-tight text-center">{mode.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {aiMode === 'custom' && (
+          <textarea
+            value={customPrompt}
+            onChange={e => setCustomPrompt(e.target.value)}
+            placeholder={`What should ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} do with this email?`}
+            className="mt-2 w-full p-2 text-xs bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md resize-none focus:outline-none focus:border-violet-400"
+            rows={2}
+          />
+        )}
+
+        <button
+          onClick={handleAiSuggest}
+          disabled={aiMode === 'custom' && !customPrompt}
+          className={`mt-2 w-full py-2 rounded-md text-xs font-semibold transition-colors
+            ${isAiLoading
+              ? 'bg-red-50 dark:bg-[#f85149]/20 border border-red-300 dark:border-[#f85149]/40 text-red-600 dark:text-[#f85149] hover:bg-red-100 dark:hover:bg-[#f85149]/30'
+              : 'bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-500 hover:to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed'
+            }`}
+        >
+          {isAiLoading ? '⏹ Stop' : `✦ Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}
+        </button>
+      </div>
+
+      <div className={`overflow-y-auto p-3 ${isExpanded ? 'flex-1' : 'flex-1'}`}>
+        {isAiLoading && !aiSuggestion && (
+          <div className="flex items-center gap-2 text-violet-500 text-xs">
+            <span>{aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} is thinking</span>
+            <span className="flex gap-1">
+              {[0,1,2].map(i => <span key={i} className="ai-loading-dot w-1 h-1 rounded-full bg-violet-500 inline-block" />)}
+            </span>
+          </div>
+        )}
+        {aiSuggestion && (
+          <div>
+            <div className="text-[10px] text-[#818b98] dark:text-[#484f58] mb-1.5 font-semibold uppercase tracking-wide">
+              Suggestion {isAiLoading && <span className="text-violet-500 ml-1 normal-case">streaming…</span>}
+            </div>
+            <div className="text-xs text-[#24292f] dark:text-[#c9d1d9] bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] rounded-md p-3 whitespace-pre-wrap leading-relaxed">
+              {aiSuggestion}
+              {isAiLoading && <span className="animate-pulse text-violet-400">▌</span>}
+            </div>
+          </div>
+        )}
+        {aiError && (
+          <div className="text-[11px] text-red-600 dark:text-[#f85149] bg-red-50 dark:bg-[#f85149]/10 border border-red-200 dark:border-[#f85149]/30 rounded-md p-2.5 leading-relaxed">
+            <div className="font-semibold mb-0.5">Error</div>
+            {aiError}
+          </div>
+        )}
+        {!aiSuggestion && !isAiLoading && !aiError && (
+          <div className="text-[11px] text-[#818b98] dark:text-[#484f58] text-center py-4 leading-relaxed">
+            Select a mode and click<br/>"{`Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}" to get started.
+          </div>
+        )}
+      </div>
+
+      {aiDone && aiSuggestion && (
+        <div className="p-3 border-t border-[#d0d7de] dark:border-[#30363d] flex gap-2 flex-shrink-0">
+          <button onClick={applyAiSuggestion}
+            className="flex-1 bg-[#f59e0b] text-[#0d1117] py-2 rounded-md text-xs font-bold hover:bg-[#fbbf24] transition-colors">
+            ✓ Apply to Email
+          </button>
+          <button onClick={() => { setAiSuggestion(''); setAiDone(false) }}
+            className="px-3 py-2 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md text-xs transition-colors">
+            ✕
+          </button>
+        </div>
+      )}
+    </>
+  )
+
+  // Shared compose fields + editor
+  const composeFields = (
+    <div className="flex flex-col flex-1 min-h-0">
+      {accounts.length > 1 && (
+        <div className={rowCls}>
+          <span className={labelCls}>From</span>
+          <select value={accountId} onChange={e => setAccountId(e.target.value)}
+            className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] focus:outline-none">
+            {accounts.map(a => <option key={a.id} value={a.id} className="bg-white dark:bg-[#161b22]">{a.email}</option>)}
+          </select>
+        </div>
+      )}
+      <div className={rowCls}>
+        <span className={labelCls}>To</span>
+        <ContactField value={to} onChange={setTo} contacts={contacts} placeholder="recipient@example.com" label="To" />
+        <button onClick={() => setShowCcBcc(!showCcBcc)} className="text-[10px] text-[#818b98] dark:text-[#484f58] hover:text-[#f59e0b] transition-colors flex-shrink-0">Cc Bcc</button>
+      </div>
+      {showCcBcc && (
+        <>
+          <div className={rowCls}>
+            <span className={labelCls}>Cc</span>
+            <ContactField value={cc} onChange={setCc} contacts={contacts} placeholder="cc@example.com" label="Cc" />
+          </div>
+          <div className={rowCls}>
+            <span className={labelCls}>Bcc</span>
+            <ContactField value={bcc} onChange={setBcc} contacts={contacts} placeholder="bcc@example.com" label="Bcc" />
+          </div>
+        </>
+      )}
+      <div className={rowCls}>
+        <span className={labelCls}>Subject</span>
+        <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject"
+          className="flex-1 text-sm font-medium bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none" />
+      </div>
+      {composeData.replyTo && (
+        <div className="px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128]">
+          <div className="text-[10px] text-[#818b98] dark:text-[#484f58]">
+            Replying to <span className="text-[#656d76] dark:text-[#8b949e]">{composeData.replyTo.from}</span>
+          </div>
+        </div>
+      )}
+      {attachments.length > 0 && (
+        <div className="px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d] flex flex-wrap gap-1.5">
+          {attachments.map((f, i) => (
+            <div key={i} className="flex items-center gap-1 bg-[#eaeef2] dark:bg-[#21262d] rounded px-2 py-1 text-[11px] text-[#1f2328] dark:text-[#e6edf3]">
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
+              <span className="max-w-[120px] truncate">{f.name}</span>
+              <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(f.size / 1024)}KB)</span>
+              <button onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="ml-0.5 text-[#818b98] hover:text-[#cf222e] dark:hover:text-[#f85149]">×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <RichToolbar editor={editor} />
+      <div className="flex-1 overflow-y-auto">
+        <EditorContent editor={editor} className="h-full" />
+      </div>
+    </div>
+  )
+
+  const bottomBar = (
+    <div className="flex items-center gap-2 px-4 py-2.5 border-t border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128] rounded-b-xl flex-shrink-0">
+      <button onClick={handleSend} disabled={isSending}
+        className="flex items-center gap-1.5 bg-[#f59e0b] text-[#0d1117] px-4 py-2 rounded-md text-xs font-bold hover:bg-[#fbbf24] transition-colors disabled:opacity-50">
+        {isSending
+          ? <><span className="animate-spin inline-block">⟳</span> Sending…</>
+          : <><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 1l10 5-10 5V7l7-1-7-1V1z" fill="currentColor"/></svg> Send</>
+        }
+      </button>
+      <div className="flex-1" />
+      <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
+      <button onClick={() => fileInputRef.current?.click()} title="Attach files"
+        className="p-2 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors relative">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M14 7.5L7.5 14A5 5 0 01.5 7L6.5 1A3.5 3.5 0 0111.5 6L5.5 12A2 2 0 012.5 9L8 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        {attachments.length > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-[#f59e0b] text-[#0d1117] rounded-full text-[8px] font-bold flex items-center justify-center">{attachments.length}</span>
+        )}
+      </button>
+      <button
+        onClick={() => setShowAiPanel(!showAiPanel)}
+        className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-semibold transition-all border
+          ${showAiPanel
+            ? 'bg-violet-50 dark:bg-violet-600/20 text-violet-600 dark:text-violet-400 border-violet-300 dark:border-violet-500/30'
+            : 'text-[#656d76] dark:text-[#8b949e] border-[#d0d7de] dark:border-[#30363d] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:border-violet-300 dark:hover:border-violet-500/30'
+          }`}
+      >
+        ✦ AI Assist
+      </button>
+      <button onClick={closeCompose} title="Discard"
+        className="p-2 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      </button>
+    </div>
+  )
+
+  const headerBar = (title: string) => (
+    <div className="flex items-center justify-between px-4 py-3 bg-[#f6f8fa] dark:bg-[#1c2128] border-b border-[#d0d7de] dark:border-[#30363d] rounded-t-xl flex-shrink-0">
+      <span className="text-[#1f2328] dark:text-[#e6edf3] font-semibold text-sm">{title}</span>
+      <div className="flex items-center gap-2">
+        <button onClick={() => setIsExpanded(e => !e)}
+          className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors p-0.5"
+          title={isExpanded ? 'Restore' : 'Expand'}>
+          {isExpanded
+            ? <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 4L4 10M4 4h6M4 10v-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            : <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M4 10L10 4M10 10H4M10 4v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          }
+        </button>
+        <button onClick={closeCompose} className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5" title="Close">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+  )
+
+  if (isExpanded) {
+    const expandedContent = (
+      <div className="absolute inset-0 z-50 flex flex-col bg-white dark:bg-[#161b22]">
+        {/* Compose area takes full space */}
+        <div className="flex flex-col flex-1 min-h-0">
+          {headerBar(composeData.replyTo ? 'Reply' : 'New Message')}
+          {composeFields}
+          {/* AI panel docked at bottom when expanded */}
+          {showAiPanel && (
+            <div className="border-t border-[#d0d7de] dark:border-[#30363d] flex flex-col flex-shrink-0" style={{ height: `${expandedAiHeight}px` }}>
+              <div
+                className="h-2 cursor-row-resize bg-[#eaeef2] dark:bg-[#21262d] hover:bg-[#d0d7de] dark:hover:bg-[#30363d] transition-colors"
+                onMouseDown={handleAiResizeStart}
+                title="Drag to resize AI panel"
+              />
+              <div className="flex items-center justify-between px-4 py-2 bg-[#f6f8fa] dark:bg-[#1c2128] border-b border-[#d0d7de] dark:border-[#30363d]">
+                <div className="flex items-center gap-2">
+                  <div className={`w-4 h-4 rounded-full flex items-center justify-center ${
+                    aiProvider === 'openai' ? 'bg-[#10a37f]' : aiProvider === 'gemini' ? 'bg-[#4285F4]' : 'bg-[#d97706]'
+                  }`}>
+                    <span className="text-[8px] text-white font-bold">{aiProvider === 'openai' ? 'AI' : aiProvider === 'gemini' ? 'G' : 'C'}</span>
+                  </div>
+                  <span className="text-xs font-semibold text-[#1f2328] dark:text-[#e6edf3]">
+                    {aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} AI
+                  </span>
+                </div>
+                <button onClick={() => setShowAiPanel(false)} className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                </button>
+              </div>
+              <div className="flex flex-1 min-h-0 overflow-hidden">
+                {/* Modes column */}
+                <div className="w-80 border-r border-[#d0d7de] dark:border-[#30363d] p-2 flex-shrink-0 overflow-y-auto">
+                  <div className="grid grid-cols-3 gap-1 mb-2">
+                    {AI_MODES.map(mode => (
+                      <button key={mode.value} onClick={() => setAiMode(mode.value)} title={mode.description}
+                        className={`flex flex-col items-center gap-0.5 p-1.5 rounded-md text-[10px] transition-colors border
+                          ${aiMode === mode.value
+                            ? 'bg-violet-50 dark:bg-[rgba(139,92,246,0.15)] text-violet-600 dark:text-violet-400 border-violet-300 dark:border-violet-500/30'
+                            : 'text-[#656d76] dark:text-[#8b949e] border-transparent hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
+                          }`}>
+                        <span>{mode.icon}</span>
+                        <span className="leading-tight text-center">{mode.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {aiMode === 'custom' && (
+                    <textarea value={customPrompt} onChange={e => setCustomPrompt(e.target.value)}
+                      placeholder="Your instruction…" rows={2}
+                      className="w-full p-2 text-xs bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md resize-none focus:outline-none focus:border-violet-400" />
+                  )}
+                  <button onClick={handleAiSuggest} disabled={aiMode === 'custom' && !customPrompt}
+                    className={`mt-1 w-full py-1.5 rounded-md text-xs font-semibold transition-colors
+                      ${isAiLoading
+                        ? 'bg-red-50 dark:bg-[#f85149]/20 border border-red-300 dark:border-[#f85149]/40 text-red-600 dark:text-[#f85149]'
+                        : 'bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-500 hover:to-blue-500 disabled:opacity-40'
+                      }`}>
+                    {isAiLoading ? '⏹ Stop' : `✦ Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}
+                  </button>
+                </div>
+                {/* Suggestion column */}
+                <div className="flex-1 overflow-y-auto p-3">
+                  {isAiLoading && !aiSuggestion && (
+                    <div className="flex items-center gap-2 text-violet-500 text-xs">
+                      <span>Thinking…</span>
+                      <span className="flex gap-1">{[0,1,2].map(i => <span key={i} className="ai-loading-dot w-1 h-1 rounded-full bg-violet-500 inline-block" />)}</span>
+                    </div>
+                  )}
+                  {aiSuggestion && (
+                    <div className="text-xs text-[#24292f] dark:text-[#c9d1d9] bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] rounded-md p-3 whitespace-pre-wrap leading-relaxed">
+                      {aiSuggestion}{isAiLoading && <span className="animate-pulse text-violet-400">▌</span>}
+                    </div>
+                  )}
+                  {!aiSuggestion && !isAiLoading && !aiError && (
+                    <div className="text-[11px] text-[#818b98] dark:text-[#484f58] py-2">Select a mode and click Ask to get a suggestion.</div>
+                  )}
+                  {aiError && <div className="text-[11px] text-red-600 dark:text-[#f85149] bg-red-50 dark:bg-[#f85149]/10 rounded-md p-2">{aiError}</div>}
+                  {aiDone && aiSuggestion && (
+                    <div className="flex gap-2 mt-2">
+                      <button onClick={applyAiSuggestion} className="flex-1 bg-[#f59e0b] text-[#0d1117] py-1.5 rounded-md text-xs font-bold hover:bg-[#fbbf24] transition-colors">✓ Apply</button>
+                      <button onClick={() => { setAiSuggestion(''); setAiDone(false) }} className="px-3 text-[#818b98] hover:text-[#1f2328] dark:hover:text-[#e6edf3] text-xs">✕</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          {bottomBar}
+        </div>
+      </div>
+    )
+
+    const host = document.getElementById('email-content-host')
+    if (host) return createPortal(expandedContent, host)
+    return expandedContent
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-end p-4 pointer-events-none">
       <div className="flex gap-3 pointer-events-auto">
 
-        {/* AI Panel */}
+        {/* AI Panel (float mode) */}
         {showAiPanel && (
           <div className="w-72 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl flex flex-col" style={{ height: '520px' }}>
             <div className="flex items-center justify-between px-4 py-3 border-b border-[#d0d7de] dark:border-[#30363d] rounded-t-xl bg-[#f6f8fa] dark:bg-[#1c2128]">
@@ -294,209 +630,15 @@ export function ComposeModal() {
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
               </button>
             </div>
-
-            <div className="p-3 border-b border-[#d0d7de] dark:border-[#30363d]">
-              <p className="text-[10px] text-[#818b98] dark:text-[#484f58] mb-2 uppercase tracking-wide font-semibold">Mode</p>
-              <div className="grid grid-cols-3 gap-1">
-                {AI_MODES.map(mode => (
-                  <button
-                    key={mode.value}
-                    onClick={() => setAiMode(mode.value)}
-                    title={mode.description}
-                    className={`flex flex-col items-center gap-0.5 p-1.5 rounded-md text-[10px] transition-colors border
-                      ${aiMode === mode.value
-                        ? 'bg-violet-50 dark:bg-[rgba(139,92,246,0.15)] text-violet-600 dark:text-violet-400 border-violet-300 dark:border-violet-500/30'
-                        : 'text-[#656d76] dark:text-[#8b949e] border-transparent hover:bg-[#eaeef2] dark:hover:bg-[#21262d] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
-                      }`}
-                  >
-                    <span>{mode.icon}</span>
-                    <span className="leading-tight text-center">{mode.label}</span>
-                  </button>
-                ))}
-              </div>
-
-              {aiMode === 'custom' && (
-                <textarea
-                  value={customPrompt}
-                  onChange={e => setCustomPrompt(e.target.value)}
-                  placeholder={`What should ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} do with this email?`}
-                  className="mt-2 w-full p-2 text-xs bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md resize-none focus:outline-none focus:border-violet-400"
-                  rows={2}
-                />
-              )}
-
-              <button
-                onClick={handleAiSuggest}
-                disabled={aiMode === 'custom' && !customPrompt}
-                className={`mt-2 w-full py-2 rounded-md text-xs font-semibold transition-colors
-                  ${isAiLoading
-                    ? 'bg-red-50 dark:bg-[#f85149]/20 border border-red-300 dark:border-[#f85149]/40 text-red-600 dark:text-[#f85149] hover:bg-red-100 dark:hover:bg-[#f85149]/30'
-                    : 'bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-500 hover:to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed'
-                  }`}
-              >
-                {isAiLoading ? '⏹ Stop' : `✦ Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-3">
-              {isAiLoading && !aiSuggestion && (
-                <div className="flex items-center gap-2 text-violet-500 text-xs">
-                  <span>{aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} is thinking</span>
-                  <span className="flex gap-1">
-                    {[0,1,2].map(i => <span key={i} className="ai-loading-dot w-1 h-1 rounded-full bg-violet-500 inline-block" />)}
-                  </span>
-                </div>
-              )}
-              {aiSuggestion && (
-                <div>
-                  <div className="text-[10px] text-[#818b98] dark:text-[#484f58] mb-1.5 font-semibold uppercase tracking-wide">
-                    Suggestion {isAiLoading && <span className="text-violet-500 ml-1 normal-case">streaming…</span>}
-                  </div>
-                  <div className="text-xs text-[#24292f] dark:text-[#c9d1d9] bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] rounded-md p-3 whitespace-pre-wrap leading-relaxed">
-                    {aiSuggestion}
-                    {isAiLoading && <span className="animate-pulse text-violet-400">▌</span>}
-                  </div>
-                </div>
-              )}
-              {aiError && (
-                <div className="text-[11px] text-red-600 dark:text-[#f85149] bg-red-50 dark:bg-[#f85149]/10 border border-red-200 dark:border-[#f85149]/30 rounded-md p-2.5 leading-relaxed">
-                  <div className="font-semibold mb-0.5">Error</div>
-                  {aiError}
-                </div>
-              )}
-              {!aiSuggestion && !isAiLoading && !aiError && (
-                <div className="text-[11px] text-[#818b98] dark:text-[#484f58] text-center py-4 leading-relaxed">
-                  Select a mode and click<br/>"{`Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}" to get started.
-                </div>
-              )}
-            </div>
-
-            {aiDone && aiSuggestion && (
-              <div className="p-3 border-t border-[#d0d7de] dark:border-[#30363d] flex gap-2">
-                <button onClick={applyAiSuggestion}
-                  className="flex-1 bg-[#f59e0b] text-[#0d1117] py-2 rounded-md text-xs font-bold hover:bg-[#fbbf24] transition-colors">
-                  ✓ Apply to Email
-                </button>
-                <button onClick={() => { setAiSuggestion(''); setAiDone(false) }}
-                  className="px-3 py-2 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md text-xs transition-colors">
-                  ✕
-                </button>
-              </div>
-            )}
+            {aiPanelContent}
           </div>
         )}
 
-        {/* Compose window */}
+        {/* Compose window (float mode) */}
         <div className="w-[540px] bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl flex flex-col" style={{ height: '540px' }}>
-          <div className="flex items-center justify-between px-4 py-3 bg-[#f6f8fa] dark:bg-[#1c2128] border-b border-[#d0d7de] dark:border-[#30363d] rounded-t-xl">
-            <span className="text-[#1f2328] dark:text-[#e6edf3] font-semibold text-sm">
-              {composeData.replyTo ? 'Reply' : 'New Message'}
-            </span>
-            <div className="flex items-center gap-2">
-              <button onClick={closeCompose} className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors p-0.5" title="Minimize">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-              </button>
-              <button onClick={closeCompose} className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5" title="Close">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-col flex-1 min-h-0">
-            {accounts.length > 1 && (
-              <div className={rowCls}>
-                <span className={labelCls}>From</span>
-                <select value={accountId} onChange={e => setAccountId(e.target.value)}
-                  className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] focus:outline-none">
-                  {accounts.map(a => <option key={a.id} value={a.id} className="bg-white dark:bg-[#161b22]">{a.email}</option>)}
-                </select>
-              </div>
-            )}
-
-            <div className={rowCls}>
-              <span className={labelCls}>To</span>
-              <ContactField value={to} onChange={setTo} contacts={contacts} placeholder="recipient@example.com" label="To" />
-              <button onClick={() => setShowCcBcc(!showCcBcc)} className="text-[10px] text-[#818b98] dark:text-[#484f58] hover:text-[#f59e0b] transition-colors flex-shrink-0">Cc Bcc</button>
-            </div>
-            {showCcBcc && (
-              <>
-                <div className={rowCls}>
-                  <span className={labelCls}>Cc</span>
-                  <ContactField value={cc} onChange={setCc} contacts={contacts} placeholder="cc@example.com" label="Cc" />
-                </div>
-                <div className={rowCls}>
-                  <span className={labelCls}>Bcc</span>
-                  <ContactField value={bcc} onChange={setBcc} contacts={contacts} placeholder="bcc@example.com" label="Bcc" />
-                </div>
-              </>
-            )}
-            <div className={rowCls}>
-              <span className={labelCls}>Subject</span>
-              <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject"
-                className="flex-1 text-sm font-medium bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none" />
-            </div>
-            {composeData.replyTo && (
-              <div className="px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128]">
-                <div className="text-[10px] text-[#818b98] dark:text-[#484f58]">
-                  Replying to <span className="text-[#656d76] dark:text-[#8b949e]">{composeData.replyTo.from}</span>
-                </div>
-              </div>
-            )}
-            {attachments.length > 0 && (
-              <div className="px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d] flex flex-wrap gap-1.5">
-                {attachments.map((f, i) => (
-                  <div key={i} className="flex items-center gap-1 bg-[#eaeef2] dark:bg-[#21262d] rounded px-2 py-1 text-[11px] text-[#1f2328] dark:text-[#e6edf3]">
-                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
-                    <span className="max-w-[120px] truncate">{f.name}</span>
-                    <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(f.size / 1024)}KB)</span>
-                    <button onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="ml-0.5 text-[#818b98] hover:text-[#cf222e] dark:hover:text-[#f85149]">×</button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Rich text toolbar + editor */}
-            <RichToolbar editor={editor} />
-            <div className="flex-1 overflow-y-auto">
-              <EditorContent editor={editor} className="h-full" />
-            </div>
-
-            <div className="flex items-center gap-2 px-4 py-2.5 border-t border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128] rounded-b-xl">
-              <button onClick={handleSend} disabled={isSending}
-                className="flex items-center gap-1.5 bg-[#f59e0b] text-[#0d1117] px-4 py-2 rounded-md text-xs font-bold hover:bg-[#fbbf24] transition-colors disabled:opacity-50">
-                {isSending
-                  ? <><span className="animate-spin inline-block">⟳</span> Sending…</>
-                  : <><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 1l10 5-10 5V7l7-1-7-1V1z" fill="currentColor"/></svg> Send</>
-                }
-              </button>
-              <div className="flex-1" />
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                title="Attach files"
-                className="p-2 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors relative"
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M14 7.5L7.5 14A5 5 0 01.5 7L6.5 1A3.5 3.5 0 0111.5 6L5.5 12A2 2 0 012.5 9L8 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                {attachments.length > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-[#f59e0b] text-[#0d1117] rounded-full text-[8px] font-bold flex items-center justify-center">{attachments.length}</span>
-                )}
-              </button>
-              <button
-                onClick={() => setShowAiPanel(!showAiPanel)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-semibold transition-all border
-                  ${showAiPanel
-                    ? 'bg-violet-50 dark:bg-violet-600/20 text-violet-600 dark:text-violet-400 border-violet-300 dark:border-violet-500/30'
-                    : 'text-[#656d76] dark:text-[#8b949e] border-[#d0d7de] dark:border-[#30363d] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:border-violet-300 dark:hover:border-violet-500/30'
-                  }`}
-              >
-                ✦ AI Assist
-              </button>
-              <button onClick={closeCompose} title="Discard"
-                className="p-2 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              </button>
-            </div>
-          </div>
+          {headerBar(composeData.replyTo ? 'Reply' : 'New Message')}
+          {composeFields}
+          {bottomBar}
         </div>
       </div>
     </div>

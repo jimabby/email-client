@@ -91,7 +91,7 @@ export function Sidebar() {
     emails.filter(e => e.accountId === accountId && e.starred).length
 
   return (
-    <aside className="flex flex-col h-full bg-[#f6f8fa] dark:bg-[#161b22] border-r border-[#d0d7de] dark:border-[#30363d] w-52 flex-shrink-0">
+    <aside className="flex flex-col h-full bg-[#f6f8fa] dark:bg-[#161b22] border-r border-[#d0d7de] dark:border-[#30363d] w-[var(--sidebar-width,13rem)] flex-shrink-0">
       {/* Compose */}
       <div className="p-3">
         <button
