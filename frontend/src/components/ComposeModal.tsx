@@ -41,7 +41,18 @@ function ContactField({
     // Only autocomplete the last token (after the last comma)
     const lastToken = v.split(',').pop()?.trim() || ''
     if (lastToken.length >= 1) {
-      const filtered = contacts.filter(c => c.toLowerCase().includes(lastToken.toLowerCase())).slice(0, 6)
+      const needle = lastToken.toLowerCase()
+      const filtered = contacts
+        .filter(c => c.toLowerCase().includes(needle))
+        .sort((a, b) => {
+          const aLower = a.toLowerCase()
+          const bLower = b.toLowerCase()
+          const aPrefix = aLower.startsWith(needle) ? 0 : 1
+          const bPrefix = bLower.startsWith(needle) ? 0 : 1
+          if (aPrefix !== bPrefix) return aPrefix - bPrefix
+          return 0 // keep existing recency order from store
+        })
+        .slice(0, 6)
       setSuggestions(filtered)
       setActiveIdx(-1)
     } else {

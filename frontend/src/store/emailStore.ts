@@ -259,10 +259,33 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     try { return JSON.parse(localStorage.getItem('hermes-contacts') || '[]') } catch { return [] }
   })(),
   addContacts: (addresses) => set((s) => {
-    const existing = new Set(s.contacts)
-    const fresh = addresses.filter(a => a && !existing.has(a))
-    if (!fresh.length) return {}
-    const merged = [...fresh, ...s.contacts].slice(0, 200)
+    const normalized = addresses
+      .map(a => a.trim())
+      .filter(Boolean)
+
+    if (!normalized.length) return {}
+
+    const byKey = new Map(s.contacts.map(c => [c.toLowerCase(), c]))
+    const next: string[] = []
+    const seen = new Set<string>()
+
+    // Most recently used contacts should appear first.
+    for (const raw of normalized) {
+      const key = raw.toLowerCase()
+      const canonical = byKey.get(key) || raw
+      if (seen.has(key)) continue
+      next.push(canonical)
+      seen.add(key)
+    }
+
+    for (const c of s.contacts) {
+      const key = c.toLowerCase()
+      if (seen.has(key)) continue
+      next.push(c)
+      seen.add(key)
+    }
+
+    const merged = next.slice(0, 200)
     localStorage.setItem('hermes-contacts', JSON.stringify(merged))
     return { contacts: merged }
   }),
