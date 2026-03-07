@@ -3,6 +3,8 @@ const router = express.Router();
 const store = require('../store');
 const { categorizeEmails, VALID_CATEGORIES } = require('../services/categorizationService');
 const { categorizeEmailsWithAI } = require('../services/aiService');
+const { createQueuedSend, cancelQueuedSend } = require('../services/sendQueueService');
+const { ensureWatch, subscribe } = require('../services/mailWatchService');
 
 function getService(accountType) {
   if (accountType === 'gmail') return require('../services/gmailService');
@@ -19,6 +21,35 @@ function gmailOrOutlookId(emailId) {
 function imapUid(emailId) {
   return parseInt(emailId.split('::')[1]);
 }
+
+// GET /api/emails/stream/:accountId (SSE for near real-time updates)
+router.get('/stream/:accountId', (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  ensureWatch(account);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  res.write(`data: ${JSON.stringify({ type: 'ready', accountId: account.id })}\n\n`);
+
+  const unsubscribe = subscribe((evt) => {
+    if (evt.accountId !== account.id) return;
+    res.write(`data: ${JSON.stringify({ type: 'new-mail', ...evt })}\n\n`);
+  });
+
+  const heartbeat = setInterval(() => {
+    res.write(`data: ${JSON.stringify({ type: 'ping', at: new Date().toISOString() })}\n\n`);
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+});
 
 // GET /api/emails/:accountId?folder=INBOX&limit=50&pageToken=...
 router.get('/:accountId', async (req, res) => {
@@ -124,16 +155,52 @@ router.post('/:accountId/send', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
-  const { to, cc, bcc, subject, text, html, attachments } = req.body;
+  const { to, cc, bcc, subject, text, html, attachments, sendAt, undoWindowSec } = req.body;
   if (!to || !subject) return res.status(400).json({ error: 'to and subject are required' });
 
   try {
+    const hasFutureSchedule = !!sendAt && new Date(sendAt).getTime() > Date.now();
+    const hasUndoWindow = Number(undoWindowSec) > 0;
+
+    if (hasFutureSchedule || hasUndoWindow) {
+      const queued = createQueuedSend({
+        accountId: account.id,
+        email: { to, cc, bcc, subject, text, html, attachments },
+        sendAt,
+        undoWindowSec: Number(undoWindowSec) || 0,
+      });
+      return res.json({
+        success: true,
+        queued: true,
+        jobId: queued.id,
+        sendAt: queued.sendAt,
+        canUndoUntil: queued.canUndoUntil,
+      });
+    }
+
     const service = getService(account.type);
     await service.sendEmail(account, { to, cc, bcc, subject, text, html, attachments });
-    res.json({ success: true });
+    res.json({ success: true, queued: false });
   } catch (err) {
     console.error('Send email error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/emails/:accountId/send-queue/:jobId/cancel
+router.post('/:accountId/send-queue/:jobId/cancel', (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  try {
+    const job = store.getSendQueueItem(req.params.jobId);
+    if (!job || job.accountId !== account.id) {
+      return res.status(404).json({ error: 'Scheduled send not found' });
+    }
+    const cancelled = cancelQueuedSend(req.params.jobId);
+    res.json({ success: true, jobId: cancelled.id, status: cancelled.status });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { format, isToday, isYesterday, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi } from '../api/client'
@@ -140,6 +140,7 @@ export function EmailList() {
   const [searchInput, setSearchInput] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const [showMoveMenu, setShowMoveMenu] = useState(false)
+  const liveRefreshTimerRef = useRef<number | null>(null)
 
   // Categorize newly loaded emails
   const lastCategorizedKey = useRef('')
@@ -184,7 +185,7 @@ export function EmailList() {
     }
   }
 
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     if (!currentAccountId || currentFolder === '__starred__') return
     setLoadingEmails(true)
     try {
@@ -193,7 +194,45 @@ export function EmailList() {
       setNextToken(nt)
     } catch (err) { console.error(err) }
     finally { setLoadingEmails(false) }
-  }
+  }, [currentAccountId, currentFolder, setLoadingEmails, setEmails, setNextToken])
+
+  useEffect(() => {
+    return () => {
+      if (liveRefreshTimerRef.current) {
+        window.clearTimeout(liveRefreshTimerRef.current)
+        liveRefreshTimerRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!currentAccountId) return
+
+    const es = new EventSource(`/api/emails/stream/${currentAccountId}`)
+    es.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data)
+        if (msg.type !== 'new-mail') return
+        if (currentFolder !== 'INBOX') return
+        if (liveRefreshTimerRef.current) return
+
+        liveRefreshTimerRef.current = window.setTimeout(() => {
+          liveRefreshTimerRef.current = null
+          handleRefresh().catch(() => {})
+        }, 1200)
+      } catch {
+        // Ignore malformed SSE payloads.
+      }
+    }
+
+    return () => {
+      if (liveRefreshTimerRef.current) {
+        window.clearTimeout(liveRefreshTimerRef.current)
+        liveRefreshTimerRef.current = null
+      }
+      es.close()
+    }
+  }, [currentAccountId, currentFolder, handleRefresh])
 
   const handleSearch = async (q: string) => {
     if (!currentAccountId || !q.trim()) { setSearchResults(null); return }

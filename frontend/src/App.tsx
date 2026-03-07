@@ -28,6 +28,17 @@ function Notification() {
         {notification.type === 'success' ? '✓' : '✕'}
       </div>
       <span className="text-[#1f2328] dark:text-[#e6edf3]">{notification.message}</span>
+      {notification.action && (
+        <button
+          onClick={() => {
+            notification.action?.onClick()
+            clearNotification()
+          }}
+          className="px-2 py-1 rounded-md text-xs font-semibold bg-[#f59e0b] text-[#0d1117] hover:bg-[#fbbf24] transition-colors"
+        >
+          {notification.action.label}
+        </button>
+      )}
       <button onClick={clearNotification} className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] ml-1 transition-colors">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
       </button>
@@ -258,3 +269,4 @@ export default function App() {
     </div>
   )
 }
+

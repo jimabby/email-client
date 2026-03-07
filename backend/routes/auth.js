@@ -61,6 +61,10 @@ router.delete('/accounts/:id', async (req, res) => {
     const imapService = require('../services/imapService');
     await imapService.closeConnection(req.params.id);
   } catch {}
+  try {
+    const { stopWatch } = require('../services/mailWatchService');
+    await stopWatch(req.params.id);
+  } catch {}
   res.json({ success: true });
 });
 

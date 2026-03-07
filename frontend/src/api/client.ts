@@ -56,7 +56,18 @@ export const emailsApi = {
     text?: string
     html?: string
     attachments?: { filename: string; contentType: string; content: string }[]
-  }) => api.post(`/emails/${accountId}/send`, data).then(r => r.data),
+    sendAt?: string
+    undoWindowSec?: number
+  }) => api.post<{
+    success: boolean
+    queued?: boolean
+    jobId?: string
+    sendAt?: string
+    canUndoUntil?: string | null
+  }>(`/emails/${accountId}/send`, data).then(r => r.data),
+
+  cancelQueuedSend: (accountId: string, jobId: string) =>
+    api.post(`/emails/${accountId}/send-queue/${jobId}/cancel`).then(r => r.data),
 
   delete: (accountId: string, emailId: string, folder?: string) =>
     api.delete(`/emails/${accountId}/message/${emailId}`, {

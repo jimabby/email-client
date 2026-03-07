@@ -66,8 +66,12 @@ interface EmailStore {
   // UI
   showAccountModal: boolean
   setShowAccountModal: (show: boolean) => void
-  notification: { type: 'success' | 'error'; message: string } | null
-  showNotification: (type: 'success' | 'error', message: string) => void
+  notification: { type: 'success' | 'error'; message: string; action?: { label: string; onClick: () => void } } | null
+  showNotification: (
+    type: 'success' | 'error',
+    message: string,
+    options?: { action?: { label: string; onClick: () => void }; timeoutMs?: number }
+  ) => void
   clearNotification: () => void
 
   // AI
@@ -193,11 +197,30 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   setShowAccountModal: (show) => set({ showAccountModal: show }),
 
   notification: null,
-  showNotification: (type, message) => {
-    set({ notification: { type, message } })
-    setTimeout(() => set({ notification: null }), 4000)
+  showNotification: (type, message, options) => {
+    const timeoutMs = options?.timeoutMs ?? 4000
+    set({ notification: { type, message, action: options?.action } })
+    if (typeof window !== 'undefined') {
+      const key = '__hermesNotificationTimer__'
+      const prev = (window as unknown as Record<string, number | undefined>)[key]
+      if (prev) window.clearTimeout(prev)
+      if (timeoutMs > 0) {
+        const next = window.setTimeout(() => set({ notification: null }), timeoutMs)
+        ;(window as unknown as Record<string, number | undefined>)[key] = next
+      }
+    }
   },
-  clearNotification: () => set({ notification: null }),
+  clearNotification: () => {
+    if (typeof window !== 'undefined') {
+      const key = '__hermesNotificationTimer__'
+      const prev = (window as unknown as Record<string, number | undefined>)[key]
+      if (prev) {
+        window.clearTimeout(prev)
+        ;(window as unknown as Record<string, number | undefined>)[key] = undefined
+      }
+    }
+    set({ notification: null })
+  },
 
   // AI
   aiProvider: null,

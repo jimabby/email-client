@@ -160,6 +160,9 @@ export function ComposeModal() {
   const [showCcBcc, setShowCcBcc] = useState(!!(composeData?.cc || composeData?.bcc))
   const [isSending, setIsSending] = useState(false)
   const [attachments, setAttachments] = useState<File[]>([])
+  const [undoWindowSec, setUndoWindowSec] = useState(60)
+  const [showSchedule, setShowSchedule] = useState(false)
+  const [scheduledAt, setScheduledAt] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [isExpanded, setIsExpanded]     = useState(false)
@@ -216,19 +219,50 @@ export function ComposeModal() {
   const handleSend = async () => {
     if (!to || !subject) { showNotification('error', 'Please fill in To and Subject fields'); return }
     if (!accountId) { showNotification('error', 'Please select an account'); return }
+    if (showSchedule && !scheduledAt) { showNotification('error', 'Please choose a scheduled send time'); return }
     setIsSending(true)
     try {
       const html = editor?.getHTML() || ''
       const text = editor?.getText() || ''
       const attachmentData = attachments.length ? await Promise.all(attachments.map(readFileAsBase64)) : undefined
-      await emailsApi.send(accountId, {
+      const sendResult = await emailsApi.send(accountId, {
         to, cc: cc || undefined, bcc: bcc || undefined, subject,
-        html, text, attachments: attachmentData
+        html, text, attachments: attachmentData,
+        sendAt: showSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+        undoWindowSec: undoWindowSec > 0 ? undoWindowSec : undefined,
       })
       // Save contacts for autocomplete
       const parseAddresses = (s: string) => s.split(',').map(a => a.trim()).filter(Boolean)
       addContacts([...parseAddresses(to), ...parseAddresses(cc), ...parseAddresses(bcc)])
-      showNotification('success', 'Email sent!')
+
+      if (sendResult.queued) {
+        const when = sendResult.sendAt ? new Date(sendResult.sendAt).toLocaleString() : 'soon'
+        const undoTimeoutMs = sendResult.canUndoUntil
+          ? Math.max(4500, new Date(sendResult.canUndoUntil).getTime() - Date.now() + 1200)
+          : 4500
+
+        const action = (undoWindowSec > 0 && sendResult.jobId)
+          ? {
+              label: 'Undo',
+              onClick: async () => {
+                try {
+                  await emailsApi.cancelQueuedSend(accountId, sendResult.jobId!)
+                  showNotification('success', 'Scheduled send cancelled')
+                } catch (err: unknown) {
+                  showNotification('error', err instanceof Error ? err.message : 'Failed to cancel scheduled send')
+                }
+              }
+            }
+          : undefined
+
+        showNotification(
+          'success',
+          `Email queued for ${when}${undoWindowSec > 0 ? ` (undo ${undoWindowSec}s)` : ''}`,
+          { action, timeoutMs: undoTimeoutMs }
+        )
+      } else {
+        showNotification('success', 'Email sent!')
+      }
       closeCompose()
     } catch (err: unknown) {
       showNotification('error', err instanceof Error ? err.message : 'Failed to send email')
@@ -428,6 +462,18 @@ export function ComposeModal() {
         <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject"
           className="flex-1 text-sm font-medium bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none" />
       </div>
+      {showSchedule && (
+        <div className={rowCls}>
+          <span className={labelCls}>Send at</span>
+          <input
+            type="datetime-local"
+            value={scheduledAt}
+            min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
+            onChange={e => setScheduledAt(e.target.value)}
+            className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] focus:outline-none"
+          />
+        </div>
+      )}
       {composeData.replyTo && (
         <div className="px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128]">
           <div className="text-[10px] text-[#818b98] dark:text-[#484f58]">
@@ -459,10 +505,36 @@ export function ComposeModal() {
       <button onClick={handleSend} disabled={isSending}
         className="flex items-center gap-1.5 bg-[#f59e0b] text-[#0d1117] px-4 py-2 rounded-md text-xs font-bold hover:bg-[#fbbf24] transition-colors disabled:opacity-50">
         {isSending
-          ? <><span className="animate-spin inline-block">⟳</span> Sending…</>
-          : <><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 1l10 5-10 5V7l7-1-7-1V1z" fill="currentColor"/></svg> Send</>
+          ? <><span className="animate-spin inline-block">...</span> Sending...</>
+          : <><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 1l10 5-10 5V7l7-1-7-1V1z" fill="currentColor"/></svg> {showSchedule ? 'Schedule' : 'Send'}</>
         }
       </button>
+      <button
+        onClick={() => {
+          setShowSchedule(v => !v)
+          if (!showSchedule && !scheduledAt) {
+            const nextHour = new Date(Date.now() + 60 * 60 * 1000)
+            setScheduledAt(new Date(nextHour.getTime() - nextHour.getTimezoneOffset() * 60_000).toISOString().slice(0, 16))
+          }
+        }}
+        className={`px-2.5 py-2 rounded-md text-[11px] font-semibold transition-colors border ${
+          showSchedule
+            ? 'bg-[#fff8ec] border-[#f59e0b] text-[#b45309]'
+            : 'text-[#656d76] dark:text-[#8b949e] border-[#d0d7de] dark:border-[#30363d] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+        }`}
+      >
+        Schedule
+      </button>
+      <select
+        value={undoWindowSec}
+        onChange={e => setUndoWindowSec(parseInt(e.target.value, 10))}
+        title="Undo send window"
+        className="text-[11px] px-2 py-1.5 rounded-md border border-[#d0d7de] dark:border-[#30363d] bg-white dark:bg-[#161b22] text-[#656d76] dark:text-[#8b949e] focus:outline-none"
+      >
+        <option value={0}>Undo off</option>
+        <option value={60}>Undo 1 min</option>
+        <option value={300}>Undo 5 min</option>
+      </select>
       <div className="flex-1" />
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
       <button onClick={() => fileInputRef.current?.click()} title="Attach files"
@@ -480,7 +552,7 @@ export function ComposeModal() {
             : 'text-[#656d76] dark:text-[#8b949e] border-[#d0d7de] dark:border-[#30363d] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:border-violet-300 dark:hover:border-violet-500/30'
           }`}
       >
-        ✦ AI Assist
+        AI Assist
       </button>
       <button onClick={closeCompose} title="Discard"
         className="p-2 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
@@ -488,7 +560,6 @@ export function ComposeModal() {
       </button>
     </div>
   )
-
   const headerBar = (title: string) => (
     <div className="flex items-center justify-between px-4 py-3 bg-[#f6f8fa] dark:bg-[#1c2128] border-b border-[#d0d7de] dark:border-[#30363d] rounded-t-xl flex-shrink-0">
       <span className="text-[#1f2328] dark:text-[#e6edf3] font-semibold text-sm">{title}</span>
@@ -644,3 +715,5 @@ export function ComposeModal() {
     </div>
   )
 }
+
+

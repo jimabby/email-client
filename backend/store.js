@@ -127,5 +127,32 @@ module.exports = {
   clearPendingReport() {
     delete store.pendingReport;
     saveStore(store);
+  },
+
+  // Scheduled/deferred send queue
+  getSendQueue() {
+    if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
+    return store.sendQueue;
+  },
+
+  addSendQueueItem(item) {
+    if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
+    store.sendQueue.push(item);
+    saveStore(store);
+    return item;
+  },
+
+  updateSendQueueItem(id, updates) {
+    if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
+    const idx = store.sendQueue.findIndex(i => i.id === id);
+    if (idx === -1) return null;
+    store.sendQueue[idx] = { ...store.sendQueue[idx], ...updates };
+    saveStore(store);
+    return store.sendQueue[idx];
+  },
+
+  getSendQueueItem(id) {
+    if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
+    return store.sendQueue.find(i => i.id === id) || null;
   }
 };

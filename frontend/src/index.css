@@ -46,6 +46,9 @@ body {
 .email-body img   { max-width: 100%; }
 .email-body a     { color: #b45309; }
 .email-body table { border-collapse: collapse; }
+.email-body ul, .email-body ol { padding-left: 1.4em; margin: 0.25em 0; }
+.email-body ul { list-style-type: disc; }
+.email-body ol { list-style-type: decimal; }
 .email-body blockquote {
   border-left: 3px solid #d0d7de;
   margin-left: 0;
@@ -75,6 +78,8 @@ body {
 .ProseMirror p { margin: 0 0 0.5em; }
 .ProseMirror p:last-child { margin-bottom: 0; }
 .ProseMirror ul, .ProseMirror ol { padding-left: 1.4em; margin: 0.25em 0; }
+.ProseMirror ul { list-style-type: disc; }
+.ProseMirror ol { list-style-type: decimal; }
 .ProseMirror li { margin: 0.15em 0; }
 .ProseMirror a { color: #b45309; text-decoration: underline; }
 .dark .ProseMirror a { color: #f59e0b; }
