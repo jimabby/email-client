@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { format, isToday, isYesterday, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi } from '../api/client'
@@ -37,6 +37,17 @@ function getSenderName(from: string): string {
   return from
 }
 
+function normalizeSubject(subject: string): string {
+  const raw = (subject || '').trim().toLowerCase()
+  if (!raw) return '(no subject)'
+  return raw.replace(/^(re|fw|fwd)\s*:\s*/gi, '').trim() || '(no subject)'
+}
+
+function emailDateValue(email: EmailSummary): number {
+  const t = Date.parse(email.date)
+  return Number.isNaN(t) ? 0 : t
+}
+
 function StarBtn({ starred, onClick }: { starred?: boolean; onClick: (e: React.MouseEvent) => void }) {
   return (
     <button
@@ -52,18 +63,24 @@ function StarBtn({ starred, onClick }: { starred?: boolean; onClick: (e: React.M
   )
 }
 
-function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar }: {
+function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, threadCount, threadExpanded, onToggleThread, compact, indent, accountLabel }: {
   email: EmailSummary
   isSelected: boolean
   isChecked: boolean
   onCheck: (e: React.MouseEvent) => void
   onClick: () => void
   onStar: (e: React.MouseEvent) => void
+  threadCount?: number
+  threadExpanded?: boolean
+  onToggleThread?: (e: React.MouseEvent) => void
+  compact?: boolean
+  indent?: boolean
+  accountLabel?: string
 }) {
   return (
     <div
       onClick={onClick}
-      className={`group flex items-start gap-2 px-3 py-2.5 cursor-pointer border-b border-[#eaeef2] dark:border-[#21262d] transition-colors relative
+      className={`group flex items-start gap-2 ${indent ? 'pl-8 pr-3' : 'px-3'} ${compact ? 'py-2' : 'py-2.5'} cursor-pointer border-b border-[#eaeef2] dark:border-[#21262d] transition-colors relative
         ${isSelected
           ? 'bg-[#fff8ec] dark:bg-[#1c2128] border-l-[3px] border-l-[#f59e0b]'
           : isChecked
@@ -90,7 +107,7 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar }: {
 
       {/* Avatar */}
       <div
-        className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 mt-0.5 ring-2 ring-white dark:ring-[#0d1117]"
+        className={`${compact ? 'w-7 h-7 text-[9px]' : 'w-8 h-8 text-[10px]'} rounded-full flex items-center justify-center font-bold text-white flex-shrink-0 mt-0.5 ring-2 ring-white dark:ring-[#0d1117]`}
         style={{ backgroundColor: getAvatarColor(email.from) }}
       >
         {getInitials(email.from)}
@@ -103,11 +120,32 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar }: {
           </span>
           <div className="flex items-center gap-1 flex-shrink-0">
             <StarBtn starred={email.starred} onClick={onStar} />
+            {accountLabel && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#eaeef2] dark:bg-[#21262d] text-[#656d76] dark:text-[#8b949e]">
+                {accountLabel}
+              </span>
+            )}
+            {typeof threadCount === 'number' && threadCount > 1 && onToggleThread && (
+              <button
+                onClick={onToggleThread}
+                title={threadExpanded ? 'Collapse thread' : 'Expand thread'}
+                className="p-0.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors"
+              >
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`${threadExpanded ? 'rotate-180' : ''} transition-transform`}>
+                  <path d="M2.5 4.5l3.5 3 3.5-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            )}
             <span className={`text-[10px] ${!email.read ? 'text-[#f59e0b] font-semibold' : 'text-[#818b98] dark:text-[#484f58]'}`}>{formatDate(email.date)}</span>
           </div>
         </div>
         <div className={`text-[11.5px] truncate mb-0.5 ${!email.read ? 'font-semibold text-[#24292f] dark:text-[#c9d1d9]' : 'text-[#656d76] dark:text-[#8b949e]'}`}>
           {email.subject || '(no subject)'}
+          {typeof threadCount === 'number' && threadCount > 1 && (
+            <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded-full bg-[#eaeef2] dark:bg-[#21262d] text-[#656d76] dark:text-[#8b949e]">
+              {threadCount}
+            </span>
+          )}
         </div>
         {email.snippet && (
           <div className="text-[11px] text-[#afb8c1] dark:text-[#484f58] truncate leading-tight">{email.snippet}</div>
@@ -135,13 +173,29 @@ export function EmailList() {
     selectedEmailIds, toggleEmailSelection, clearEmailSelection,
     removeEmails, markEmailsRead, markEmailsUnread,
     folders, showNotification,
+    accounts, setCurrentAccount, setCurrentFolder, setActiveCategory,
+    threadView, toggleThreadView,
   } = useEmailStore()
 
   const [searchInput, setSearchInput] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const [searchMode, setSearchMode] = useState<'email' | 'attachment'>('email')
   const [attachmentType, setAttachmentType] = useState('')
+  const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({})
   const [showMoveMenu, setShowMoveMenu] = useState(false)
+  const [searchAll, setSearchAll] = useState(false)
+  const [savedSearches, setSavedSearches] = useState<Array<{
+    id: string
+    name: string
+    query: string
+    mode: 'email' | 'attachment'
+    attachmentType: string
+    searchAll: boolean
+    accountId: string | null
+    folder: string
+    category: string
+  }>>([])
+  const [showSavedMenu, setShowSavedMenu] = useState(false)
   const liveRefreshTimerRef = useRef<number | null>(null)
 
   // Categorize newly loaded emails
@@ -165,7 +219,19 @@ export function EmailList() {
     setSearchResults(null)
     setSearchMode('email')
     setAttachmentType('')
+    setSearchAll(false)
   }, [currentFolder, currentAccountId])
+
+  useEffect(() => {
+    setExpandedThreads({})
+  }, [currentFolder, currentAccountId, searchResults, threadView])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('hermes-saved-searches')
+      if (raw) setSavedSearches(JSON.parse(raw))
+    } catch {}
+  }, [])
 
   const handleSelectEmail = async (email: EmailSummary) => {
     setSelectedEmail(email)
@@ -238,14 +304,65 @@ export function EmailList() {
     }
   }, [currentAccountId, currentFolder, handleRefresh])
 
-  const handleSearch = async (q: string) => {
-    if (!currentAccountId || !q.trim()) { setSearchResults(null); return }
+  const handleSearch = async (q: string, opts?: {
+    accountId?: string | null
+    folder?: string
+    mode?: 'email' | 'attachment'
+    attachmentType?: string
+    searchAll?: boolean
+  }) => {
+    const qTrim = q.trim()
+    if (!qTrim) { setSearchResults(null); return }
+    const useAll = opts?.searchAll ?? searchAll
+    const accountId = opts?.accountId ?? currentAccountId
+    const folder = opts?.folder ?? currentFolder
+    const mode = opts?.mode ?? searchMode
+    const type = opts?.attachmentType ?? attachmentType
+    if (!useAll && !accountId) { setSearchResults(null); return }
     setIsSearching(true)
     try {
-      const results = searchMode === 'attachment'
-        ? await emailsApi.searchAttachments(currentAccountId, q.trim(), attachmentType.trim(), currentFolder)
-        : await emailsApi.search(currentAccountId, q.trim(), currentFolder)
-      setSearchResults(results)
+      const results = useAll
+        ? (mode === 'attachment'
+            ? await emailsApi.searchAttachmentsAll(qTrim, type?.trim(), folder)
+            : await Promise.all([
+                emailsApi.searchAll(qTrim, folder),
+                emailsApi.searchAttachmentsAll(qTrim, type?.trim(), folder),
+              ]).then(([a, b]) => [...a, ...b]))
+        : (mode === 'attachment'
+            ? await emailsApi.searchAttachments(accountId!, qTrim, type?.trim(), folder)
+            : await Promise.all([
+                emailsApi.search(accountId!, qTrim, folder),
+                emailsApi.searchAttachments(accountId!, qTrim, type?.trim(), folder),
+              ]).then(([a, b]) => [...a, ...b]))
+
+      const deduped = new Map<string, EmailSummary>()
+      for (const r of results) deduped.set(r.id, r)
+      const merged = Array.from(deduped.values())
+      merged.sort((a, b) => emailDateValue(b) - emailDateValue(a))
+      setSearchResults(merged)
+      if (!opts) {
+        const entry = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          name: qTrim,
+          query: qTrim,
+          mode,
+          attachmentType: type?.trim() || '',
+          searchAll: useAll,
+          accountId: useAll ? null : accountId,
+          folder,
+          category: activeCategory,
+        }
+        const deduped = savedSearches.filter(s =>
+          !(s.query === entry.query &&
+            s.mode === entry.mode &&
+            s.attachmentType === entry.attachmentType &&
+            s.searchAll === entry.searchAll &&
+            s.accountId === entry.accountId &&
+            s.folder === entry.folder &&
+            s.category === entry.category)
+        )
+        persistSavedSearches([entry, ...deduped].slice(0, 50))
+      }
     } catch { setSearchResults([]) }
     finally { setIsSearching(false) }
   }
@@ -307,6 +424,55 @@ export function EmailList() {
   const isInbox = currentFolder === 'INBOX'
   const isStarred = currentFolder === '__starred__'
 
+  const persistSavedSearches = (next: typeof savedSearches) => {
+    setSavedSearches(next)
+    try { localStorage.setItem('hermes-saved-searches', JSON.stringify(next)) } catch {}
+  }
+
+  const applySavedSearch = async (entry: typeof savedSearches[number]) => {
+    setShowSearch(true)
+    setSearchInput(entry.query)
+    setSearchMode(entry.mode)
+    setAttachmentType(entry.attachmentType || '')
+    setSearchAll(entry.searchAll)
+    if (!entry.searchAll && entry.accountId && entry.accountId !== currentAccountId) {
+      setCurrentAccount(entry.accountId)
+    }
+    if (entry.folder && entry.folder !== currentFolder) {
+      setCurrentFolder(entry.folder)
+    }
+    if (entry.category && entry.category !== activeCategory) {
+      setActiveCategory(entry.category as any)
+    }
+    await handleSearch(entry.query, {
+      accountId: entry.accountId,
+      folder: entry.folder,
+      mode: entry.mode,
+      attachmentType: entry.attachmentType,
+      searchAll: entry.searchAll,
+    })
+    setShowSavedMenu(false)
+  }
+
+  const deleteSavedSearch = (id: string) => {
+    persistSavedSearches(savedSearches.filter(s => s.id !== id))
+  }
+
+  const onRowClick = (email: EmailSummary) => {
+    if (selectedEmailIds.length > 0) {
+      toggleEmailSelection(email.id)
+    } else {
+      handleSelectEmail(email)
+    }
+  }
+
+  const onRowCheck = (email: EmailSummary, e: React.MouseEvent) => {
+    e.stopPropagation()
+    toggleEmailSelection(email.id)
+  }
+
+  const showAccountLabel = searchAll && searchResults !== null
+
   // Determine which list to show
   const baseList = searchResults !== null ? searchResults
     : isStarred ? emails.filter(e => e.starred)
@@ -315,6 +481,32 @@ export function EmailList() {
   const visibleEmails = isInbox && !searchResults && activeCategory !== 'All'
     ? baseList.filter(e => emailCategories[e.id] === activeCategory)
     : baseList
+
+  const threads = useMemo(() => {
+    if (!threadView) return []
+    const map = new Map<string, EmailSummary[]>()
+    for (const email of visibleEmails) {
+      const key = normalizeSubject(email.subject)
+      const items = map.get(key)
+      if (items) items.push(email)
+      else map.set(key, [email])
+    }
+    const out = Array.from(map.entries()).map(([key, items]) => {
+      items.sort((a, b) => emailDateValue(b) - emailDateValue(a))
+      const latest = items[0]
+      const unreadCount = items.filter(e => !e.read).length
+      return { key, items, latest, unreadCount }
+    })
+    out.sort((a, b) => emailDateValue(b.latest) - emailDateValue(a.latest))
+    return out
+  }, [visibleEmails, threadView])
+
+  const visibleCount = threadView ? threads.length : visibleEmails.length
+  const accountLabelById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const a of accounts) map.set(a.id, a.name || a.email)
+    return map
+  }, [accounts])
 
   if (isLoadingEmails) {
     return (
@@ -385,7 +577,7 @@ export function EmailList() {
             </button>
           </div>
         ) : showSearch ? (
-          <div className="flex-1 flex flex-col gap-1.5">
+          <div className="flex-1 flex flex-col gap-1.5 relative">
             <div className="flex items-center gap-2">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="text-[#818b98] dark:text-[#484f58] flex-shrink-0"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
               <input
@@ -393,7 +585,9 @@ export function EmailList() {
                 type="text"
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType('') } }}
+                onFocus={() => setShowSavedMenu(true)}
+                onBlur={() => setTimeout(() => setShowSavedMenu(false), 120)}
+                onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType(''); setSearchAll(false); setShowSavedMenu(false) } }}
                 placeholder={searchMode === 'attachment' ? 'Attachment name…' : 'Search emails…'}
                 className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none"
               />
@@ -407,7 +601,17 @@ export function EmailList() {
               >
                 Attachments
               </button>
-              <button onClick={() => { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType('') }}
+              <button
+                onClick={() => setSearchAll(v => !v)}
+                title="Search all accounts"
+                className={`px-2 py-1 text-[10px] rounded-full border transition-colors ${searchAll
+                  ? 'text-[#1f2328] dark:text-[#e6edf3] bg-[#ddf4ff] dark:bg-[#1c2128] border-[#0969da]/40'
+                  : 'text-[#818b98] dark:text-[#484f58] border-[#d0d7de] dark:border-[#30363d] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+                }`}
+              >
+                All accounts
+              </button>
+              <button onClick={() => { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType(''); setSearchAll(false) }}
                 className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5 flex-shrink-0">
                 <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
               </button>
@@ -425,16 +629,55 @@ export function EmailList() {
                 />
               </div>
             )}
+            {showSavedMenu && (
+              <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-lg shadow-lg py-1">
+                {savedSearches.length === 0 ? (
+                  <div className="px-3 py-2 text-[11px] text-[#818b98] dark:text-[#484f58]">No saved searches</div>
+                ) : (
+                  <>
+                    {savedSearches.map(s => (
+                      <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]">
+                        <button
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => applySavedSearch(s)}
+                          className="text-left text-[11px] text-[#1f2328] dark:text-[#e6edf3] truncate flex-1"
+                          title={s.query}
+                        >
+                          {s.name}
+                        </button>
+                        <button
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => deleteSavedSearch(s.id)}
+                          className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5"
+                          title="Remove saved search"
+                        >
+                          <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                        </button>
+                      </div>
+                    ))}
+                    <div className="border-t border-[#eaeef2] dark:border-[#21262d] mt-1 pt-1 px-3 pb-1">
+                      <button
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => persistSavedSearches([])}
+                        className="w-full text-[11px] text-[#cf222e] dark:text-[#f85149] hover:underline text-left"
+                      >
+                        Delete all
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <>
             <h2 className="font-semibold text-[#1f2328] dark:text-[#e6edf3] text-sm flex-1">{folderLabel}</h2>
             {searchResults !== null ? (
               <span className="text-[10px] bg-[#eaeef2] dark:bg-[#21262d] text-[#656d76] dark:text-[#8b949e] px-1.5 py-0.5 rounded-full font-medium">
-                {searchResults.length} results
+                {visibleCount} results
               </span>
             ) : (
-              <span className="text-[10px] text-[#afb8c1] dark:text-[#484f58] tabular-nums">{visibleEmails.length}</span>
+              <span className="text-[10px] text-[#afb8c1] dark:text-[#484f58] tabular-nums">{visibleCount}</span>
             )}
             {currentAccountId && !isStarred && (
               <button onClick={() => setShowSearch(true)} title="Search"
@@ -446,6 +689,21 @@ export function EmailList() {
               <button onClick={handleRefresh} title="Refresh"
                 className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+            )}
+            {currentAccountId && (
+              <button
+                onClick={toggleThreadView}
+                title={threadView ? 'Thread view on' : 'Thread view off'}
+                className={`p-1.5 rounded-md transition-colors ${
+                  threadView
+                    ? 'text-[#1f2328] dark:text-[#e6edf3] bg-[#eaeef2] dark:bg-[#21262d]'
+                    : 'text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
+                }`}
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                  <path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                </svg>
               </button>
             )}
           </>
@@ -474,17 +732,57 @@ export function EmailList() {
           </div>
         ) : (
           <>
-            {visibleEmails.map(email => (
-              <EmailRow
-                key={email.id}
-                email={email}
-                isSelected={selectedEmail?.id === email.id}
-                isChecked={selectedEmailIds.includes(email.id)}
-                onCheck={(e) => { e.stopPropagation(); toggleEmailSelection(email.id) }}
-                onClick={() => { if (selectedEmailIds.length > 0) { toggleEmailSelection(email.id) } else { handleSelectEmail(email) } }}
-                onStar={(e) => handleStar(email, e)}
-              />
-            ))}
+            {threadView ? (
+              threads.map(thread => {
+                const isExpanded = !!expandedThreads[thread.key]
+                return (
+                  <div key={thread.key}>
+                    <EmailRow
+                      email={thread.latest}
+                      isSelected={selectedEmail?.id === thread.latest.id}
+                      isChecked={selectedEmailIds.includes(thread.latest.id)}
+                      onCheck={(e) => onRowCheck(thread.latest, e)}
+                      onClick={() => onRowClick(thread.latest)}
+                      onStar={(e) => handleStar(thread.latest, e)}
+                      threadCount={thread.items.length}
+                      threadExpanded={isExpanded}
+                      onToggleThread={(e) => {
+                        e.stopPropagation()
+                        setExpandedThreads(s => ({ ...s, [thread.key]: !s[thread.key] }))
+                      }}
+                      accountLabel={showAccountLabel ? accountLabelById.get(thread.latest.accountId) : undefined}
+                    />
+                    {isExpanded && thread.items.slice(1).map(email => (
+                      <EmailRow
+                        key={email.id}
+                        email={email}
+                        isSelected={selectedEmail?.id === email.id}
+                        isChecked={selectedEmailIds.includes(email.id)}
+                        onCheck={(e) => onRowCheck(email, e)}
+                        onClick={() => onRowClick(email)}
+                        onStar={(e) => handleStar(email, e)}
+                        compact
+                        indent
+                        accountLabel={showAccountLabel ? accountLabelById.get(email.accountId) : undefined}
+                      />
+                    ))}
+                  </div>
+                )
+              })
+            ) : (
+              visibleEmails.map(email => (
+                <EmailRow
+                  key={email.id}
+                  email={email}
+                  isSelected={selectedEmail?.id === email.id}
+                  isChecked={selectedEmailIds.includes(email.id)}
+                  onCheck={(e) => onRowCheck(email, e)}
+                  onClick={() => onRowClick(email)}
+                  onStar={(e) => handleStar(email, e)}
+                  accountLabel={showAccountLabel ? accountLabelById.get(email.accountId) : undefined}
+                />
+              ))
+            )}
 
             {/* Load more */}
             {nextToken && !searchResults && !isStarred && (

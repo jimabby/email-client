@@ -105,6 +105,10 @@ interface EmailStore {
   // Theme
   theme: 'dark' | 'light'
   toggleTheme: () => void
+
+  // Thread view
+  threadView: boolean
+  toggleThreadView: () => void
 }
 
 export const useEmailStore = create<EmailStore>((set, get) => ({
@@ -300,5 +304,15 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     const next = s.theme === 'dark' ? 'light' : 'dark'
     localStorage.setItem('hermes-theme', next)
     return { theme: next }
+  }),
+
+  threadView: (() => {
+    const raw = localStorage.getItem('hermes-thread-view')
+    return raw ? raw === 'true' : true
+  })(),
+  toggleThreadView: () => set((s) => {
+    const next = !s.threadView
+    localStorage.setItem('hermes-thread-view', String(next))
+    return { threadView: next }
   }),
 }))

@@ -40,8 +40,14 @@ export const emailsApi = {
   search: (accountId: string, query: string, folder?: string, limit = 50) =>
     api.get<EmailSummary[]>(`/emails/${accountId}/search`, { params: { q: query, folder, limit } }).then(r => r.data),
 
+  searchAll: (query: string, folder?: string, limit = 50) =>
+    api.get<EmailSummary[]>(`/emails/search-all`, { params: { q: query, folder, limit } }).then(r => r.data),
+
   searchAttachments: (accountId: string, query: string, type?: string, folder?: string, limit = 50) =>
     api.get<EmailSummary[]>(`/emails/${accountId}/search-attachments`, { params: { q: query, type, folder, limit } }).then(r => r.data),
+
+  searchAttachmentsAll: (query: string, type?: string, folder?: string, limit = 50) =>
+    api.get<EmailSummary[]>(`/emails/search-attachments-all`, { params: { q: query, type, folder, limit } }).then(r => r.data),
 
   getBody: (accountId: string, emailId: string, folder?: string) =>
     api.get<EmailBody>(`/emails/${accountId}/message/${emailId}`, {

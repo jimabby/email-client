@@ -51,6 +51,78 @@ router.get('/stream/:accountId', (req, res) => {
   });
 });
 
+// GET /api/emails/search-all?q=...&folder=INBOX&limit=50
+router.get('/search-all', async (req, res) => {
+  const query = req.query.q || '';
+  const folder = req.query.folder || 'INBOX';
+  const limit = parseInt(req.query.limit) || 50;
+
+  try {
+    const accounts = store.getAccounts();
+    if (!accounts.length) return res.json([]);
+
+    const results = await Promise.all(accounts.map(async (account) => {
+      try {
+        const service = getService(account.type);
+        if (account.type === 'imap') {
+          return await service.searchEmails(account, query, folder, limit);
+        }
+        return await service.searchEmails(account, query, limit);
+      } catch {
+        return [];
+      }
+    }));
+
+    const merged = results.flat();
+    merged.sort((a, b) => {
+      const ta = Date.parse(a.date || '');
+      const tb = Date.parse(b.date || '');
+      return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta);
+    });
+    res.json(merged.slice(0, limit));
+  } catch (err) {
+    console.error('Search-all emails error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/emails/search-attachments-all?q=...&type=...&folder=INBOX&limit=50
+router.get('/search-attachments-all', async (req, res) => {
+  const query = req.query.q || '';
+  const type = req.query.type || '';
+  const folder = req.query.folder || 'INBOX';
+  const limit = parseInt(req.query.limit) || 50;
+
+  try {
+    const accounts = store.getAccounts();
+    if (!accounts.length) return res.json([]);
+
+    const results = await Promise.all(accounts.map(async (account) => {
+      try {
+        const service = getService(account.type);
+        if (!service.searchAttachments) return [];
+        if (account.type === 'imap') {
+          return await service.searchAttachments(account, query, type, folder, limit);
+        }
+        return await service.searchAttachments(account, query, type, folder, limit);
+      } catch {
+        return [];
+      }
+    }));
+
+    const merged = results.flat();
+    merged.sort((a, b) => {
+      const ta = Date.parse(a.date || '');
+      const tb = Date.parse(b.date || '');
+      return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta);
+    });
+    res.json(merged.slice(0, limit));
+  } catch (err) {
+    console.error('Search-attachments-all error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/emails/:accountId?folder=INBOX&limit=50&pageToken=...
 router.get('/:accountId', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
