@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import DOMPurify from 'dompurify'
 import { useEmailStore } from '../store/emailStore'
-import { emailsApi } from '../api/client'
+import { aiApi, emailsApi } from '../api/client'
 
 function formatFullDate(dateStr: string): string {
   try { return format(parseISO(dateStr), 'EEEE, MMMM d, yyyy h:mm a') }
@@ -17,6 +17,38 @@ function getInitials(from: string): string {
   return name.slice(0, 2).toUpperCase()
 }
 
+function normalizeSubject(subject: string): string {
+  const raw = (subject || '').trim().toLowerCase()
+  if (!raw) return '(no subject)'
+  return raw.replace(/^(re|fw|fwd)\s*:\s*/gi, '').trim() || '(no subject)'
+}
+
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function extractUnsubscribeLink(html?: string, text?: string): string | null {
+  const isUnsub = (s: string) => /unsubscribe|optout|opt-out|manage\s+preferences/i.test(s)
+  if (html && typeof window !== 'undefined') {
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const links = Array.from(doc.querySelectorAll('a[href]'))
+      for (const a of links) {
+        const href = a.getAttribute('href') || ''
+        const label = (a.textContent || '') + ' ' + href
+        if (isUnsub(label)) return href
+      }
+    } catch {}
+  }
+  const raw = text || html || ''
+  const match = raw.match(/https?:\/\/\S+/gi)
+  if (match) {
+    const url = match.find(u => isUnsub(u))
+    if (url) return url.replace(/[)>.,]*$/, '')
+  }
+  return null
+}
+
 const StarIcon = ({ filled }: { filled?: boolean }) => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? '#f59e0b' : 'none'}>
     <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
@@ -29,12 +61,15 @@ export function EmailViewer() {
     selectedEmail, selectedEmailBody, isLoadingBody,
     openCompose, removeEmail, showNotification,
     toggleStarLocal, markEmailUnread, setSelectedEmail,
-    folders, currentAccountId, currentFolder,
+    folders, currentAccountId, currentFolder, emails,
   } = useEmailStore()
 
   const [showMoveMenu, setShowMoveMenu] = useState(false)
   const [previewOpen, setPreviewOpen] = useState<Record<number, boolean>>({})
   const previewUrlRef = useRef<Record<number, string>>({})
+  const [threadSummary, setThreadSummary] = useState<{ summary: string; keyPoints: string[]; actionItems: string[] } | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
 
   useEffect(() => {
     return () => {
@@ -53,6 +88,12 @@ export function EmailViewer() {
       try { URL.revokeObjectURL(urls[Number(key)]) } catch {}
     }
     previewUrlRef.current = {}
+  }, [selectedEmail?.id])
+
+  useEffect(() => {
+    setThreadSummary(null)
+    setSummaryError(null)
+    setSummaryLoading(false)
   }, [selectedEmail?.id])
 
   if (!selectedEmail) {
@@ -158,6 +199,39 @@ export function EmailViewer() {
     }
   }
 
+  const handleSummarizeThread = async () => {
+    if (!selectedEmail) return
+    setSummaryLoading(true)
+    setSummaryError(null)
+    setThreadSummary(null)
+    try {
+      const key = normalizeSubject(selectedEmail.subject)
+      const threadEmails = emails
+        .filter(e => e.accountId === selectedEmail.accountId && normalizeSubject(e.subject) === key)
+        .sort((a, b) => Date.parse(b.date) - Date.parse(a.date))
+        .slice(0, 8)
+
+      const messages = await Promise.all(threadEmails.map(async (e) => {
+        try {
+          const b = await emailsApi.getBody(e.accountId, e.id, e.folder)
+          const bodyText = b.text || (b.html ? stripHtml(b.html) : '') || e.subject || ''
+          return { from: b.from || e.from, date: b.date || e.date, body: bodyText }
+        } catch {
+          return { from: e.from, date: e.date, body: e.subject || '' }
+        }
+      }))
+
+      const result = await aiApi.summarizeThread({ subject: selectedEmail.subject, messages })
+      setThreadSummary(result)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to summarize thread'
+      setSummaryError(msg)
+      showNotification('error', msg)
+    } finally {
+      setSummaryLoading(false)
+    }
+  }
+
   const sanitizedHtml = body?.html
     ? DOMPurify.sanitize(body.html, {
         ALLOWED_TAGS: ['p','div','span','a','b','i','em','strong','br','ul','ol','li','h1','h2','h3','h4','h5','h6','table','tr','td','th','tbody','thead','img','blockquote','pre','code','hr','font'],
@@ -171,6 +245,7 @@ export function EmailViewer() {
 
   const accountFolders = (currentAccountId ? folders[currentAccountId] : null) || []
   const movableFolders = accountFolders.filter(f => f.path !== currentFolder && f.path !== '__starred__')
+  const unsubscribeLink = extractUnsubscribeLink(body?.html, body?.text)
 
   const isPreviewable = (att: { filename: string; contentType: string; content?: string | null }) => {
     const type = (att.contentType || '').toLowerCase()
@@ -208,6 +283,21 @@ export function EmailViewer() {
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M8 3l4 3.5M12 6.5L8 10M12 6.5H4a3 3 0 000 6h1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Forward
         </button>
+        <button onClick={handleSummarizeThread} className={toolBtn} disabled={summaryLoading}>
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M3 3h10M3 7h7M3 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+          {summaryLoading ? 'Summarizing…' : 'Summarize'}
+        </button>
+
+        {unsubscribeLink && (
+          <button
+            onClick={() => window.open(unsubscribeLink, '_blank')}
+            className={toolBtn}
+            title="Unsubscribe"
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M8 3l5 5-5 5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            Unsubscribe
+          </button>
+        )}
 
         {divider}
 
@@ -285,6 +375,32 @@ export function EmailViewer() {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-6 py-5" onClick={() => setShowMoveMenu(false)}>
+        {threadSummary && (
+          <div className="mb-5 border border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22] rounded-lg p-4">
+            <div className="text-xs font-semibold text-[#656d76] dark:text-[#8b949e] mb-2">AI Thread Summary</div>
+            <div className="text-sm text-[#24292f] dark:text-[#c9d1d9] mb-3 leading-relaxed">{threadSummary.summary}</div>
+            {threadSummary.keyPoints?.length > 0 && (
+              <div className="mb-2">
+                <div className="text-[11px] font-semibold text-[#656d76] dark:text-[#8b949e] mb-1">Key points</div>
+                <ul className="list-disc pl-4 text-[11.5px] text-[#24292f] dark:text-[#c9d1d9]">
+                  {threadSummary.keyPoints.map((p, i) => <li key={i}>{p}</li>)}
+                </ul>
+              </div>
+            )}
+            {threadSummary.actionItems?.length > 0 && (
+              <div>
+                <div className="text-[11px] font-semibold text-[#656d76] dark:text-[#8b949e] mb-1">Action items</div>
+                <ul className="list-disc pl-4 text-[11.5px] text-[#24292f] dark:text-[#c9d1d9]">
+                  {threadSummary.actionItems.map((p, i) => <li key={i}>{p}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+        {summaryError && (
+          <div className="mb-5 text-xs text-[#cf222e] dark:text-[#f85149]">{summaryError}</div>
+        )}
+
         {sanitizedHtml ? (
           <div className="email-body" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
         ) : body?.text ? (

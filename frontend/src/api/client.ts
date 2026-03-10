@@ -121,6 +121,12 @@ export const aiApi = {
 
   clearSettings: () =>
     api.delete('/ai/settings').then(r => r.data),
+
+  rankPriority: (emails: { id: string; from: string; subject: string; snippet?: string; date?: string }[]) =>
+    api.post<{ scores: Record<string, { score: number; label: string; reason: string }> }>('/ai/priority', { emails }).then(r => r.data),
+
+  summarizeThread: (params: { subject: string; messages: { from: string; date: string; body: string }[] }) =>
+    api.post<{ summary: string; keyPoints: string[]; actionItems: string[] }>('/ai/thread-summary', params).then(r => r.data),
 }
 
 // ─── AI Suggestions (streaming) ───────────────────────────────────────────────

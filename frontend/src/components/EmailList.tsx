@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { format, isToday, isYesterday, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
-import { emailsApi } from '../api/client'
+import { aiApi, emailsApi } from '../api/client'
 import type { EmailSummary } from '../types/email'
 import { CategoryTabs } from './CategoryTabs'
 
@@ -63,7 +63,7 @@ function StarBtn({ starred, onClick }: { starred?: boolean; onClick: (e: React.M
   )
 }
 
-function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, threadCount, threadExpanded, onToggleThread, compact, indent, accountLabel }: {
+function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, threadCount, threadExpanded, onToggleThread, compact, indent, accountLabel, priorityLabel }: {
   email: EmailSummary
   isSelected: boolean
   isChecked: boolean
@@ -76,6 +76,7 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
   compact?: boolean
   indent?: boolean
   accountLabel?: string
+  priorityLabel?: string
 }) {
   return (
     <div
@@ -146,6 +147,11 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
               {threadCount}
             </span>
           )}
+          {priorityLabel && (
+            <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded-full bg-[#fff8ec] dark:bg-[#1c2128] text-[#b45309] dark:text-[#f59e0b]">
+              {priorityLabel}
+            </span>
+          )}
         </div>
         {email.snippet && (
           <div className="text-[11px] text-[#afb8c1] dark:text-[#484f58] truncate leading-tight">{email.snippet}</div>
@@ -196,6 +202,10 @@ export function EmailList() {
     category: string
   }>>([])
   const [showSavedMenu, setShowSavedMenu] = useState(false)
+  const [priorityMode, setPriorityMode] = useState(false)
+  const [priorityLoading, setPriorityLoading] = useState(false)
+  const [priorityKey, setPriorityKey] = useState('')
+  const [priorityMap, setPriorityMap] = useState<Record<string, { score: number; label: string; reason: string }>>({})
   const liveRefreshTimerRef = useRef<number | null>(null)
 
   // Categorize newly loaded emails
@@ -225,6 +235,7 @@ export function EmailList() {
   useEffect(() => {
     setExpandedThreads({})
   }, [currentFolder, currentAccountId, searchResults, threadView])
+
 
   useEffect(() => {
     try {
@@ -472,6 +483,7 @@ export function EmailList() {
   }
 
   const showAccountLabel = searchAll && searchResults !== null
+  const getPriorityLabel = (id: string) => (priorityMode ? priorityMap[id]?.label : undefined)
 
   // Determine which list to show
   const baseList = searchResults !== null ? searchResults
@@ -482,10 +494,41 @@ export function EmailList() {
     ? baseList.filter(e => emailCategories[e.id] === activeCategory)
     : baseList
 
+  useEffect(() => {
+    if (!priorityMode) return
+    if (!visibleEmails.length) return
+    const key = visibleEmails.map(e => e.id).join(',')
+    if (key === priorityKey) return
+    setPriorityKey(key)
+    setPriorityLoading(true)
+    aiApi.rankPriority(visibleEmails.slice(0, 80).map(e => ({
+      id: e.id, from: e.from, subject: e.subject, snippet: e.snippet, date: e.date
+    })))
+      .then(({ scores }) => setPriorityMap(scores || {}))
+      .catch((err: unknown) => {
+        setPriorityMap({})
+        const msg = err instanceof Error ? err.message : 'Priority ranking failed'
+        showNotification('error', msg)
+      })
+      .finally(() => setPriorityLoading(false))
+  }, [priorityMode, visibleEmails, priorityKey])
+
+  const prioritySorted = useMemo(() => {
+    if (!priorityMode) return visibleEmails
+    const list = [...visibleEmails]
+    list.sort((a, b) => {
+      const sa = priorityMap[a.id]?.score ?? -1
+      const sb = priorityMap[b.id]?.score ?? -1
+      if (sb !== sa) return sb - sa
+      return emailDateValue(b) - emailDateValue(a)
+    })
+    return list
+  }, [visibleEmails, priorityMode, priorityMap])
+
   const threads = useMemo(() => {
     if (!threadView) return []
     const map = new Map<string, EmailSummary[]>()
-    for (const email of visibleEmails) {
+    for (const email of prioritySorted) {
       const key = normalizeSubject(email.subject)
       const items = map.get(key)
       if (items) items.push(email)
@@ -499,9 +542,9 @@ export function EmailList() {
     })
     out.sort((a, b) => emailDateValue(b.latest) - emailDateValue(a.latest))
     return out
-  }, [visibleEmails, threadView])
+  }, [prioritySorted, threadView])
 
-  const visibleCount = threadView ? threads.length : visibleEmails.length
+  const visibleCount = threadView ? threads.length : prioritySorted.length
   const accountLabelById = useMemo(() => {
     const map = new Map<string, string>()
     for (const a of accounts) map.set(a.id, a.name || a.email)
@@ -706,6 +749,27 @@ export function EmailList() {
                 </svg>
               </button>
             )}
+            {currentAccountId && (
+              <button
+                onClick={() => { setPriorityMode(v => !v); setPriorityKey('') }}
+                title={priorityMode ? 'Priority inbox on' : 'Priority inbox off'}
+                className={`p-1.5 rounded-md transition-colors ${
+                  priorityMode
+                    ? 'text-[#1f2328] dark:text-[#e6edf3] bg-[#fff8ec] dark:bg-[#1c2128]'
+                    : 'text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
+                }`}
+              >
+                {priorityLoading ? (
+                  <svg className="animate-spin" width="13" height="13" viewBox="0 0 14 14" fill="none">
+                    <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/>
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                    <path d="M2 13l3-8 3 5 2-3 4 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+              </button>
+            )}
           </>
         )}
       </div>
@@ -718,7 +782,7 @@ export function EmailList() {
             <svg className="animate-spin" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/></svg>
             Searching…
           </div>
-        ) : visibleEmails.length === 0 ? (
+        ) : prioritySorted.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
             <div className="w-12 h-12 rounded-full bg-[#eaeef2] dark:bg-[#21262d] flex items-center justify-center mb-3 text-[#818b98] dark:text-[#484f58]">
               <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
@@ -751,6 +815,7 @@ export function EmailList() {
                         setExpandedThreads(s => ({ ...s, [thread.key]: !s[thread.key] }))
                       }}
                       accountLabel={showAccountLabel ? accountLabelById.get(thread.latest.accountId) : undefined}
+                      priorityLabel={getPriorityLabel(thread.latest.id)}
                     />
                     {isExpanded && thread.items.slice(1).map(email => (
                       <EmailRow
@@ -764,13 +829,14 @@ export function EmailList() {
                         compact
                         indent
                         accountLabel={showAccountLabel ? accountLabelById.get(email.accountId) : undefined}
+                        priorityLabel={getPriorityLabel(email.id)}
                       />
                     ))}
                   </div>
                 )
               })
             ) : (
-              visibleEmails.map(email => (
+              prioritySorted.map(email => (
                 <EmailRow
                   key={email.id}
                   email={email}
@@ -780,6 +846,7 @@ export function EmailList() {
                   onClick={() => onRowClick(email)}
                   onStar={(e) => handleStar(email, e)}
                   accountLabel={showAccountLabel ? accountLabelById.get(email.accountId) : undefined}
+                  priorityLabel={getPriorityLabel(email.id)}
                 />
               ))
             )}

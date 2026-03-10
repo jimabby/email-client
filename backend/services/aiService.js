@@ -367,6 +367,101 @@ async function categorizeEmailsWithAI(emails) {
   }
 }
 
+// ───────────────── Priority Ranking ─────────────────
+
+const PRIORITY_SYSTEM_PROMPT = `You are an email triage assistant. Rank each email by urgency/importance.
+Return ONLY valid JSON in this exact shape:
+{"results":[{"id":"...", "score":0-100, "label":"urgent|important|normal|low", "reason":"<=8 words"}]}
+No markdown, no extra text.`;
+
+async function rankEmailsWithAI(emails) {
+  const { provider, apiKey } = store.getAiSettings();
+  if (!provider || !apiKey) return null;
+
+  const emailList = emails.map(e =>
+    `id:${e.id} | from:${(e.from || '').slice(0, 60)} | subject:${(e.subject || '').slice(0, 80)} | snippet:${(e.snippet || '').slice(0, 120)} | date:${e.date || ''}`
+  ).join('\n');
+  const userMessage = `Rank these emails:\n${emailList}`;
+
+  let text;
+  try {
+    if (provider === 'openai') {
+      text = await callOpenAI(apiKey, PRIORITY_SYSTEM_PROMPT, userMessage);
+    } else if (provider === 'gemini') {
+      text = await callGemini(apiKey, PRIORITY_SYSTEM_PROMPT, userMessage);
+    } else {
+      const key = apiKey || process.env.ANTHROPIC_API_KEY;
+      text = await callClaude(key, PRIORITY_SYSTEM_PROMPT, userMessage);
+    }
+  } catch (err) {
+    console.error('[Priority] AI error:', err.message);
+    return null;
+  }
+
+  try {
+    const jsonStr = text.match(/\{[\s\S]*\}/)?.[0];
+    if (!jsonStr) return null;
+    const raw = JSON.parse(jsonStr);
+    const results = Array.isArray(raw.results) ? raw.results : [];
+    const map = {};
+    for (const r of results) {
+      if (!r?.id) continue;
+      const score = Math.max(0, Math.min(100, Number(r.score) || 0));
+      const label = ['urgent', 'important', 'normal', 'low'].includes(r.label) ? r.label : 'normal';
+      const reason = typeof r.reason === 'string' ? r.reason.slice(0, 80) : '';
+      map[r.id] = { score, label, reason };
+    }
+    return map;
+  } catch {
+    return null;
+  }
+}
+
+// ───────────────── Thread Summary ─────────────────
+
+const SUMMARY_SYSTEM_PROMPT = `You are an email assistant. Summarize the thread and extract key points.
+Return ONLY valid JSON in this exact shape:
+{"summary":"...", "keyPoints":["..."], "actionItems":["..."]}
+No markdown, no extra text.`;
+
+async function summarizeThreadWithAI({ subject, messages }) {
+  const { provider, apiKey } = store.getAiSettings();
+  if (!provider || !apiKey) return null;
+
+  const threadText = messages.map(m =>
+    `From: ${m.from || ''}\nDate: ${m.date || ''}\n${(m.body || '').slice(0, 2000)}`
+  ).join('\n\n---\n\n');
+  const userMessage = `Subject: ${subject || '(no subject)'}\n\nThread:\n${threadText}`;
+
+  let text;
+  try {
+    if (provider === 'openai') {
+      text = await callOpenAI(apiKey, SUMMARY_SYSTEM_PROMPT, userMessage);
+    } else if (provider === 'gemini') {
+      text = await callGemini(apiKey, SUMMARY_SYSTEM_PROMPT, userMessage);
+    } else {
+      const key = apiKey || process.env.ANTHROPIC_API_KEY;
+      text = await callClaude(key, SUMMARY_SYSTEM_PROMPT, userMessage);
+    }
+  } catch (err) {
+    console.error('[Summary] AI error:', err.message);
+    return null;
+  }
+
+  try {
+    const jsonStr = text.match(/\{[\s\S]*\}/)?.[0];
+    if (!jsonStr) return null;
+    const raw = JSON.parse(jsonStr);
+    return {
+      summary: typeof raw.summary === 'string' ? raw.summary : '',
+      keyPoints: Array.isArray(raw.keyPoints) ? raw.keyPoints.filter(Boolean).slice(0, 8) : [],
+      actionItems: Array.isArray(raw.actionItems) ? raw.actionItems.filter(Boolean).slice(0, 8) : []
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ─── AI Chat ──────────────────────────────────────────────────────────────────
 
 async function streamChat(res, { messages, emailContext }) {
@@ -454,4 +549,11 @@ async function streamSuggestion(res, params) {
   }
 }
 
-module.exports = { streamSuggestion, streamChat, listGeminiModels, categorizeEmailsWithAI };
+module.exports = {
+  streamSuggestion,
+  streamChat,
+  listGeminiModels,
+  categorizeEmailsWithAI,
+  rankEmailsWithAI,
+  summarizeThreadWithAI,
+};
