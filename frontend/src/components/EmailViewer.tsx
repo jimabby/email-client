@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import DOMPurify from 'dompurify'
 import { useEmailStore } from '../store/emailStore'
@@ -33,6 +33,27 @@ export function EmailViewer() {
   } = useEmailStore()
 
   const [showMoveMenu, setShowMoveMenu] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState<Record<number, boolean>>({})
+  const previewUrlRef = useRef<Record<number, string>>({})
+
+  useEffect(() => {
+    return () => {
+      const urls = previewUrlRef.current
+      for (const key of Object.keys(urls)) {
+        try { URL.revokeObjectURL(urls[Number(key)]) } catch {}
+      }
+      previewUrlRef.current = {}
+    }
+  }, [])
+
+  useEffect(() => {
+    setPreviewOpen({})
+    const urls = previewUrlRef.current
+    for (const key of Object.keys(urls)) {
+      try { URL.revokeObjectURL(urls[Number(key)]) } catch {}
+    }
+    previewUrlRef.current = {}
+  }, [selectedEmail?.id])
 
   if (!selectedEmail) {
     return (
@@ -151,6 +172,22 @@ export function EmailViewer() {
   const accountFolders = (currentAccountId ? folders[currentAccountId] : null) || []
   const movableFolders = accountFolders.filter(f => f.path !== currentFolder && f.path !== '__starred__')
 
+  const isPreviewable = (att: { filename: string; contentType: string; content?: string | null }) => {
+    const type = (att.contentType || '').toLowerCase()
+    const name = (att.filename || '').toLowerCase()
+    return type.startsWith('image/') || type === 'application/pdf' || name.endsWith('.pdf')
+  }
+
+  const getPreviewUrl = (att: { filename: string; contentType: string; content?: string | null }, i: number) => {
+    if (previewUrlRef.current[i]) return previewUrlRef.current[i]
+    if (!att.content) return ''
+    const bytes = Uint8Array.from(atob(att.content), c => c.charCodeAt(0))
+    const blob = new Blob([bytes], { type: att.contentType || 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    previewUrlRef.current[i] = url
+    return url
+  }
+
   return (
     <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
       {/* Toolbar */}
@@ -261,25 +298,45 @@ export function EmailViewer() {
             <div className="text-xs font-semibold text-[#656d76] dark:text-[#8b949e] mb-2">Attachments ({body.attachments.length})</div>
             <div className="flex flex-wrap gap-2">
               {body.attachments.map((att, i) => (
-                <div key={i} className="flex items-center gap-2 bg-[#f6f8fa] dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-md px-3 py-2 text-xs">
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
-                  <span className="text-[#24292f] dark:text-[#c9d1d9]">{att.filename}</span>
-                  <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(att.size / 1024)}KB)</span>
-                  {att.content && (
-                    <button
-                      title="Download"
-                      onClick={() => {
-                        const bytes = Uint8Array.from(atob(att.content!), c => c.charCodeAt(0))
-                        const blob = new Blob([bytes], { type: att.contentType })
-                        const url = URL.createObjectURL(blob)
-                        const a = document.createElement('a')
-                        a.href = url; a.download = att.filename; a.click()
-                        URL.revokeObjectURL(url)
-                      }}
-                      className="text-[#f59e0b] hover:text-[#d97706] transition-colors"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </button>
+                <div key={i} className="flex flex-col gap-2 w-full">
+                  <div className="flex items-center gap-2 bg-[#f6f8fa] dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-md px-3 py-2 text-xs">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                    <span className="text-[#24292f] dark:text-[#c9d1d9]">{att.filename}</span>
+                    <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(att.size / 1024)}KB)</span>
+                    {att.content && isPreviewable(att) && (
+                      <button
+                        title="Preview"
+                        onClick={() => setPreviewOpen(s => ({ ...s, [i]: !s[i] }))}
+                        className="text-[#0969da] hover:text-[#1f6feb] transition-colors text-[11px]"
+                      >
+                        {previewOpen[i] ? 'Hide' : 'Preview'}
+                      </button>
+                    )}
+                    {att.content && (
+                      <button
+                        title="Download"
+                        onClick={() => {
+                          const bytes = Uint8Array.from(atob(att.content!), c => c.charCodeAt(0))
+                          const blob = new Blob([bytes], { type: att.contentType })
+                          const url = URL.createObjectURL(blob)
+                          const a = document.createElement('a')
+                          a.href = url; a.download = att.filename; a.click()
+                          URL.revokeObjectURL(url)
+                        }}
+                        className="text-[#f59e0b] hover:text-[#d97706] transition-colors"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </button>
+                    )}
+                  </div>
+                  {att.content && previewOpen[i] && isPreviewable(att) && (
+                    <div className="border border-[#d0d7de] dark:border-[#30363d] rounded-md overflow-hidden bg-white dark:bg-[#0d1117] w-full">
+                      {att.contentType?.toLowerCase().startsWith('image/') ? (
+                        <img src={getPreviewUrl(att, i)} alt={att.filename} className="w-full h-auto max-h-[80vh] object-contain" />
+                      ) : (
+                        <iframe title={att.filename} src={getPreviewUrl(att, i)} className="w-full h-[80vh]" />
+                      )}
+                    </div>
                   )}
                 </div>
               ))}

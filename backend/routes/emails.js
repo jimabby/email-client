@@ -187,6 +187,29 @@ router.post('/:accountId/send', async (req, res) => {
   }
 });
 
+// GET /api/emails/:accountId/search-attachments?q=...&type=...&folder=INBOX&limit=50
+router.get('/:accountId/search-attachments', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const query = req.query.q || '';
+  const type = req.query.type || '';
+  const folder = req.query.folder || 'INBOX';
+  const limit = parseInt(req.query.limit) || 50;
+
+  try {
+    const service = getService(account.type);
+    if (!service.searchAttachments) {
+      return res.json([]);
+    }
+    const emails = await service.searchAttachments(account, query, type, folder, limit);
+    res.json(emails);
+  } catch (err) {
+    console.error('Search attachments error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/emails/:accountId/send-queue/:jobId/cancel
 router.post('/:accountId/send-queue/:jobId/cancel', (req, res) => {
   const account = store.getAccount(req.params.accountId);

@@ -251,6 +251,7 @@ export function ComposeModal() {
         const undoTimeoutMs = sendResult.canUndoUntil
           ? Math.max(4500, new Date(sendResult.canUndoUntil).getTime() - Date.now() + 1200)
           : 4500
+        const undoLabel = undoWindowSec >= 60 ? `${Math.round(undoWindowSec / 60)} min` : `${undoWindowSec}s`
 
         const action = (undoWindowSec > 0 && sendResult.jobId)
           ? {
@@ -268,7 +269,7 @@ export function ComposeModal() {
 
         showNotification(
           'success',
-          `Email queued for ${when}${undoWindowSec > 0 ? ` (undo ${undoWindowSec}s)` : ''}`,
+          `Email queued for ${when}${undoWindowSec > 0 ? ` (undo ${undoLabel})` : ''}`,
           { action, timeoutMs: undoTimeoutMs }
         )
       } else {
@@ -544,7 +545,7 @@ export function ComposeModal() {
       >
         <option value={0}>Undo off</option>
         <option value={60}>Undo 1 min</option>
-        <option value={300}>Undo 5 min</option>
+        <option value={120}>Undo 2 min</option>
       </select>
       <div className="flex-1" />
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />

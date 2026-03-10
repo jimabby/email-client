@@ -138,6 +138,21 @@ async function searchEmails(account, query, limit = 50) {
   return Promise.all(messages.map(msg => _fetchMessageMeta(gmail, account, msg.id, 'search')));
 }
 
+async function searchAttachments(account, query, type, folder = 'INBOX', limit = 50) {
+  const gmail = getGmailClient(account);
+  const parts = ['has:attachment'];
+  if (folder) parts.push(`label:${folderToLabelId(folder)}`);
+  if (query && query.trim()) parts.push(`filename:${query.trim()}`);
+  if (type && type.trim()) {
+    const t = type.trim().replace(/^\./, '');
+    parts.push(`filename:${t}`);
+  }
+  const q = parts.join(' ');
+  const listRes = await gmail.users.messages.list({ userId: 'me', q, maxResults: limit });
+  const messages = listRes.data.messages || [];
+  return Promise.all(messages.map(msg => _fetchMessageMeta(gmail, account, msg.id, folder || 'search')));
+}
+
 async function fetchEmailBody(account, gmailId) {
   const gmail = getGmailClient(account);
 
@@ -319,6 +334,7 @@ module.exports = {
   handleCallback,
   fetchEmails,
   searchEmails,
+  searchAttachments,
   fetchEmailBody,
   getFolders,
   sendEmail,

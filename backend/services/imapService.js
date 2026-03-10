@@ -160,6 +160,69 @@ async function searchEmails(account, query, folder = 'INBOX', limit = 50) {
   });
 }
 
+function _attachmentMatches(att, query, type) {
+  const filename = (att.filename || '').toLowerCase();
+  const contentType = (att.contentType || '').toLowerCase();
+  const q = (query || '').trim().toLowerCase();
+  const t = (type || '').trim().toLowerCase();
+
+  const queryOk = !q || filename.includes(q);
+  if (!queryOk) return false;
+
+  if (!t) return true;
+  if (t.includes('/')) return contentType.includes(t);
+  const ext = t.startsWith('.') ? t : `.${t}`;
+  return filename.endsWith(ext) || filename.includes(t);
+}
+
+async function searchAttachments(account, query, type, folder = 'INBOX', limit = 50) {
+  return getConn(account).run(async (client) => {
+    const emails = [];
+    const mailbox = await client.mailboxOpen(folder);
+    const total = mailbox.exists;
+    if (total === 0) return [];
+
+    const maxScan = Math.max(limit * 8, 200);
+    const ceiling = total;
+    const start = Math.max(1, ceiling - maxScan + 1);
+
+    const collected = [];
+    for await (const msg of client.fetch(`${start}:${ceiling}`, {
+      envelope: true, uid: true, flags: true, source: true
+    })) {
+      collected.push(msg);
+    }
+
+    for (let i = collected.length - 1; i >= 0; i--) {
+      const msg = collected[i];
+      if (!msg.source) continue;
+      const parsed = await simpleParser(msg.source);
+      const attachments = parsed.attachments || [];
+      const hasMatch = attachments.some(att => _attachmentMatches(att, query, type));
+      if (!hasMatch) continue;
+
+      emails.push({
+        id: `${account.id}::${msg.uid}`,
+        uid: msg.uid,
+        from: msg.envelope?.from?.[0]
+          ? `${msg.envelope.from[0].name || ''} <${msg.envelope.from[0].address}>`.trim()
+          : 'Unknown',
+        to: (msg.envelope?.to || []).map(a => a.address),
+        subject: msg.envelope?.subject || '(no subject)',
+        date: msg.envelope?.date?.toISOString() || new Date().toISOString(),
+        read: msg.flags?.has('\\Seen'),
+        starred: msg.flags?.has('\\Flagged'),
+        folder,
+        accountId: account.id
+      });
+
+      if (emails.length >= limit) break;
+    }
+
+    return emails;
+  });
+}
+
 async function fetchEmailBody(account, uid, folder = 'INBOX') {
   return getConn(account).run(async (client) => {
     await client.mailboxOpen(folder);
@@ -271,6 +334,7 @@ async function testConnection(account) {
 module.exports = {
   fetchEmails,
   searchEmails,
+  searchAttachments,
   fetchEmailBody,
   getFolders,
   sendEmail,

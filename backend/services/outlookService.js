@@ -109,6 +109,21 @@ async function searchEmails(account, query, limit = 50) {
   return (data.value || []).map(msg => _outlookMsgToSummary(account, msg, 'search'));
 }
 
+async function searchAttachments(account, query, type, folder = 'INBOX', limit = 50) {
+  const parts = ['hasattachments:true'];
+  if (query && query.trim()) parts.push(`attachment:${query.trim()}`);
+  if (type && type.trim()) parts.push(`attachment:${type.trim()}`);
+  const search = encodeURIComponent(parts.join(' AND '));
+
+  const folderPath = FOLDER_MAP[folder] || folder;
+  const path = folder ? `/me/mailFolders/${folderPath}/messages` : '/me/messages';
+  const data = await graphRequest(
+    account.accessToken,
+    `${path}?$search="${search}"&$top=${limit}&$select=${SELECT_FIELDS}`
+  ).catch(() => ({ value: [] }));
+  return (data.value || []).map(msg => _outlookMsgToSummary(account, msg, folder || 'search'));
+}
+
 async function fetchEmailBody(account, outlookId) {
   const [msg, attData] = await Promise.all([
     graphRequest(account.accessToken, `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body,hasAttachments`),
@@ -201,6 +216,7 @@ module.exports = {
   handleCallback,
   fetchEmails,
   searchEmails,
+  searchAttachments,
   fetchEmailBody,
   getFolders,
   sendEmail,

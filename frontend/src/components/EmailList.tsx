@@ -139,6 +139,8 @@ export function EmailList() {
 
   const [searchInput, setSearchInput] = useState('')
   const [showSearch, setShowSearch] = useState(false)
+  const [searchMode, setSearchMode] = useState<'email' | 'attachment'>('email')
+  const [attachmentType, setAttachmentType] = useState('')
   const [showMoveMenu, setShowMoveMenu] = useState(false)
   const liveRefreshTimerRef = useRef<number | null>(null)
 
@@ -161,6 +163,8 @@ export function EmailList() {
     setSearchInput('')
     setShowSearch(false)
     setSearchResults(null)
+    setSearchMode('email')
+    setAttachmentType('')
   }, [currentFolder, currentAccountId])
 
   const handleSelectEmail = async (email: EmailSummary) => {
@@ -238,7 +242,9 @@ export function EmailList() {
     if (!currentAccountId || !q.trim()) { setSearchResults(null); return }
     setIsSearching(true)
     try {
-      const results = await emailsApi.search(currentAccountId, q.trim(), currentFolder)
+      const results = searchMode === 'attachment'
+        ? await emailsApi.searchAttachments(currentAccountId, q.trim(), attachmentType.trim(), currentFolder)
+        : await emailsApi.search(currentAccountId, q.trim(), currentFolder)
       setSearchResults(results)
     } catch { setSearchResults([]) }
     finally { setIsSearching(false) }
@@ -379,21 +385,46 @@ export function EmailList() {
             </button>
           </div>
         ) : showSearch ? (
-          <div className="flex-1 flex items-center gap-2">
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="text-[#818b98] dark:text-[#484f58] flex-shrink-0"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-            <input
-              autoFocus
-              type="text"
-              value={searchInput}
-              onChange={e => setSearchInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSearchResults(null) } }}
-              placeholder="Search emails…"
-              className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none"
-            />
-            <button onClick={() => { setShowSearch(false); setSearchInput(''); setSearchResults(null) }}
-              className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5 flex-shrink-0">
-              <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-            </button>
+          <div className="flex-1 flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="text-[#818b98] dark:text-[#484f58] flex-shrink-0"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+              <input
+                autoFocus
+                type="text"
+                value={searchInput}
+                onChange={e => setSearchInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType('') } }}
+                placeholder={searchMode === 'attachment' ? 'Attachment name…' : 'Search emails…'}
+                className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none"
+              />
+              <button
+                onClick={() => { setSearchMode(searchMode === 'attachment' ? 'email' : 'attachment'); setAttachmentType('') }}
+                title="Search attachments"
+                className={`px-2 py-1 text-[10px] rounded-full border transition-colors ${searchMode === 'attachment'
+                  ? 'text-[#1f2328] dark:text-[#e6edf3] bg-[#fff8ec] dark:bg-[#1c2128] border-[#f59e0b]/40'
+                  : 'text-[#818b98] dark:text-[#484f58] border-[#d0d7de] dark:border-[#30363d] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+                }`}
+              >
+                Attachments
+              </button>
+              <button onClick={() => { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType('') }}
+                className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5 flex-shrink-0">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+            {searchMode === 'attachment' && (
+              <div className="flex items-center gap-2">
+                <div className="text-[10px] text-[#818b98] dark:text-[#484f58]">Type</div>
+                <input
+                  type="text"
+                  value={attachmentType}
+                  onChange={e => setAttachmentType(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput) }}
+                  placeholder="pdf, png, image/*"
+                  className="flex-1 text-[10.5px] bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#afb8c1] dark:placeholder-[#484f58] focus:outline-none"
+                />
+              </div>
+            )}
           </div>
         ) : (
           <>
