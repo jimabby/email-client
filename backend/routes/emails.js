@@ -13,13 +13,19 @@ function getService(accountType) {
 }
 
 // Extract provider-specific ID from composite email IDs.
-// Gmail/Outlook: "{uuid}-{msgId}" — UUID has 4 dashes (5 segments) → slice(5)
+// Gmail/Outlook: "{uuid}-{msgId}" — UUID is 36 chars (8-4-4-4-12), followed by '-'
 // IMAP:          "{accountId}::{uid}"
 function gmailOrOutlookId(emailId) {
+  // UUID v4 is always 36 characters long. The provider message ID starts at index 37.
+  if (emailId.length > 37 && emailId[36] === '-') {
+    return emailId.slice(37);
+  }
+  // Fallback: split on '-' and skip the 5 UUID segments
   return emailId.split('-').slice(5).join('-');
 }
 function imapUid(emailId) {
-  return parseInt(emailId.split('::')[1]);
+  const parts = emailId.split('::');
+  return parseInt(parts[parts.length - 1]);
 }
 
 // GET /api/emails/stream/:accountId (SSE for near real-time updates)

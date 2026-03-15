@@ -2,6 +2,25 @@ const https = require('https');
 const Anthropic = require('@anthropic-ai/sdk');
 const store = require('../store');
 
+// Safely extract a JSON object from text that might be wrapped in markdown code fences.
+// Uses bracket-matching instead of a greedy regex to handle nested objects correctly.
+function extractJson(text) {
+  if (!text) return null;
+  // Strip markdown code fences if present
+  const stripped = text.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim();
+  const start = stripped.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i = start; i < stripped.length; i++) {
+    if (stripped[i] === '{') depth++;
+    else if (stripped[i] === '}') {
+      depth--;
+      if (depth === 0) return stripped.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 const PROMPTS = {
   improve:  'You are an expert email writer. Improve this email to be more professional, clear, and effective while keeping the core message intact. Return ONLY the improved email body text, no explanations.',
   concise:  'You are an expert email writer. Make this email more concise. Remove unnecessary words and filler while preserving all key information. Return ONLY the concise email body text, no explanations.',
@@ -354,7 +373,7 @@ async function categorizeEmailsWithAI(emails) {
 
   // Parse JSON — may be wrapped in a markdown code block
   try {
-    const jsonStr = text.match(/\{[\s\S]*\}/)?.[0];
+    const jsonStr = extractJson(text);
     if (!jsonStr) return null;
     const raw = JSON.parse(jsonStr);
     const result = {};
@@ -399,7 +418,7 @@ async function rankEmailsWithAI(emails) {
   }
 
   try {
-    const jsonStr = text.match(/\{[\s\S]*\}/)?.[0];
+    const jsonStr = extractJson(text);
     if (!jsonStr) return null;
     const raw = JSON.parse(jsonStr);
     const results = Array.isArray(raw.results) ? raw.results : [];
@@ -449,7 +468,7 @@ async function summarizeThreadWithAI({ subject, messages }) {
   }
 
   try {
-    const jsonStr = text.match(/\{[\s\S]*\}/)?.[0];
+    const jsonStr = extractJson(text);
     if (!jsonStr) return null;
     const raw = JSON.parse(jsonStr);
     return {

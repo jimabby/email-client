@@ -91,11 +91,12 @@ export function Sidebar() {
     emails.filter(e => e.accountId === accountId && e.starred).length
 
   return (
-    <aside className="flex flex-col h-full bg-[#f6f8fa] dark:bg-[#161b22] border-r border-[#d0d7de] dark:border-[#30363d] w-[var(--sidebar-width,13rem)] flex-shrink-0">
+    <aside className="flex flex-col h-full bg-[#f6f8fa] dark:bg-[#161b22] border-r border-[#d0d7de] dark:border-[#30363d] w-[var(--sidebar-width,13rem)] flex-shrink-0" role="navigation" aria-label="Email accounts and folders">
       {/* Compose */}
       <div className="p-3">
         <button
           onClick={() => openCompose()}
+          aria-label="Compose new message"
           className="w-full flex items-center justify-center gap-2 bg-[#f59e0b] text-[#0d1117] rounded-md px-3 py-2 text-xs font-bold hover:bg-[#fbbf24] transition-colors"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">

@@ -15,7 +15,7 @@ function redirectToFrontend(res, params = {}) {
 
 // List all accounts (strip sensitive credentials for client)
 router.get('/accounts', (req, res) => {
-  const accounts = store.getAccounts().map(({ password, accessToken, refreshToken, ...safe }) => safe);
+  const accounts = store.getAccounts().map(({ password, accessToken, refreshToken, msalTokenCache, ...safe }) => safe);
   res.json(accounts);
 });
 
@@ -143,19 +143,19 @@ router.get('/outlook/callback', async (req, res) => {
 
   try {
     const outlookService = require('../services/outlookService');
-    const { accessToken, refreshToken, accountId, email, name } = await outlookService.handleCallback(code);
+    const { accessToken, msalHomeAccountId, msalTokenCache, email, name } = await outlookService.handleCallback(code);
 
     const existing = store.getAccounts().find(a => a.email === email && a.type === 'outlook');
     if (existing) {
-      store.updateAccount(existing.id, { accessToken, refreshToken });
+      store.updateAccount(existing.id, { accessToken, msalHomeAccountId, msalTokenCache });
     } else {
       store.addAccount({
         type: 'outlook',
         email,
         name,
         accessToken,
-        refreshToken,
-        msAccountId: accountId
+        msalHomeAccountId,
+        msalTokenCache
       });
     }
 

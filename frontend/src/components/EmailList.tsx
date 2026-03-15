@@ -81,6 +81,9 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
   return (
     <div
       onClick={onClick}
+      role="option"
+      aria-selected={isSelected}
+      aria-label={`${!email.read ? 'Unread: ' : ''}${getSenderName(email.from)} — ${email.subject || '(no subject)'}`}
       className={`group flex items-start gap-2 ${indent ? 'pl-8 pr-3' : 'px-3'} ${compact ? 'py-2' : 'py-2.5'} cursor-pointer border-b border-[#eaeef2] dark:border-[#21262d] transition-colors relative
         ${isSelected
           ? 'bg-[#fff8ec] dark:bg-[#1c2128] border-l-[3px] border-l-[#f59e0b]'
@@ -729,9 +732,9 @@ export function EmailList() {
               </button>
             )}
             {currentAccountId && !isStarred && (
-              <button onClick={handleRefresh} title="Refresh"
+              <button onClick={handleRefresh} title="Refresh" aria-label="Refresh emails"
                 className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className={isLoadingEmails ? 'animate-spin' : ''}><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
             )}
             {currentAccountId && (
@@ -776,7 +779,7 @@ export function EmailList() {
 
       {isInbox && !searchResults && <CategoryTabs />}
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" role="listbox" aria-label="Email list" tabIndex={0} onKeyDown={e => { if (e.key === 'Escape' && selectedEmailIds.length > 0) clearEmailSelection() }}>
         {isSearching ? (
           <div className="flex items-center justify-center h-24 text-[#818b98] dark:text-[#484f58] text-xs gap-2">
             <svg className="animate-spin" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/></svg>
@@ -785,13 +788,42 @@ export function EmailList() {
         ) : prioritySorted.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
             <div className="w-12 h-12 rounded-full bg-[#eaeef2] dark:bg-[#21262d] flex items-center justify-center mb-3 text-[#818b98] dark:text-[#484f58]">
-              <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-                <path d="M1 10h3l1.5 2h5L12 10h3V13a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-                <path d="M1 10V4a1 1 0 011-1h12a1 1 0 011 1v6" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-              </svg>
+              {searchResults !== null ? (
+                <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+              ) : isStarred ? (
+                <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
+              ) : activeCategory !== 'All' ? (
+                <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M1 3h14M1 8h10M1 13h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+                  <path d="M1 10h3l1.5 2h5L12 10h3V13a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+                  <path d="M1 10V4a1 1 0 011-1h12a1 1 0 011 1v6" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+                </svg>
+              )}
             </div>
-            <p className="text-[#656d76] dark:text-[#8b949e] text-xs">
-              {searchResults !== null ? 'No results found' : currentAccountId ? 'No emails in this folder' : 'Select an account to view emails'}
+            <p className="text-[#656d76] dark:text-[#8b949e] text-xs font-medium mb-1">
+              {searchResults !== null
+                ? 'No results found'
+                : !currentAccountId
+                ? 'No account selected'
+                : isStarred
+                ? 'No starred emails'
+                : activeCategory !== 'All'
+                ? `No ${activeCategory.toLowerCase()} emails`
+                : 'This folder is empty'
+              }
+            </p>
+            <p className="text-[#afb8c1] dark:text-[#484f58] text-[11px] max-w-[200px]">
+              {searchResults !== null
+                ? 'Try a different search term or check another folder'
+                : !currentAccountId
+                ? 'Add an account in Settings to get started'
+                : isStarred
+                ? 'Star emails to find them quickly here'
+                : activeCategory !== 'All'
+                ? 'Emails in this category will appear here'
+                : 'New emails will appear here when they arrive'
+              }
             </p>
           </div>
         ) : (

@@ -3,6 +3,7 @@ const { ImapFlow } = require('imapflow');
 const store = require('../store');
 
 const emitter = new EventEmitter();
+emitter.setMaxListeners(50); // Allow many SSE clients
 const watchers = new Map(); // accountId -> watcher
 
 function getService(accountType) {
@@ -32,6 +33,8 @@ function startImapWatcher(account) {
   const connect = async () => {
     if (watcher.stopped) return;
     if (watcher.client) {
+      // Remove all listeners before disposing old client to prevent leaks
+      watcher.client.removeAllListeners();
       try { await watcher.client.logout(); } catch {}
       watcher.client = null;
     }
@@ -86,9 +89,14 @@ function startImapWatcher(account) {
 
   watcher.stop = async () => {
     watcher.stopped = true;
-    if (watcher.reconnectTimer) clearTimeout(watcher.reconnectTimer);
+    if (watcher.reconnectTimer) {
+      clearTimeout(watcher.reconnectTimer);
+      watcher.reconnectTimer = null;
+    }
     if (watcher.client) {
+      watcher.client.removeAllListeners();
       try { await watcher.client.logout(); } catch {}
+      watcher.client = null;
     }
   };
 

@@ -38,12 +38,23 @@ function loadStore() {
   return { accounts: [], aiSettings: {} };
 }
 
+let saveQueued = false;
+
 function saveStore(data) {
-  try {
-    fs.writeFileSync(STORE_FILE, JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.error('Failed to save store:', e.message);
-  }
+  // Debounce rapid consecutive writes into a single microtask
+  if (saveQueued) return;
+  saveQueued = true;
+  queueMicrotask(() => {
+    saveQueued = false;
+    try {
+      // Atomic write: write to temp file, then rename (rename is atomic on most OS)
+      const tmpFile = STORE_FILE + '.tmp';
+      fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2));
+      fs.renameSync(tmpFile, STORE_FILE);
+    } catch (e) {
+      console.error('Failed to save store:', e.message);
+    }
+  });
 }
 
 const store = loadStore();
@@ -154,5 +165,28 @@ module.exports = {
   getSendQueueItem(id) {
     if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
     return store.sendQueue.find(i => i.id === id) || null;
+  },
+
+  // Remove completed/failed/cancelled items older than 24 hours
+  pruneSendQueue() {
+    if (!Array.isArray(store.sendQueue)) return;
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const before = store.sendQueue.length;
+    store.sendQueue = store.sendQueue.filter(item => {
+      if (item.status === 'pending' || item.status === 'sending') return true;
+      const doneAt = item.sentAt || item.failedAt || item.cancelledAt;
+      return doneAt && new Date(doneAt).getTime() > cutoff;
+    });
+    if (store.sendQueue.length !== before) saveStore(store);
+  },
+
+  // Limit categories cache to prevent unbounded growth
+  pruneCategories(maxEntries = 5000) {
+    if (!store.categories) return;
+    const keys = Object.keys(store.categories);
+    if (keys.length <= maxEntries) return;
+    const toRemove = keys.slice(0, keys.length - maxEntries);
+    for (const k of toRemove) delete store.categories[k];
+    saveStore(store);
   }
 };

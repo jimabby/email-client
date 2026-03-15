@@ -197,6 +197,8 @@ export function ComposeModal() {
     return base
   })()
 
+  const sendRef = useRef<() => void>(() => {})
+
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -208,6 +210,14 @@ export function ComposeModal() {
     editorProps: {
       attributes: {
         class: 'flex-1 px-4 py-3 text-sm text-[#24292f] dark:text-[#c9d1d9] leading-relaxed focus:outline-none min-h-[120px]',
+      },
+      handleKeyDown: (_view, event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+          event.preventDefault()
+          sendRef.current()
+          return true
+        }
+        return false
       },
     },
   })
@@ -280,6 +290,7 @@ export function ComposeModal() {
       showNotification('error', err instanceof Error ? err.message : 'Failed to send email')
     } finally { setIsSending(false) }
   }
+  sendRef.current = handleSend
 
   const handleAiSuggest = useCallback(async () => {
     if (isAiLoading) { abortRef.current?.abort(); setIsAiLoading(false); return }
@@ -514,10 +525,10 @@ export function ComposeModal() {
 
   const bottomBar = (
     <div className="flex items-center gap-2 px-4 py-2.5 border-t border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#1c2128] rounded-b-xl flex-shrink-0">
-      <button onClick={handleSend} disabled={isSending}
+      <button onClick={handleSend} disabled={isSending} aria-label={showSchedule ? 'Schedule email' : 'Send email'}
         className="flex items-center gap-1.5 bg-[#f59e0b] text-[#0d1117] px-4 py-2 rounded-md text-xs font-bold hover:bg-[#fbbf24] transition-colors disabled:opacity-50">
         {isSending
-          ? <><span className="animate-spin inline-block">...</span> Sending...</>
+          ? <><svg className="animate-spin" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="2" strokeDasharray="20" strokeDashoffset="5"/></svg> Sending…</>
           : <><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 1l10 5-10 5V7l7-1-7-1V1z" fill="currentColor"/></svg> {showSchedule ? 'Schedule' : 'Send'}</>
         }
       </button>
@@ -547,7 +558,9 @@ export function ComposeModal() {
         <option value={60}>Undo 1 min</option>
         <option value={120}>Undo 2 min</option>
       </select>
-      <div className="flex-1" />
+      <div className="flex-1">
+        <span className="text-[10px] text-[#afb8c1] dark:text-[#484f58] hidden sm:inline">Ctrl+Enter to send</span>
+      </div>
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
       <button onClick={() => fileInputRef.current?.click()} title="Attach files"
         className="p-2 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors relative">

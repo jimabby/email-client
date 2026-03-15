@@ -4,6 +4,7 @@
   "description": "Hermes — Desktop Email Client with AI",
   "main": "electron/main.js",
   "scripts": {
+    "dev": "concurrently \"cd backend && npm run dev\" \"cd frontend && npm run dev\"",
     "start": "electron .",
     "make-icon": "node scripts/make-icon.js",
     "build:frontend": "cd frontend && npm run build",
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
+    "concurrently": "^9.2.1",
     "electron": "^30.5.1",
     "electron-builder": "^24.0.0",
     "png-to-ico": "^3.0.1"

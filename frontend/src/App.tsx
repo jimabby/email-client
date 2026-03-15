@@ -39,7 +39,7 @@ function Notification() {
           {notification.action.label}
         </button>
       )}
-      <button onClick={clearNotification} className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] ml-1 transition-colors">
+      <button onClick={clearNotification} aria-label="Dismiss notification" className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] ml-1 transition-colors">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
       </button>
     </div>
@@ -100,6 +100,7 @@ function TopBar() {
       <button
         onClick={toggleChat}
         title="AI Assistant"
+        aria-label={isChatOpen ? 'Close AI Assistant' : 'Open AI Assistant'}
         className={`p-1.5 rounded-md transition-colors ${isChatOpen
           ? 'text-[#7c3aed] bg-[#f3f0ff] dark:bg-[#7c3aed]/20'
           : 'text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
@@ -115,6 +116,7 @@ function TopBar() {
       <button
         onClick={toggleTheme}
         title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
         className="text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] p-1.5 rounded-md hover:bg-[#eaeef2] dark:hover:bg-[#21262d] transition-colors"
       >
         {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
@@ -123,6 +125,7 @@ function TopBar() {
       <button
         onClick={() => setShowAccountModal(true)}
         title="Settings"
+        aria-label="Open settings"
         className="text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] p-1.5 rounded-md hover:bg-[#eaeef2] dark:hover:bg-[#21262d] transition-colors"
       >
         <SettingsIcon />

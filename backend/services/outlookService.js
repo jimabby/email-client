@@ -35,13 +35,40 @@ async function handleCallback(code) {
   // Get user info
   const userRes = await graphRequest(response.accessToken, '/me?$select=mail,displayName,userPrincipalName');
 
+  // Serialize the MSAL token cache so we can restore it later for silent token renewal
+  const tokenCache = msalApp.getTokenCache().serialize();
+
   return {
     accessToken: response.accessToken,
-    refreshToken: response.account?.homeAccountId,
-    accountId: response.account?.homeAccountId,
+    msalHomeAccountId: response.account?.homeAccountId || null,
+    msalTokenCache: tokenCache,
     email: userRes.mail || userRes.userPrincipalName,
     name: userRes.displayName
   };
+}
+
+async function refreshAccessToken(account) {
+  if (!account.msalTokenCache || !account.msalHomeAccountId) return account.accessToken;
+  try {
+    const msalApp = createMsalApp();
+    msalApp.getTokenCache().deserialize(account.msalTokenCache);
+    const accounts = await msalApp.getTokenCache().getAllAccounts();
+    const msalAccount = accounts.find(a => a.homeAccountId === account.msalHomeAccountId);
+    if (!msalAccount) return account.accessToken;
+    const response = await msalApp.acquireTokenSilent({ scopes: SCOPES, account: msalAccount });
+    if (response.accessToken && response.accessToken !== account.accessToken) {
+      account.accessToken = response.accessToken;
+      // Persist updated token cache and access token
+      const store = require('../store');
+      store.updateAccount(account.id, {
+        accessToken: response.accessToken,
+        msalTokenCache: msalApp.getTokenCache().serialize()
+      });
+    }
+    return response.accessToken;
+  } catch {
+    return account.accessToken;
+  }
 }
 
 async function graphRequest(accessToken, path, method = 'GET', body = null) {
@@ -93,17 +120,29 @@ function _outlookMsgToSummary(account, msg, folder) {
 
 const SELECT_FIELDS = 'id,from,toRecipients,subject,receivedDateTime,isRead,flag,bodyPreview';
 
+async function graphRequestWithRefresh(account, path, method = 'GET', body = null) {
+  try {
+    return await graphRequest(account.accessToken, path, method, body);
+  } catch (err) {
+    if (err.message && err.message.includes('401')) {
+      const freshToken = await refreshAccessToken(account);
+      return await graphRequest(freshToken, path, method, body);
+    }
+    throw err;
+  }
+}
+
 async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = null) {
   const folderPath = FOLDER_MAP[folder] || folder;
   const url = pageToken || `/me/mailFolders/${folderPath}/messages?$top=${limit}&$select=${SELECT_FIELDS}&$orderby=receivedDateTime desc`;
-  const data = await graphRequest(account.accessToken, url);
+  const data = await graphRequestWithRefresh(account, url);
   const emails = (data.value || []).map(msg => _outlookMsgToSummary(account, msg, folder));
   return { emails, nextToken: data['@odata.nextLink'] || null };
 }
 
 async function searchEmails(account, query, limit = 50) {
-  const data = await graphRequest(
-    account.accessToken,
+  const data = await graphRequestWithRefresh(
+    account,
     `/me/messages?$search="${encodeURIComponent(query)}"&$top=${limit}&$select=${SELECT_FIELDS}`
   ).catch(() => ({ value: [] }));
   return (data.value || []).map(msg => _outlookMsgToSummary(account, msg, 'search'));
@@ -117,8 +156,8 @@ async function searchAttachments(account, query, type, folder = 'INBOX', limit =
 
   const folderPath = FOLDER_MAP[folder] || folder;
   const path = folder ? `/me/mailFolders/${folderPath}/messages` : '/me/messages';
-  const data = await graphRequest(
-    account.accessToken,
+  const data = await graphRequestWithRefresh(
+    account,
     `${path}?$search="${search}"&$top=${limit}&$select=${SELECT_FIELDS}`
   ).catch(() => ({ value: [] }));
   return (data.value || []).map(msg => _outlookMsgToSummary(account, msg, folder || 'search'));
@@ -126,8 +165,8 @@ async function searchAttachments(account, query, type, folder = 'INBOX', limit =
 
 async function fetchEmailBody(account, outlookId) {
   const [msg, attData] = await Promise.all([
-    graphRequest(account.accessToken, `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body,hasAttachments`),
-    graphRequest(account.accessToken, `/me/messages/${outlookId}/attachments`).catch(() => ({ value: [] })),
+    graphRequestWithRefresh(account, `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body,hasAttachments`),
+    graphRequestWithRefresh(account, `/me/messages/${outlookId}/attachments`).catch(() => ({ value: [] })),
   ]);
 
   const attachments = (attData?.value || [])
@@ -149,17 +188,19 @@ async function fetchEmailBody(account, outlookId) {
     subject: msg.subject || '',
     date: msg.receivedDateTime || '',
     html: msg.body?.contentType === 'html' ? msg.body.content : '',
-    text: msg.body?.contentType === 'text' ? msg.body.content : '',
+    text: msg.body?.contentType === 'text' ? msg.body.content
+      : msg.body?.content ? msg.body.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+      : '',
     attachments,
   };
 }
 
 async function deleteEmail(account, outlookId) {
-  await graphRequest(account.accessToken, `/me/messages/${outlookId}`, 'DELETE');
+  await graphRequestWithRefresh(account, `/me/messages/${outlookId}`, 'DELETE');
 }
 
 async function getFolders(account) {
-  const data = await graphRequest(account.accessToken, '/me/mailFolders');
+  const data = await graphRequestWithRefresh(account, '/me/mailFolders');
   return (data.value || []).map(f => ({
     name: f.displayName,
     path: f.id
@@ -169,7 +210,7 @@ async function getFolders(account) {
 async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments }) {
   const toArray = Array.isArray(to) ? to : [to];
 
-  await graphRequest(account.accessToken, '/me/sendMail', 'POST', {
+  await graphRequestWithRefresh(account, '/me/sendMail', 'POST', {
     message: {
       subject,
       body: {
@@ -193,22 +234,22 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
 }
 
 async function markAsRead(account, outlookId) {
-  await graphRequest(account.accessToken, `/me/messages/${outlookId}`, 'PATCH', { isRead: true });
+  await graphRequestWithRefresh(account, `/me/messages/${outlookId}`, 'PATCH', { isRead: true });
 }
 
 async function markAsUnread(account, outlookId) {
-  await graphRequest(account.accessToken, `/me/messages/${outlookId}`, 'PATCH', { isRead: false });
+  await graphRequestWithRefresh(account, `/me/messages/${outlookId}`, 'PATCH', { isRead: false });
 }
 
 async function toggleStar(account, outlookId, starred) {
-  await graphRequest(account.accessToken, `/me/messages/${outlookId}`, 'PATCH', {
+  await graphRequestWithRefresh(account, `/me/messages/${outlookId}`, 'PATCH', {
     flag: { flagStatus: starred ? 'flagged' : 'notFlagged' }
   });
 }
 
 async function moveEmail(account, outlookId, toFolder) {
   const destinationId = FOLDER_MAP[toFolder] || toFolder;
-  await graphRequest(account.accessToken, `/me/messages/${outlookId}/move`, 'POST', { destinationId });
+  await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId });
 }
 
 module.exports = {

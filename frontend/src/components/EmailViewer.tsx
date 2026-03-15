@@ -268,23 +268,24 @@ export function EmailViewer() {
       {/* Toolbar */}
       <div className="flex items-center gap-0.5 px-3 py-2 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
         {/* Reply group */}
-        <button onClick={handleReply} className={toolBtn}>
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M5 3L1 6.5M1 6.5L5 10M1 6.5h8a3 3 0 010 6h-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        <button onClick={handleReply} className={toolBtn} aria-label="Reply to email">
+          <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M5 3L1 6.5M1 6.5L5 10M1 6.5h8a3 3 0 010 6h-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Reply
         </button>
         <button
           onClick={() => openCompose({ accountId: selectedEmail.accountId, to: selectedEmail.to?.join(', ') || '', subject: selectedEmail.subject, body: '', replyTo: body ? { id: selectedEmail.id, from: body.from, to: body.to, subject: body.subject, date: body.date, html: body.html, text: body.text } : undefined })}
           className={toolBtn}
+          aria-label="Reply to all recipients"
         >
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M4 3L0 6.5M0 6.5L4 10M0 6.5h7M8 3L12 6.5M12 6.5L8 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M4 3L0 6.5M0 6.5L4 10M0 6.5h7M8 3L12 6.5M12 6.5L8 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Reply All
         </button>
-        <button onClick={handleForward} className={toolBtn}>
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M8 3l4 3.5M12 6.5L8 10M12 6.5H4a3 3 0 000 6h1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        <button onClick={handleForward} className={toolBtn} aria-label="Forward email">
+          <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M8 3l4 3.5M12 6.5L8 10M12 6.5H4a3 3 0 000 6h1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Forward
         </button>
-        <button onClick={handleSummarizeThread} className={toolBtn} disabled={summaryLoading}>
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M3 3h10M3 7h7M3 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+        <button onClick={handleSummarizeThread} className={toolBtn} disabled={summaryLoading} aria-label="Summarize email thread">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3h10M3 7h7M3 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
           {summaryLoading ? 'Summarizing…' : 'Summarize'}
         </button>
 
@@ -310,7 +311,7 @@ export function EmailViewer() {
           <StarIcon filled={selectedEmail.starred} />
         </button>
 
-        <button onClick={handleMarkUnread} title="Mark as unread" className={iconBtn}>
+        <button onClick={handleMarkUnread} title="Mark as unread" aria-label="Mark as unread" className={iconBtn}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/>
             <path d="M2 4l6 5 6-5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
@@ -346,7 +347,7 @@ export function EmailViewer() {
         {divider}
 
         {/* Delete */}
-        <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#fff0ee] dark:hover:bg-[#f85149]/10 rounded-md transition-colors" title="Delete">
+        <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#fff0ee] dark:hover:bg-[#f85149]/10 rounded-md transition-colors" title="Delete" aria-label="Delete email">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
       </div>

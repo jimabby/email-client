@@ -41,18 +41,27 @@ async function handleCallback(code) {
 }
 
 function getGmailClient(account) {
+  const store = require('../store');
   const oauth2Client = createOAuth2Client();
   oauth2Client.setCredentials({
     access_token: account.accessToken,
     refresh_token: account.refreshToken
   });
 
-  // Auto-refresh tokens
+  // Auto-refresh tokens and persist to store
   oauth2Client.on('tokens', (tokens) => {
+    const updates = {};
     if (tokens.refresh_token) {
       account.refreshToken = tokens.refresh_token;
+      updates.refreshToken = tokens.refresh_token;
     }
-    account.accessToken = tokens.access_token;
+    if (tokens.access_token) {
+      account.accessToken = tokens.access_token;
+      updates.accessToken = tokens.access_token;
+    }
+    if (Object.keys(updates).length > 0) {
+      store.updateAccount(account.id, updates);
+    }
   });
 
   return google.gmail({ version: 'v1', auth: oauth2Client });

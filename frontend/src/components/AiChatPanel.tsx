@@ -117,8 +117,8 @@ export function AiChatPanel() {
               <p className="text-[11px] text-[#818b98] dark:text-[#484f58]">Summarize, find patterns, or ask<br/>questions about your inbox</p>
             </div>
             {!aiConfigured && (
-              <p className="text-[10px] text-[#cf222e] dark:text-[#f85149] bg-[#ffeef0] dark:bg-[#f85149]/10 px-2 py-1 rounded">
-                Configure AI in Settings first
+              <p className="text-[10px] text-[#cf222e] dark:text-[#f85149] bg-[#ffeef0] dark:bg-[#f85149]/10 px-2.5 py-1.5 rounded-md">
+                Set up an AI provider in <button onClick={() => useEmailStore.getState().setShowAccountModal(true)} className="underline font-semibold hover:text-[#a40e26] dark:hover:text-[#ff7b72] transition-colors">Settings</button> to get started
               </p>
             )}
             <div className="flex flex-col gap-1.5 w-full mt-1">
@@ -184,6 +184,7 @@ export function AiChatPanel() {
           <button
             onClick={send}
             disabled={!input.trim() || isStreaming}
+            aria-label="Send message"
             className="flex-shrink-0 w-6 h-6 rounded-lg bg-[#7c3aed] disabled:opacity-40 flex items-center justify-center transition-opacity hover:bg-[#6d28d9]"
           >
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
