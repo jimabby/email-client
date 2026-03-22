@@ -151,12 +151,24 @@ export function EmailViewer() {
 
   const handleDelete = async () => {
     if (!selectedEmail) return
+    if (!window.confirm('Delete this email?')) return
     try {
       await emailsApi.delete(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder)
       removeEmail(selectedEmail.id)
       showNotification('success', 'Email deleted')
     } catch {
       showNotification('error', 'Failed to delete email')
+    }
+  }
+
+  const handleArchive = async () => {
+    if (!selectedEmail) return
+    try {
+      await emailsApi.move(selectedEmail.accountId, selectedEmail.id, 'Archive', selectedEmail.folder)
+      removeEmail(selectedEmail.id)
+      showNotification('success', 'Archived')
+    } catch {
+      showNotification('error', 'Failed to archive email')
     }
   }
 
@@ -268,7 +280,7 @@ export function EmailViewer() {
       {/* Toolbar */}
       <div className="flex items-center gap-0.5 px-3 py-2 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
         {/* Reply group */}
-        <button onClick={handleReply} className={toolBtn} aria-label="Reply to email">
+        <button onClick={handleReply} className={toolBtn} aria-label="Reply to email" title="Reply (r)">
           <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M5 3L1 6.5M1 6.5L5 10M1 6.5h8a3 3 0 010 6h-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Reply
         </button>
@@ -280,7 +292,7 @@ export function EmailViewer() {
           <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M4 3L0 6.5M0 6.5L4 10M0 6.5h7M8 3L12 6.5M12 6.5L8 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Reply All
         </button>
-        <button onClick={handleForward} className={toolBtn} aria-label="Forward email">
+        <button onClick={handleForward} className={toolBtn} aria-label="Forward email" title="Forward (f)">
           <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M8 3l4 3.5M12 6.5L8 10M12 6.5H4a3 3 0 000 6h1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Forward
         </button>
@@ -311,7 +323,7 @@ export function EmailViewer() {
           <StarIcon filled={selectedEmail.starred} />
         </button>
 
-        <button onClick={handleMarkUnread} title="Mark as unread" aria-label="Mark as unread" className={iconBtn}>
+        <button onClick={handleMarkUnread} title="Mark as unread (u)" aria-label="Mark as unread" className={iconBtn}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/>
             <path d="M2 4l6 5 6-5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
@@ -346,8 +358,17 @@ export function EmailViewer() {
 
         {divider}
 
+        {/* Archive */}
+        <button onClick={handleArchive} className={toolBtn} title="Archive (e)" aria-label="Archive email">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4h12v1H2zM3 5v7a1 1 0 001 1h8a1 1 0 001-1V5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+            <path d="M6 8h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+          Archive
+        </button>
+
         {/* Delete */}
-        <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#fff0ee] dark:hover:bg-[#f85149]/10 rounded-md transition-colors" title="Delete" aria-label="Delete email">
+        <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#fff0ee] dark:hover:bg-[#f85149]/10 rounded-md transition-colors" title="Delete (d)" aria-label="Delete email">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
       </div>

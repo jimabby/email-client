@@ -103,6 +103,21 @@ export const emailsApi = {
       params: sourceFolder ? { folder: sourceFolder } : {}
     }).then(r => r.data),
 
+  bulkDelete: (accountId: string, emailIds: string[], folder?: string) =>
+    api.post(`/emails/${accountId}/bulk/delete`, { emailIds }, {
+      params: folder ? { folder } : {}
+    }).then(r => r.data),
+
+  bulkMarkRead: (accountId: string, emailIds: string[], folder?: string) =>
+    api.post(`/emails/${accountId}/bulk/read`, { emailIds }, {
+      params: folder ? { folder } : {}
+    }).then(r => r.data),
+
+  bulkMove: (accountId: string, emailIds: string[], targetFolder: string, sourceFolder?: string) =>
+    api.post(`/emails/${accountId}/bulk/move`, { emailIds, folder: targetFolder }, {
+      params: sourceFolder ? { folder: sourceFolder } : {}
+    }).then(r => r.data),
+
   categorize: (emails: { id: string; from: string; subject: string; snippet?: string }[]) =>
     api.post<{ categories: Record<string, string> }>('/emails/categorize', { emails }).then(r => r.data),
 

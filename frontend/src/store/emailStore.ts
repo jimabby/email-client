@@ -90,9 +90,12 @@ interface EmailStore {
   setPendingReport: (report: { subject: string; html: string; text: string } | null) => void
   clearPendingReport: () => void
 
-  // Signature (localStorage-persisted)
+  // Signature (localStorage-persisted) — per-account + global fallback
   signature: string
   setSignature: (sig: string) => void
+  accountSignatures: Record<string, string>
+  setAccountSignature: (accountId: string, sig: string) => void
+  getSignatureForAccount: (accountId: string) => string
 
   // Contacts autocomplete (localStorage-persisted)
   contacts: string[]
@@ -251,11 +254,23 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   setPendingReport: (report) => set({ pendingReport: report }),
   clearPendingReport: () => set({ pendingReport: null }),
 
-  // Signature — persisted in localStorage
+  // Signature — persisted in localStorage (global + per-account)
   signature: localStorage.getItem('hermes-signature') || '',
   setSignature: (sig) => {
     localStorage.setItem('hermes-signature', sig)
     set({ signature: sig })
+  },
+  accountSignatures: (() => {
+    try { return JSON.parse(localStorage.getItem('hermes-account-signatures') || '{}') } catch { return {} }
+  })(),
+  setAccountSignature: (accountId, sig) => set((s) => {
+    const next = { ...s.accountSignatures, [accountId]: sig }
+    localStorage.setItem('hermes-account-signatures', JSON.stringify(next))
+    return { accountSignatures: next }
+  }),
+  getSignatureForAccount: (accountId) => {
+    const s = get()
+    return s.accountSignatures[accountId] || s.signature
   },
 
   // Contacts autocomplete — persisted in localStorage

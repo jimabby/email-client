@@ -16,7 +16,7 @@ const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHos
 const inputCls = 'w-full px-3 py-2 text-sm bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md focus:outline-none focus:border-[#f59e0b]/60 transition-colors'
 
 export function AccountModal() {
-  const { setShowAccountModal, addAccount, showNotification, setAiConfig, aiProvider, aiConfigured, signature, setSignature } = useEmailStore()
+  const { setShowAccountModal, addAccount, showNotification, setAiConfig, aiProvider, aiConfigured, signature, setSignature, accounts, accountSignatures, setAccountSignature } = useEmailStore()
   const [tab, setTab]       = useState<Tab>('imap')
   const [preset, setPreset] = useState('Gmail (App Password)')
   const [isLoading, setIsLoading] = useState(false)
@@ -286,38 +286,83 @@ export function AccountModal() {
           )}
 
           {tab === 'signature' && (
-            <div className="space-y-4">
+            <div className="space-y-5">
+              {/* Default signature */}
               <div>
                 <label className="block text-[10px] font-semibold text-[#818b98] dark:text-[#484f58] uppercase tracking-wide mb-2">
-                  Email Signature
+                  Default Signature
                 </label>
                 <p className="text-xs text-[#656d76] dark:text-[#8b949e] mb-3">
-                  This will be automatically appended to new emails (not replies).
+                  Used for all accounts unless overridden below.
                 </p>
                 <textarea
                   value={signatureText}
                   onChange={e => setSignatureText(e.target.value)}
                   placeholder="Best regards,&#10;Your Name"
-                  rows={6}
+                  rows={4}
                   className="w-full px-3 py-2 text-sm bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md focus:outline-none focus:border-[#f59e0b]/60 transition-colors resize-none font-sans"
                 />
+                {signatureText !== signature && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className="text-[10px] text-[#818b98] dark:text-[#484f58]">Unsaved changes</div>
+                    <button
+                      onClick={handleSignatureSave}
+                      className="px-3 py-1 text-xs font-semibold bg-[#f59e0b] text-[#0d1117] rounded-md hover:bg-[#fbbf24] transition-colors"
+                    >
+                      Save
+                    </button>
+                  </div>
+                )}
+                {signature && signatureText === signature && (
+                  <button
+                    onClick={() => { setSignatureText(''); setSignature(''); showNotification('success', 'Default signature cleared') }}
+                    className="mt-2 text-xs text-[#cf222e] dark:text-[#f85149] hover:underline"
+                  >
+                    Clear default signature
+                  </button>
+                )}
               </div>
-              {signatureText !== signature && (
-                <div className="text-[10px] text-[#818b98] dark:text-[#484f58]">Unsaved changes</div>
-              )}
-              <button
-                onClick={handleSignatureSave}
-                className="w-full bg-[#f59e0b] text-[#0d1117] py-2.5 rounded-md text-sm font-bold hover:bg-[#fbbf24] transition-colors"
-              >
-                Save Signature
-              </button>
-              {signature && (
-                <button
-                  onClick={() => { setSignatureText(''); setSignature(''); showNotification('success', 'Signature cleared') }}
-                  className="w-full py-2 rounded-md text-sm text-[#cf222e] dark:text-[#f85149] border border-[#cf222e]/30 dark:border-[#f85149]/30 hover:bg-red-50 dark:hover:bg-[#f85149]/10 transition-colors"
-                >
-                  Clear Signature
-                </button>
+
+              {/* Per-account signatures */}
+              {accounts.length > 0 && (
+                <div>
+                  <label className="block text-[10px] font-semibold text-[#818b98] dark:text-[#484f58] uppercase tracking-wide mb-2">
+                    Per-Account Signatures
+                  </label>
+                  <p className="text-xs text-[#656d76] dark:text-[#8b949e] mb-3">
+                    Override the default signature for specific accounts.
+                  </p>
+                  <div className="space-y-3">
+                    {accounts.map(acc => (
+                      <div key={acc.id} className="border border-[#d0d7de] dark:border-[#30363d] rounded-lg p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white ${acc.type === 'gmail' ? 'bg-red-500' : acc.type === 'outlook' ? 'bg-blue-500' : 'bg-amber-500'}`}>
+                            {(acc.name || acc.email).slice(0, 2).toUpperCase()}
+                          </div>
+                          <span className="text-xs font-medium text-[#1f2328] dark:text-[#e6edf3] truncate">{acc.email}</span>
+                          {accountSignatures[acc.id] && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#fff8ec] dark:bg-[#1c2128] text-[#b45309] dark:text-[#f59e0b]">custom</span>
+                          )}
+                        </div>
+                        <textarea
+                          value={accountSignatures[acc.id] ?? ''}
+                          onChange={e => setAccountSignature(acc.id, e.target.value)}
+                          placeholder={signature ? `Using default: "${signature.slice(0, 40)}..."` : 'Uses default signature'}
+                          rows={3}
+                          className="w-full px-3 py-2 text-xs bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md focus:outline-none focus:border-[#f59e0b]/60 transition-colors resize-none font-sans"
+                        />
+                        {accountSignatures[acc.id] && (
+                          <button
+                            onClick={() => { setAccountSignature(acc.id, ''); showNotification('success', `Signature for ${acc.email} cleared — using default`) }}
+                            className="mt-1 text-[10px] text-[#cf222e] dark:text-[#f85149] hover:underline"
+                          >
+                            Use default instead
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           )}

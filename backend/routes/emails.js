@@ -404,6 +404,94 @@ router.post('/:accountId/message/:emailId/move', async (req, res) => {
   }
 });
 
+// POST /api/emails/:accountId/bulk/delete
+router.post('/:accountId/bulk/delete', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const { emailIds } = req.body;
+  if (!Array.isArray(emailIds) || !emailIds.length) return res.status(400).json({ error: 'emailIds array required' });
+
+  const folder = req.query.folder || 'INBOX';
+  const service = getService(account.type);
+  const results = { succeeded: 0, failed: 0 };
+
+  await Promise.allSettled(emailIds.map(async (emailId) => {
+    try {
+      if (account.type === 'imap') {
+        await service.deleteEmail(account, imapUid(emailId), folder);
+      } else {
+        await service.deleteEmail(account, gmailOrOutlookId(emailId));
+      }
+      results.succeeded++;
+    } catch {
+      results.failed++;
+    }
+  }));
+
+  res.json({ success: true, ...results });
+});
+
+// POST /api/emails/:accountId/bulk/read
+router.post('/:accountId/bulk/read', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const { emailIds } = req.body;
+  if (!Array.isArray(emailIds) || !emailIds.length) return res.status(400).json({ error: 'emailIds array required' });
+
+  const folder = req.query.folder || 'INBOX';
+  const service = getService(account.type);
+  if (!service.markAsRead) return res.json({ success: true, succeeded: emailIds.length, failed: 0 });
+
+  const results = { succeeded: 0, failed: 0 };
+  await Promise.allSettled(emailIds.map(async (emailId) => {
+    try {
+      if (account.type === 'imap') {
+        await service.markAsRead(account, imapUid(emailId), folder);
+      } else {
+        await service.markAsRead(account, gmailOrOutlookId(emailId));
+      }
+      results.succeeded++;
+    } catch {
+      results.failed++;
+    }
+  }));
+
+  res.json({ success: true, ...results });
+});
+
+// POST /api/emails/:accountId/bulk/move
+router.post('/:accountId/bulk/move', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const { emailIds, folder: toFolder } = req.body;
+  if (!Array.isArray(emailIds) || !emailIds.length) return res.status(400).json({ error: 'emailIds array required' });
+  if (!toFolder) return res.status(400).json({ error: 'folder is required' });
+
+  const sourceFolder = req.query.folder || 'INBOX';
+  const service = getService(account.type);
+  const results = { succeeded: 0, failed: 0 };
+
+  await Promise.allSettled(emailIds.map(async (emailId) => {
+    try {
+      if (account.type === 'imap') {
+        await service.moveEmail(account, imapUid(emailId), sourceFolder, toFolder);
+      } else if (account.type === 'gmail') {
+        await service.moveEmail(account, gmailOrOutlookId(emailId), sourceFolder, toFolder);
+      } else {
+        await service.moveEmail(account, gmailOrOutlookId(emailId), toFolder);
+      }
+      results.succeeded++;
+    } catch {
+      results.failed++;
+    }
+  }));
+
+  res.json({ success: true, ...results });
+});
+
 // POST /api/emails/categorize
 router.post('/categorize', async (req, res) => {
   const { emails } = req.body;

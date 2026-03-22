@@ -158,7 +158,7 @@ function RichToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
 export function ComposeModal() {
   const {
     composeData, accounts, closeCompose, showNotification,
-    aiProvider, aiConfigured, signature, contacts, addContacts,
+    aiProvider, aiConfigured, contacts, addContacts, getSignatureForAccount,
   } = useEmailStore()
 
   const isReply = !!composeData?.replyTo
@@ -191,8 +191,9 @@ export function ComposeModal() {
   // Build initial content: reply body stays as-is; new emails get signature
   const initialHtml = (() => {
     const base = composeData?.body || ''
-    if (!isReply && signature) {
-      return base + `<p></p><p>--<br>${signature.replace(/\n/g, '<br>')}</p>`
+    const sig = getSignatureForAccount(accountId)
+    if (!isReply && sig) {
+      return base + `<p></p><p>--<br>${sig.replace(/\n/g, '<br>')}</p>`
     }
     return base
   })()

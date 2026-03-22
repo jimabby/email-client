@@ -182,6 +182,12 @@ function startScheduler() {
   cron.schedule('0 9 * * *', runDailyReport);
   console.log('📅 Daily report scheduler started (runs at 9:00am)');
 
+  // Prune category cache daily at midnight
+  cron.schedule('0 0 * * *', () => {
+    store.pruneCategories(5000);
+    store.pruneSendQueue();
+  });
+
   // If app started after 9am and today's report hasn't run yet, send it now
   const now = new Date();
   if (now.getHours() >= 9) {
@@ -191,6 +197,9 @@ function startScheduler() {
       runDailyReport();
     }
   }
+
+  // Prune on startup too
+  store.pruneCategories(5000);
 }
 
 module.exports = { startScheduler, runDailyReport };

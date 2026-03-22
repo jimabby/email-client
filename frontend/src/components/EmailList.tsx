@@ -385,11 +385,27 @@ export function EmailList() {
   const selectedVisibleIds = selectedEmails.map(e => e.id)
   const selectedVisibleCount = selectedVisibleIds.length
 
+  const handleSelectAll = () => {
+    const allIds = prioritySorted.map(e => e.id)
+    const allSelected = allIds.length > 0 && allIds.every(id => selectedEmailIds.includes(id))
+    if (allSelected) {
+      clearEmailSelection()
+    } else {
+      // Select all visible emails
+      for (const id of allIds) {
+        if (!selectedEmailIds.includes(id)) {
+          toggleEmailSelection(id)
+        }
+      }
+    }
+  }
+
   const handleBulkDelete = async () => {
     if (!currentAccountId) return
     if (!selectedVisibleCount) { clearEmailSelection(); return }
+    if (!window.confirm(`Delete ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''}?`)) return
     try {
-      await Promise.all(selectedEmails.map(e => emailsApi.delete(currentAccountId, e.id, e.folder)))
+      await emailsApi.bulkDelete(currentAccountId, selectedVisibleIds, currentFolder)
       removeEmails(selectedVisibleIds)
       showNotification('success', `Deleted ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''}`)
     } catch { showNotification('error', 'Failed to delete some emails') }
@@ -399,7 +415,7 @@ export function EmailList() {
     if (!currentAccountId) return
     if (!selectedVisibleCount) { clearEmailSelection(); return }
     try {
-      await Promise.all(selectedEmails.map(e => emailsApi.markRead(currentAccountId, e.id, e.folder)))
+      await emailsApi.bulkMarkRead(currentAccountId, selectedVisibleIds, currentFolder)
       markEmailsRead(selectedVisibleIds)
     } catch { showNotification('error', 'Failed to mark some emails as read') }
   }
@@ -418,10 +434,20 @@ export function EmailList() {
     if (!selectedVisibleCount) { clearEmailSelection(); return }
     setShowMoveMenu(false)
     try {
-      await Promise.all(selectedEmails.map(e => emailsApi.move(currentAccountId, e.id, targetFolder, e.folder)))
+      await emailsApi.bulkMove(currentAccountId, selectedVisibleIds, targetFolder, currentFolder)
       removeEmails(selectedVisibleIds)
       showNotification('success', `Moved ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''} to ${targetFolder}`)
     } catch { showNotification('error', 'Failed to move some emails') }
+  }
+
+  const handleBulkArchive = async () => {
+    if (!currentAccountId) return
+    if (!selectedVisibleCount) { clearEmailSelection(); return }
+    try {
+      await emailsApi.bulkMove(currentAccountId, selectedVisibleIds, 'Archive', currentFolder)
+      removeEmails(selectedVisibleIds)
+      showNotification('success', `Archived ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''}`)
+    } catch { showNotification('error', 'Failed to archive some emails') }
   }
 
   const handleLoadMore = async () => {
@@ -585,6 +611,23 @@ export function EmailList() {
         {selectedEmailIds.length > 0 ? (
           /* Selection toolbar */
           <div className="flex-1 flex items-center gap-1">
+            <div
+              onClick={handleSelectAll}
+              className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-all mr-1
+                ${prioritySorted.length > 0 && prioritySorted.every(e => selectedEmailIds.includes(e.id))
+                  ? 'bg-[#0969da] border-[#0969da]'
+                  : 'border-[#d0d7de] dark:border-[#30363d]'
+                }`}
+              title={prioritySorted.every(e => selectedEmailIds.includes(e.id)) ? 'Deselect all' : 'Select all'}
+            >
+              {prioritySorted.length > 0 && prioritySorted.every(e => selectedEmailIds.includes(e.id)) ? (
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              ) : selectedEmailIds.length > 0 ? (
+                <div className="w-2 h-0.5 bg-[#0969da] rounded" />
+              ) : null}
+            </div>
             <span className="text-xs font-semibold text-[#1f2328] dark:text-[#e6edf3] mr-1">{selectedEmailIds.length} selected</span>
             <button onClick={handleBulkMarkRead} title="Mark as read"
               className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
@@ -613,6 +656,13 @@ export function EmailList() {
                 </div>
               )}
             </div>
+            <button onClick={handleBulkArchive} title="Archive"
+              className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                <path d="M2 4h12v1H2zM3 5v7a1 1 0 001 1h8a1 1 0 001-1V5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+                <path d="M6 8h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+              </svg>
+            </button>
             <button onClick={handleBulkDelete} title="Delete"
               className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3M2 4h12M5 4v9a1 1 0 001 1h4a1 1 0 001-1V4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
