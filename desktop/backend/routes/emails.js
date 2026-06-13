@@ -159,7 +159,11 @@ router.get('/:accountId/search', async (req, res) => {
 
   try {
     const service = getService(account.type);
-    const emails = await service.searchEmails(account, query, folder, limit);
+    // IMAP search is folder-scoped (account, query, folder, limit); Gmail/Outlook
+    // search across the whole mailbox (account, query, limit).
+    const emails = account.type === 'imap'
+      ? await service.searchEmails(account, query, folder, limit)
+      : await service.searchEmails(account, query, limit);
     res.json(emails);
   } catch (err) {
     console.error('Search emails error:', err);
@@ -503,6 +507,11 @@ router.post('/categorize', async (req, res) => {
   if (uncached.length) {
     let fresh = await categorizeEmailsWithAI(uncached);
     if (!fresh) fresh = categorizeEmails(uncached);
+    // The AI may omit some ids from its response. Fill any gaps with the
+    // rule-based categorizer so every requested email gets cached — otherwise
+    // the missing ones default to 'Primary' and are re-sent to the AI forever.
+    const missing = uncached.filter(e => !fresh[e.id]);
+    if (missing.length) Object.assign(fresh, categorizeEmails(missing));
     store.saveEmailCategories(fresh);
     Object.assign(cached, fresh);
   }

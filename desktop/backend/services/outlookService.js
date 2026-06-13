@@ -72,8 +72,7 @@ async function refreshAccessToken(account) {
 }
 
 async function graphRequest(accessToken, path, method = 'GET', body = null) {
-  const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
-
+  // Node 18+ ships a global fetch — no node-fetch dependency required.
   const headers = {
     'Authorization': `Bearer ${accessToken}`,
     'Content-Type': 'application/json'
