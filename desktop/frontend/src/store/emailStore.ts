@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Account, EmailSummary, EmailBody, Folder, ComposeData, EmailCategory } from '../types/email'
+import type { Account, EmailSummary, EmailBody, Folder, ComposeData, EmailCategory, SnoozeItem, Draft } from '../types/email'
 
 interface EmailStore {
   // Accounts
@@ -17,6 +17,9 @@ interface EmailStore {
   // Folders
   folders: Record<string, Folder[]>
   setFolders: (accountId: string, folders: Folder[]) => void
+  // Resolve the best "archive" destination for an account from its real folder
+  // list (Gmail IMAP has no "Archive" folder — it uses "[Gmail]/All Mail").
+  getArchiveFolder: (accountId: string) => string
 
   // Emails list
   emails: EmailSummary[]
@@ -101,6 +104,19 @@ interface EmailStore {
   contacts: string[]
   addContacts: (addresses: string[]) => void
 
+  // Snooze
+  snoozes: SnoozeItem[]
+  setSnoozes: (snoozes: SnoozeItem[]) => void
+  snoozeEmailLocal: (email: EmailSummary, until: string) => void
+  unsnoozeLocal: (emailId: string) => void
+
+  // Drafts (localStorage-persisted)
+  drafts: Draft[]
+  saveDraft: (draft: Draft) => void
+  deleteDraft: (id: string) => void
+  showDraftsModal: boolean
+  setShowDraftsModal: (show: boolean) => void
+
   // AI Chat
   isChatOpen: boolean
   toggleChat: () => void
@@ -127,6 +143,13 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
 
   folders: {},
   setFolders: (accountId, folders) => set((s) => ({ folders: { ...s.folders, [accountId]: folders } })),
+  getArchiveFolder: (accountId) => {
+    const fl = get().folders[accountId] || []
+    const match =
+      fl.find(f => /^archive$/i.test(f.name) || /archive/i.test(f.path)) ||
+      fl.find(f => /all mail/i.test(f.name) || /all mail/i.test(f.path))
+    return match?.path || 'Archive'
+  },
 
   emails: [],
   isLoadingEmails: false,
@@ -308,6 +331,40 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     localStorage.setItem('hermes-contacts', JSON.stringify(merged))
     return { contacts: merged }
   }),
+
+  // Snooze
+  snoozes: [],
+  setSnoozes: (snoozes) => set({ snoozes }),
+  snoozeEmailLocal: (email, until) => set((s) => ({
+    snoozes: [
+      ...s.snoozes.filter(sn => sn.emailId !== email.id),
+      { emailId: email.id, accountId: email.accountId, folder: email.folder, email, until, createdAt: new Date().toISOString() },
+    ],
+    // Hide it from the current list immediately
+    emails: s.emails.filter(e => e.id !== email.id),
+    selectedEmail: s.selectedEmail?.id === email.id ? null : s.selectedEmail,
+    selectedEmailBody: s.selectedEmail?.id === email.id ? null : s.selectedEmailBody,
+  })),
+  unsnoozeLocal: (emailId) => set((s) => ({
+    snoozes: s.snoozes.filter(sn => sn.emailId !== emailId),
+  })),
+
+  // Drafts — persisted in localStorage
+  drafts: (() => {
+    try { return JSON.parse(localStorage.getItem('hermes-drafts') || '[]') } catch { return [] }
+  })(),
+  saveDraft: (draft) => set((s) => {
+    const next = [draft, ...s.drafts.filter(d => d.id !== draft.id)]
+    localStorage.setItem('hermes-drafts', JSON.stringify(next))
+    return { drafts: next }
+  }),
+  deleteDraft: (id) => set((s) => {
+    const next = s.drafts.filter(d => d.id !== id)
+    localStorage.setItem('hermes-drafts', JSON.stringify(next))
+    return { drafts: next }
+  }),
+  showDraftsModal: false,
+  setShowDraftsModal: (show) => set({ showDraftsModal: show }),
 
   // AI Chat
   isChatOpen: false,

@@ -62,9 +62,11 @@ export function EmailViewer() {
     openCompose, removeEmail, showNotification,
     toggleStarLocal, markEmailUnread, setSelectedEmail,
     folders, currentAccountId, currentFolder, emails,
+    snoozeEmailLocal, unsnoozeLocal, getArchiveFolder,
   } = useEmailStore()
 
   const [showMoveMenu, setShowMoveMenu] = useState(false)
+  const [showSnoozeMenu, setShowSnoozeMenu] = useState(false)
   const [previewOpen, setPreviewOpen] = useState<Record<number, boolean>>({})
   const previewUrlRef = useRef<Record<number, string>>({})
   const [threadSummary, setThreadSummary] = useState<{ summary: string; keyPoints: string[]; actionItems: string[] } | null>(null)
@@ -164,7 +166,7 @@ export function EmailViewer() {
   const handleArchive = async () => {
     if (!selectedEmail) return
     try {
-      await emailsApi.move(selectedEmail.accountId, selectedEmail.id, 'Archive', selectedEmail.folder)
+      await emailsApi.move(selectedEmail.accountId, selectedEmail.id, getArchiveFolder(selectedEmail.accountId), selectedEmail.folder)
       removeEmail(selectedEmail.id)
       showNotification('success', 'Archived')
     } catch {
@@ -197,6 +199,50 @@ export function EmailViewer() {
       showNotification('success', 'Marked as unread')
     } catch {
       showNotification('error', 'Failed to mark as unread')
+    }
+  }
+
+  const snoozeOptions = (): { label: string; until: Date }[] => {
+    const now = new Date()
+    const at = (base: Date, h: number, m = 0) => { const d = new Date(base); d.setHours(h, m, 0, 0); return d }
+    const laterToday = new Date(now.getTime() + 3 * 60 * 60 * 1000)
+    let thisEvening = at(now, 18)
+    if (thisEvening.getTime() <= now.getTime() + 30 * 60 * 1000) thisEvening = at(new Date(now.getTime() + 86400000), 18)
+    const tomorrow = at(new Date(now.getTime() + 86400000), 8)
+    const weekend = (() => { const d = at(now, 8); const day = d.getDay(); const add = ((6 - day) + 7) % 7 || 7; d.setDate(d.getDate() + add); return d })()
+    const nextWeek = (() => { const d = at(now, 8); const day = d.getDay(); const add = ((1 - day) + 7) % 7 || 7; d.setDate(d.getDate() + add); return d })()
+    return [
+      { label: 'Later today', until: laterToday },
+      { label: 'This evening', until: thisEvening },
+      { label: 'Tomorrow', until: tomorrow },
+      { label: 'This weekend', until: weekend },
+      { label: 'Next week', until: nextWeek },
+    ]
+  }
+
+  const handleSnooze = async (until: Date) => {
+    if (!selectedEmail) return
+    setShowSnoozeMenu(false)
+    const email = selectedEmail
+    try {
+      await emailsApi.snooze(email.accountId, email.id, until.toISOString(), email, email.folder)
+      snoozeEmailLocal(email, until.toISOString())
+      showNotification('success', `Snoozed until ${until.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`)
+    } catch {
+      showNotification('error', 'Failed to snooze email')
+    }
+  }
+
+  const handleUnsnooze = async () => {
+    if (!selectedEmail) return
+    const email = selectedEmail
+    try {
+      await emailsApi.unsnooze(email.accountId, email.id)
+      unsnoozeLocal(email.id)
+      setSelectedEmail(null)
+      showNotification('success', 'Email un-snoozed')
+    } catch {
+      showNotification('error', 'Failed to un-snooze email')
     }
   }
 
@@ -331,9 +377,36 @@ export function EmailViewer() {
           </svg>
         </button>
 
+        {currentFolder === '__snoozed__' ? (
+          <button onClick={handleUnsnooze} title="Un-snooze" aria-label="Un-snooze email" className={iconBtn}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M6 7h4l-4 3.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </button>
+        ) : (
+          <div className="relative">
+            <button onClick={() => { setShowSnoozeMenu(v => !v); setShowMoveMenu(false) }} title="Snooze" aria-label="Snooze email" className={iconBtn}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M6 7h4l-4 3.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 1.5L2.5 3.5M11 1.5l2.5 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+            </button>
+            {showSnoozeMenu && (
+              <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl z-20 py-1.5 overflow-hidden">
+                <div className="px-3 py-1 text-[9px] font-bold text-[#818b98] dark:text-[#484f58] uppercase tracking-widest">Snooze until</div>
+                {snoozeOptions().map(opt => (
+                  <button
+                    key={opt.label}
+                    onClick={() => handleSnooze(opt.until)}
+                    className="w-full text-left px-3 py-2 text-xs text-[#24292f] dark:text-[#c9d1d9] hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors flex items-center justify-between gap-2"
+                  >
+                    <span>{opt.label}</span>
+                    <span className="text-[10px] text-[#818b98] dark:text-[#484f58]">{opt.until.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {movableFolders.length > 0 && (
           <div className="relative">
-            <button onClick={() => setShowMoveMenu(v => !v)} title="Move to folder" className={iconBtn}>
+            <button onClick={() => { setShowMoveMenu(v => !v); setShowSnoozeMenu(false) }} title="Move to folder" className={iconBtn}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
                 <path d="M8 8v4M6 10l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -396,7 +469,7 @@ export function EmailViewer() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto px-6 py-5" onClick={() => setShowMoveMenu(false)}>
+      <div className="flex-1 overflow-y-auto px-6 py-5" onClick={() => { setShowMoveMenu(false); setShowSnoozeMenu(false) }}>
         {threadSummary && (
           <div className="mb-5 border border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22] rounded-lg p-4">
             <div className="text-xs font-semibold text-[#656d76] dark:text-[#8b949e] mb-2">AI Thread Summary</div>

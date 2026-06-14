@@ -3,6 +3,16 @@ const router = express.Router();
 const { streamSuggestion, streamChat, listGeminiModels, rankEmailsWithAI, summarizeThreadWithAI } = require('../services/aiService');
 const store = require('../store');
 
+// An AI key is available if the user saved one, OR no explicit provider is set
+// (or it's Claude) and the ANTHROPIC_API_KEY env fallback exists. The env key
+// only works for Claude, so it must NOT satisfy an OpenAI/Gemini selection.
+function hasAiKey() {
+  const { provider, apiKey } = store.getAiSettings();
+  if (apiKey) return true;
+  if ((!provider || provider === 'claude') && process.env.ANTHROPIC_API_KEY) return true;
+  return false;
+}
+
 // GET /api/ai/settings — return current provider (no API key exposed)
 router.get('/settings', (req, res) => {
   const { provider, apiKey } = store.getAiSettings();
@@ -44,10 +54,7 @@ router.get('/gemini-models', async (req, res) => {
 
 // POST /api/ai/suggest
 router.post('/suggest', async (req, res) => {
-  const { provider, apiKey } = store.getAiSettings();
-  const hasKey = apiKey || process.env.ANTHROPIC_API_KEY;
-
-  if (!hasKey) {
+  if (!hasAiKey()) {
     return res.status(400).json({
       error: 'No AI configured. Open Settings → AI and enter your API key.'
     });
@@ -64,10 +71,7 @@ router.post('/suggest', async (req, res) => {
 
 // POST /api/ai/chat
 router.post('/chat', async (req, res) => {
-  const { provider, apiKey } = store.getAiSettings();
-  const hasKey = apiKey || process.env.ANTHROPIC_API_KEY;
-
-  if (!hasKey) {
+  if (!hasAiKey()) {
     return res.status(400).json({
       error: 'No AI configured. Open Settings → AI and enter your API key.'
     });
@@ -83,10 +87,7 @@ router.post('/chat', async (req, res) => {
 
 // POST /api/ai/priority
 router.post('/priority', async (req, res) => {
-  const { provider, apiKey } = store.getAiSettings();
-  const hasKey = apiKey || process.env.ANTHROPIC_API_KEY;
-
-  if (!hasKey) {
+  if (!hasAiKey()) {
     return res.status(400).json({
       error: 'No AI configured. Open Settings → AI and enter your API key.'
     });
@@ -107,10 +108,7 @@ router.post('/priority', async (req, res) => {
 
 // POST /api/ai/thread-summary
 router.post('/thread-summary', async (req, res) => {
-  const { provider, apiKey } = store.getAiSettings();
-  const hasKey = apiKey || process.env.ANTHROPIC_API_KEY;
-
-  if (!hasKey) {
+  if (!hasAiKey()) {
     return res.status(400).json({
       error: 'No AI configured. Open Settings → AI and enter your API key.'
     });

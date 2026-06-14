@@ -53,4 +53,25 @@ export interface ComposeData {
   body: string;
   accountId: string;
   replyTo?: EmailBody & { id: string };
+  draftId?: string;
+}
+
+export interface SnoozeItem {
+  emailId: string;
+  accountId: string;
+  folder: string;
+  email: EmailSummary | null;
+  until: string;
+  createdAt: string;
+}
+
+export interface Draft {
+  id: string;
+  accountId: string;
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  body: string;   // HTML
+  savedAt: string;
 }

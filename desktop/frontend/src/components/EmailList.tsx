@@ -184,6 +184,7 @@ export function EmailList() {
     folders, showNotification,
     accounts, setCurrentAccount, setCurrentFolder, setActiveCategory,
     threadView, toggleThreadView,
+    snoozes, getArchiveFolder,
   } = useEmailStore()
 
   const [searchInput, setSearchInput] = useState('')
@@ -270,7 +271,7 @@ export function EmailList() {
   }
 
   const handleRefresh = useCallback(async () => {
-    if (!currentAccountId || currentFolder === '__starred__') return
+    if (!currentAccountId || currentFolder === '__starred__' || currentFolder === '__snoozed__') return
     setLoadingEmails(true)
     try {
       const { emails: fetched, nextToken: nt } = await emailsApi.list(currentAccountId, currentFolder)
@@ -444,7 +445,7 @@ export function EmailList() {
     if (!currentAccountId) return
     if (!selectedVisibleCount) { clearEmailSelection(); return }
     try {
-      await emailsApi.bulkMove(currentAccountId, selectedVisibleIds, 'Archive', currentFolder)
+      await emailsApi.bulkMove(currentAccountId, selectedVisibleIds, getArchiveFolder(currentAccountId), currentFolder)
       removeEmails(selectedVisibleIds)
       showNotification('success', `Archived ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''}`)
     } catch { showNotification('error', 'Failed to archive some emails') }
@@ -463,6 +464,21 @@ export function EmailList() {
 
   const isInbox = currentFolder === 'INBOX'
   const isStarred = currentFolder === '__starred__'
+  const isSnoozed = currentFolder === '__snoozed__'
+
+  // Emails snoozed for the current account are hidden everywhere except the
+  // Snoozed view (the message physically stays in its folder until it wakes).
+  const snoozedIdSet = useMemo(
+    () => new Set(snoozes.filter(s => s.accountId === currentAccountId).map(s => s.emailId)),
+    [snoozes, currentAccountId]
+  )
+  const snoozedEmails = useMemo(
+    () => snoozes
+      .filter(s => s.accountId === currentAccountId && s.email)
+      .sort((a, b) => Date.parse(a.until) - Date.parse(b.until))
+      .map(s => s.email as EmailSummary),
+    [snoozes, currentAccountId]
+  )
 
   const persistSavedSearches = (next: typeof savedSearches) => {
     setSavedSearches(next)
@@ -516,12 +532,16 @@ export function EmailList() {
 
   // Determine which list to show
   const baseList = searchResults !== null ? searchResults
+    : isSnoozed ? snoozedEmails
     : isStarred ? emails.filter(e => e.starred)
     : emails
 
+  // Hide snoozed messages from every other view
+  const unsnoozedBase = isSnoozed ? baseList : baseList.filter(e => !snoozedIdSet.has(e.id))
+
   const visibleEmails = isInbox && !searchResults && activeCategory !== 'All'
-    ? baseList.filter(e => emailCategories[e.id] === activeCategory)
-    : baseList
+    ? unsnoozedBase.filter(e => emailCategories[e.id] === activeCategory)
+    : unsnoozedBase
 
   useEffect(() => {
     if (!priorityMode) return
@@ -600,6 +620,7 @@ export function EmailList() {
   }
 
   const folderLabel = isStarred ? 'Starred'
+    : isSnoozed ? 'Snoozed'
     : currentFolder === 'INBOX' ? 'Inbox'
     : currentFolder === 'SENT' ? 'Sent'
     : currentFolder
@@ -775,13 +796,13 @@ export function EmailList() {
             ) : (
               <span className="text-[10px] text-[#afb8c1] dark:text-[#484f58] tabular-nums">{visibleCount}</span>
             )}
-            {currentAccountId && !isStarred && (
+            {currentAccountId && !isStarred && !isSnoozed && (
               <button onClick={() => setShowSearch(true)} title="Search"
                 className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
               </button>
             )}
-            {currentAccountId && !isStarred && (
+            {currentAccountId && !isStarred && !isSnoozed && (
               <button onClick={handleRefresh} title="Refresh" aria-label="Refresh emails"
                 className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className={isLoadingEmails ? 'animate-spin' : ''}><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -856,6 +877,8 @@ export function EmailList() {
                 ? 'No results found'
                 : !currentAccountId
                 ? 'No account selected'
+                : isSnoozed
+                ? 'Nothing snoozed'
                 : isStarred
                 ? 'No starred emails'
                 : activeCategory !== 'All'
@@ -868,6 +891,8 @@ export function EmailList() {
                 ? 'Try a different search term or check another folder'
                 : !currentAccountId
                 ? 'Add an account in Settings to get started'
+                : isSnoozed
+                ? 'Snooze an email to have it resurface here later'
                 : isStarred
                 ? 'Star emails to find them quickly here'
                 : activeCategory !== 'All'
@@ -934,7 +959,7 @@ export function EmailList() {
             )}
 
             {/* Load more */}
-            {nextToken && !searchResults && !isStarred && (
+            {nextToken && !searchResults && !isStarred && !isSnoozed && (
               <div className="px-4 py-4 flex justify-center">
                 <button
                   onClick={handleLoadMore}

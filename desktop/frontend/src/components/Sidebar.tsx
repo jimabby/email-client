@@ -7,6 +7,7 @@ const SentIcon   = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="n
 const DraftsIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6l-3-4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M10 2v4h4M6 9h4M6 11.5h2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
 const TrashIcon  = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
 const SpamIcon   = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+const SnoozeIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M6 7h4l-4 3.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 1.5L2.5 3.5M11 1.5l2.5 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
 const FolderIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
 const StarIcon   = ({ filled }: { filled?: boolean }) => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? '#f59e0b' : 'none'}>
@@ -42,6 +43,7 @@ export function Sidebar() {
     folders, setFolders,
     emails, setEmails, setLoadingEmails, setNextToken,
     openCompose, setShowAccountModal,
+    snoozes, drafts, setShowDraftsModal,
   } = useEmailStore()
 
   useEffect(() => {
@@ -89,6 +91,12 @@ export function Sidebar() {
 
   const starredCount = (accountId: string) =>
     emails.filter(e => e.accountId === accountId && e.starred).length
+
+  const snoozedCount = (accountId: string) =>
+    snoozes.filter(s => s.accountId === accountId).length
+
+  const draftsCount = (accountId: string) =>
+    drafts.filter(d => d.accountId === accountId).length
 
   return (
     <aside className="flex flex-col h-full bg-[#f6f8fa] dark:bg-[#161b22] border-r border-[#d0d7de] dark:border-[#30363d] w-[var(--sidebar-width,13rem)] flex-shrink-0" role="navigation" aria-label="Email accounts and folders">
@@ -172,6 +180,51 @@ export function Sidebar() {
                         </span>
                       )}
                     </button>
+
+                    {/* Snoozed virtual folder */}
+                    {(() => {
+                      const snoozed = snoozedCount(account.id)
+                      const active = currentFolder === '__snoozed__'
+                      return (
+                        <button
+                          onClick={() => { setCurrentAccount(account.id); setCurrentFolder('__snoozed__') }}
+                          className={`w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors mb-0.5
+                            ${active
+                              ? 'bg-[rgba(245,158,11,0.12)] text-[#b45309] dark:text-[#f59e0b] font-semibold'
+                              : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+                            }`}
+                        >
+                          <span className={active ? 'text-[#b45309] dark:text-[#f59e0b]' : 'text-[#818b98] dark:text-[#484f58]'}>
+                            <SnoozeIcon />
+                          </span>
+                          <span className="flex-1">Snoozed</span>
+                          {snoozed > 0 && (
+                            <span className="text-[9px] font-bold bg-[#818b98] dark:bg-[#484f58] text-white rounded-full px-1.5 py-0.5 leading-none">
+                              {snoozed > 99 ? '99+' : snoozed}
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })()}
+
+                    {/* Drafts (opens modal) */}
+                    {(() => {
+                      const draftN = draftsCount(account.id)
+                      return (
+                        <button
+                          onClick={() => { setCurrentAccount(account.id); setShowDraftsModal(true) }}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors mb-0.5 text-[#656d76] dark:text-[#8b949e] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] hover:text-[#1f2328] dark:hover:text-[#e6edf3]"
+                        >
+                          <span className="text-[#818b98] dark:text-[#484f58]"><DraftsIcon /></span>
+                          <span className="flex-1">Drafts</span>
+                          {draftN > 0 && (
+                            <span className="text-[9px] font-bold bg-[#818b98] dark:bg-[#484f58] text-white rounded-full px-1.5 py-0.5 leading-none">
+                              {draftN > 99 ? '99+' : draftN}
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })()}
 
                     {accountFolders.map(folder => {
                       const isActiveFolder = currentFolder === folder.path

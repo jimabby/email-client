@@ -52,4 +52,5 @@ app.listen(PORT, () => {
   console.log(`   Outlook OAuth:  ${process.env.OUTLOOK_CLIENT_ID ? '✅ configured' : '⚠️  not configured'}`);
   require('./services/reportService').startScheduler();
   require('./services/sendQueueService').startScheduler();
+  require('./services/snoozeService').startScheduler();
 });

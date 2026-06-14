@@ -129,6 +129,21 @@ router.get('/search-attachments-all', async (req, res) => {
   }
 });
 
+// GET /api/emails/snoozed — list all active (not-yet-due) snoozes across accounts.
+// NOTE: must be declared before the '/:accountId' wildcard below (see daily-report).
+router.get('/snoozed', (req, res) => {
+  res.json(store.getSnoozes());
+});
+
+// GET /api/emails/daily-report — one-shot: returns and clears the pending report
+// NOTE: must be declared before the '/:accountId' wildcard below, otherwise Express
+// matches it as an account id ("daily-report") and always returns 404.
+router.get('/daily-report', (req, res) => {
+  const report = store.getPendingReport();
+  if (report) store.clearPendingReport();
+  res.json(report || null);
+});
+
 // GET /api/emails/:accountId?folder=INBOX&limit=50&pageToken=...
 router.get('/:accountId', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
@@ -408,6 +423,36 @@ router.post('/:accountId/message/:emailId/move', async (req, res) => {
   }
 });
 
+// POST /api/emails/:accountId/message/:emailId/snooze
+// Body: { until: ISO-timestamp, email?: EmailSummary }
+router.post('/:accountId/message/:emailId/snooze', (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const { until, email } = req.body;
+  if (!until || Number.isNaN(new Date(until).getTime()) || new Date(until).getTime() <= Date.now()) {
+    return res.status(400).json({ error: 'until must be a future timestamp' });
+  }
+
+  const item = store.addSnooze({
+    emailId: req.params.emailId,
+    accountId: account.id,
+    folder: req.query.folder || email?.folder || 'INBOX',
+    email: email || null,
+    until: new Date(until).toISOString(),
+    createdAt: new Date().toISOString(),
+  });
+  res.json({ success: true, snooze: item });
+});
+
+// DELETE /api/emails/:accountId/message/:emailId/snooze — wake an email early
+router.delete('/:accountId/message/:emailId/snooze', (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  store.removeSnooze(req.params.emailId);
+  res.json({ success: true });
+});
+
 // POST /api/emails/:accountId/bulk/delete
 router.post('/:accountId/bulk/delete', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
@@ -519,13 +564,6 @@ router.post('/categorize', async (req, res) => {
   const result = {};
   for (const e of emails) result[e.id] = cached[e.id] || 'Primary';
   res.json({ categories: result });
-});
-
-// GET /api/emails/daily-report — one-shot: returns and clears the pending report
-router.get('/daily-report', (req, res) => {
-  const report = store.getPendingReport();
-  if (report) store.clearPendingReport();
-  res.json(report || null);
 });
 
 // POST /api/emails/trigger-report — force-run the daily report immediately (for testing)

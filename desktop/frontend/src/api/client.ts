@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { Account, EmailSummary, EmailBody, Folder } from '../types/email'
+import type { Account, EmailSummary, EmailBody, Folder, SnoozeItem } from '../types/email'
 
 const api = axios.create({
   baseURL: '/api',
@@ -123,6 +123,20 @@ export const emailsApi = {
 
   getDailyReport: () =>
     api.get<{ subject: string; html: string; text: string; date: string } | null>('/emails/daily-report').then(r => r.data),
+
+  // ─── Snooze ──────────────────────────────────────────────────────────────
+  snooze: (accountId: string, emailId: string, until: string, email: EmailSummary, folder?: string) =>
+    api.post<{ success: boolean; snooze: SnoozeItem }>(
+      `/emails/${accountId}/message/${emailId}/snooze`,
+      { until, email },
+      { params: folder ? { folder } : {} }
+    ).then(r => r.data),
+
+  unsnooze: (accountId: string, emailId: string) =>
+    api.delete(`/emails/${accountId}/message/${emailId}/snooze`).then(r => r.data),
+
+  listSnoozed: () =>
+    api.get<SnoozeItem[]>('/emails/snoozed').then(r => r.data),
 }
 
 // ─── AI Settings ──────────────────────────────────────────────────────────────

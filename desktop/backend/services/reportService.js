@@ -186,6 +186,7 @@ function startScheduler() {
   cron.schedule('0 0 * * *', () => {
     store.pruneCategories(5000);
     store.pruneSendQueue();
+    store.pruneSnoozes();
   });
 
   // If app started after 9am and today's report hasn't run yet, send it now

@@ -180,6 +180,48 @@ module.exports = {
     if (store.sendQueue.length !== before) saveStore(store);
   },
 
+  // ─── Snooze ────────────────────────────────────────────────────────────────
+  // A snooze hides an email from the inbox until `until`, then a scheduler
+  // removes it so the message resurfaces. Each entry keeps the full email
+  // summary so the "Snoozed" view can render without re-fetching.
+  getSnoozes() {
+    if (!Array.isArray(store.snoozes)) store.snoozes = [];
+    return store.snoozes;
+  },
+
+  addSnooze(item) {
+    if (!Array.isArray(store.snoozes)) store.snoozes = [];
+    const idx = store.snoozes.findIndex(s => s.emailId === item.emailId);
+    if (idx === -1) store.snoozes.push(item);
+    else store.snoozes[idx] = item;
+    saveStore(store);
+    return item;
+  },
+
+  removeSnooze(emailId) {
+    if (!Array.isArray(store.snoozes)) return false;
+    const idx = store.snoozes.findIndex(s => s.emailId === emailId);
+    if (idx === -1) return false;
+    store.snoozes.splice(idx, 1);
+    saveStore(store);
+    return true;
+  },
+
+  // Snoozes whose wake time has passed
+  getDueSnoozes(now = Date.now()) {
+    if (!Array.isArray(store.snoozes)) return [];
+    return store.snoozes.filter(s => new Date(s.until).getTime() <= now);
+  },
+
+  // Drop snoozes for accounts that no longer exist
+  pruneSnoozes() {
+    if (!Array.isArray(store.snoozes)) return;
+    const validIds = new Set(store.accounts.map(a => a.id));
+    const before = store.snoozes.length;
+    store.snoozes = store.snoozes.filter(s => validIds.has(s.accountId));
+    if (store.snoozes.length !== before) saveStore(store);
+  },
+
   // Limit categories cache to prevent unbounded growth
   pruneCategories(maxEntries = 5000) {
     if (!store.categories) return;

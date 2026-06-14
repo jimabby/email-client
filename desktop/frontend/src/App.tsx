@@ -10,6 +10,7 @@ import { accountsApi, aiApi, emailsApi } from './api/client'
 const ComposeModal = lazy(() => import('./components/ComposeModal').then(m => ({ default: m.ComposeModal })))
 const AccountModal = lazy(() => import('./components/AccountModal').then(m => ({ default: m.AccountModal })))
 const DailyReportModal = lazy(() => import('./components/DailyReportModal').then(m => ({ default: m.DailyReportModal })))
+const DraftsModal = lazy(() => import('./components/DraftsModal').then(m => ({ default: m.DraftsModal })))
 
 function Notification() {
   const { notification, clearNotification } = useEmailStore()
@@ -294,10 +295,11 @@ function useKeyboardShortcuts() {
         return
       }
 
-      // e — Archive (move to Archive)
+      // e — Archive (move to the account's resolved archive folder)
       if (e.key === 'e' && selectedEmail && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
-        emailsApi.move(selectedEmail.accountId, selectedEmail.id, 'Archive', selectedEmail.folder).then(() => {
+        const archiveFolder = useEmailStore.getState().getArchiveFolder(selectedEmail.accountId)
+        emailsApi.move(selectedEmail.accountId, selectedEmail.id, archiveFolder, selectedEmail.folder).then(() => {
           useEmailStore.getState().removeEmail(selectedEmail.id)
           useEmailStore.getState().showNotification('success', 'Archived')
         }).catch(() => {
@@ -320,7 +322,7 @@ function useKeyboardShortcuts() {
 }
 
 export default function App() {
-  const { isComposeOpen, showAccountModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport, isChatOpen } = useEmailStore()
+  const { isComposeOpen, showAccountModal, showDraftsModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport, setSnoozes, isChatOpen } = useEmailStore()
   useKeyboardShortcuts()
   const [showShortcuts, setShowShortcuts] = useState(false)
   const appLayoutVars = { '--sidebar-width': '13rem' } as CSSProperties
@@ -393,7 +395,15 @@ export default function App() {
     }
     checkReport()
     const reportPoll = setInterval(checkReport, 30_000)
-    return () => clearInterval(reportPoll)
+
+    // Keep the snoozed set in sync (the backend wakes due snoozes on a timer)
+    const refreshSnoozes = () => {
+      emailsApi.listSnoozed().then(setSnoozes).catch(() => {})
+    }
+    refreshSnoozes()
+    const snoozePoll = setInterval(refreshSnoozes, 30_000)
+
+    return () => { clearInterval(reportPoll); clearInterval(snoozePoll) }
   }, [])
 
   useEffect(() => {
@@ -460,6 +470,7 @@ export default function App() {
         <Suspense fallback={null}>
           {isComposeOpen && <ComposeModal />}
           {showAccountModal && <AccountModal />}
+          {showDraftsModal && <DraftsModal />}
           <DailyReportModal />
         </Suspense>
         <Notification />

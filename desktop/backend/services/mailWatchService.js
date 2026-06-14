@@ -178,4 +178,7 @@ module.exports = {
   ensureWatch,
   stopWatch,
   subscribe,
+  // Allow other services (e.g. the snooze scheduler) to push a synthetic
+  // new-mail event so connected SSE clients refresh the inbox.
+  notifyNewMail: emitNewMail,
 };

@@ -159,9 +159,16 @@ export function ComposeModal() {
   const {
     composeData, accounts, closeCompose, showNotification,
     aiProvider, aiConfigured, contacts, addContacts, getSignatureForAccount,
+    saveDraft, deleteDraft,
   } = useEmailStore()
 
   const isReply = !!composeData?.replyTo
+
+  // Stable id for this compose session so repeated saves update one draft.
+  const draftIdRef = useRef(
+    composeData?.draftId ||
+    (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  )
 
   const [to, setTo]           = useState(composeData?.to || '')
   const [cc, setCc]           = useState(composeData?.cc || '')
@@ -286,12 +293,44 @@ export function ComposeModal() {
       } else {
         showNotification('success', 'Email sent!')
       }
+      deleteDraft(draftIdRef.current) // clear any saved draft for this compose
       closeCompose()
     } catch (err: unknown) {
       showNotification('error', err instanceof Error ? err.message : 'Failed to send email')
     } finally { setIsSending(false) }
   }
   sendRef.current = handleSend
+
+  // ─── Drafts ──────────────────────────────────────────────────────────────
+  const hasDraftContent = () =>
+    !!(to.trim() || cc.trim() || bcc.trim() || subject.trim() || (editor?.getText() || '').trim())
+
+  const buildDraft = () => ({
+    id: draftIdRef.current,
+    accountId,
+    to, cc, bcc, subject,
+    body: editor?.getHTML() || '',
+    savedAt: new Date().toISOString(),
+  })
+
+  const handleSaveDraft = () => {
+    if (!hasDraftContent()) { closeCompose(); return }
+    saveDraft(buildDraft())
+    showNotification('success', 'Draft saved')
+    closeCompose()
+  }
+
+  // Close via the header "X": keep work by auto-saving if there's content.
+  const handleClose = () => {
+    if (hasDraftContent()) saveDraft(buildDraft())
+    closeCompose()
+  }
+
+  // Discard (trash): drop any saved draft for this compose and close.
+  const handleDiscard = () => {
+    deleteDraft(draftIdRef.current)
+    closeCompose()
+  }
 
   const handleAiSuggest = useCallback(async () => {
     if (isAiLoading) { abortRef.current?.abort(); setIsAiLoading(false); return }
@@ -580,7 +619,11 @@ export function ComposeModal() {
       >
         AI Assist
       </button>
-      <button onClick={closeCompose} title="Discard"
+      <button onClick={handleSaveDraft} title="Save draft"
+        className="px-2.5 py-2 rounded-md text-[11px] font-semibold text-[#656d76] dark:text-[#8b949e] border border-[#d0d7de] dark:border-[#30363d] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors">
+        Save draft
+      </button>
+      <button onClick={handleDiscard} title="Discard"
         className="p-2 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
       </button>
@@ -598,7 +641,7 @@ export function ComposeModal() {
             : <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M4 10L10 4M10 10H4M10 4v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
           }
         </button>
-        <button onClick={closeCompose} className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5" title="Close">
+        <button onClick={handleClose} className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5" title="Close">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         </button>
       </div>
