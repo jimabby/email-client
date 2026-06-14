@@ -1,6 +1,7 @@
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const nodemailer = require('nodemailer');
+const MailComposer = require('nodemailer/lib/mail-composer');
 
 // ─── IMAP Connection Pool ─────────────────────────────────────────────────────
 // One persistent connection per account. All operations are serialized through
@@ -273,6 +274,56 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
   });
 }
 
+// Build a raw RFC822 message buffer from a draft for IMAP APPEND.
+function buildMime(account, { to, cc, bcc, subject, text, html, attachments }) {
+  return new Promise((resolve, reject) => {
+    const mail = new MailComposer({
+      from: `${account.name || account.email} <${account.email}>`,
+      to: to || undefined,
+      cc: cc || undefined,
+      bcc: bcc || undefined,
+      subject: subject || '',
+      text: text || undefined,
+      html: html || undefined,
+      attachments: (attachments || []).map(a => ({
+        filename: a.filename,
+        content: Buffer.from(a.content, 'base64'),
+        contentType: a.contentType
+      }))
+    });
+    mail.compile().build((err, message) => (err ? reject(err) : resolve(message)));
+  });
+}
+
+// Locate the account's Drafts mailbox (prefer the \Drafts special-use flag).
+async function _findDraftsMailbox(client) {
+  try {
+    const list = await client.list();
+    const special = list.find(f => f.specialUse === '\\Drafts');
+    if (special) return special.path;
+    const byName = list.find(f => /drafts/i.test(f.path) || /drafts/i.test(f.name));
+    if (byName) return byName.path;
+  } catch { /* fall through */ }
+  return 'Drafts';
+}
+
+async function saveDraft(account, draft) {
+  const raw = await buildMime(account, draft);
+  return getConn(account).run(async (client) => {
+    const mailbox = await _findDraftsMailbox(client);
+    const res = await client.append(mailbox, raw, ['\\Draft', '\\Seen']);
+    return { type: 'imap', uid: res?.uid || null, mailbox };
+  });
+}
+
+async function deleteDraft(account, ref) {
+  if (!ref?.uid) return;
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(ref.mailbox || 'Drafts');
+    await client.messageDelete(String(ref.uid), { uid: true });
+  });
+}
+
 async function markAsRead(account, uid, folder = 'INBOX') {
   return getConn(account).run(async (client) => {
     await client.mailboxOpen(folder);
@@ -338,6 +389,8 @@ module.exports = {
   fetchEmailBody,
   getFolders,
   sendEmail,
+  saveDraft,
+  deleteDraft,
   markAsRead,
   markAsUnread,
   toggleStar,

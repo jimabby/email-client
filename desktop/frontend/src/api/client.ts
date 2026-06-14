@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { Account, EmailSummary, EmailBody, Folder, SnoozeItem } from '../types/email'
+import type { Account, EmailSummary, EmailBody, Folder, SnoozeItem, ServerDraftRef } from '../types/email'
 
 const api = axios.create({
   baseURL: '/api',
@@ -137,6 +137,21 @@ export const emailsApi = {
 
   listSnoozed: () =>
     api.get<SnoozeItem[]>('/emails/snoozed').then(r => r.data),
+
+  // ─── Server-synced drafts ────────────────────────────────────────────────
+  saveServerDraft: (accountId: string, data: {
+    to?: string
+    cc?: string
+    bcc?: string
+    subject?: string
+    text?: string
+    html?: string
+    attachments?: { filename: string; contentType: string; content: string }[]
+    replaceRef?: ServerDraftRef | null
+  }) => api.post<{ success: boolean; ref: ServerDraftRef }>(`/emails/${accountId}/drafts`, data).then(r => r.data),
+
+  deleteServerDraft: (accountId: string, ref: ServerDraftRef) =>
+    api.delete(`/emails/${accountId}/drafts`, { data: { ref } }).then(r => r.data),
 }
 
 // ─── AI Settings ──────────────────────────────────────────────────────────────

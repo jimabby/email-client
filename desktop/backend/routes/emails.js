@@ -284,6 +284,47 @@ router.post('/:accountId/send', async (req, res) => {
   }
 });
 
+// POST /api/emails/:accountId/drafts — save a draft to the provider's Drafts folder.
+// Body: { to, cc, bcc, subject, text, html, attachments, replaceRef? }
+// Returns { ref } identifying the server draft so a later save can replace it.
+router.post('/:accountId/drafts', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const { to, cc, bcc, subject, text, html, attachments, replaceRef } = req.body;
+  try {
+    const service = getService(account.type);
+    if (!service.saveDraft) return res.status(400).json({ error: 'Drafts are not supported for this account' });
+
+    // Remove the previous server copy (best-effort) so re-saving doesn't pile up.
+    if (replaceRef && service.deleteDraft) {
+      try { await service.deleteDraft(account, replaceRef); } catch { /* ignore */ }
+    }
+
+    const ref = await service.saveDraft(account, { to, cc, bcc, subject, text, html, attachments });
+    res.json({ success: true, ref });
+  } catch (err) {
+    console.error('Save draft error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/emails/:accountId/drafts — remove a previously saved server draft.
+// Body: { ref }
+router.delete('/:accountId/drafts', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const { ref } = req.body || {};
+  try {
+    const service = getService(account.type);
+    if (ref && service.deleteDraft) await service.deleteDraft(account, ref);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/emails/:accountId/search-attachments?q=...&type=...&folder=INBOX&limit=50
 router.get('/:accountId/search-attachments', async (req, res) => {
   const account = store.getAccount(req.params.accountId);

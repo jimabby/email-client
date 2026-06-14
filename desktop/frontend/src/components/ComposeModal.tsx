@@ -293,7 +293,10 @@ export function ComposeModal() {
       } else {
         showNotification('success', 'Email sent!')
       }
-      deleteDraft(draftIdRef.current) // clear any saved draft for this compose
+      // Clear any saved draft for this compose (local + server copy).
+      const sentRef = useEmailStore.getState().drafts.find(d => d.id === draftIdRef.current)?.serverRef
+      deleteDraft(draftIdRef.current)
+      if (sentRef) emailsApi.deleteServerDraft(accountId, sentRef).catch(() => {})
       closeCompose()
     } catch (err: unknown) {
       showNotification('error', err instanceof Error ? err.message : 'Failed to send email')
@@ -305,30 +308,53 @@ export function ComposeModal() {
   const hasDraftContent = () =>
     !!(to.trim() || cc.trim() || bcc.trim() || subject.trim() || (editor?.getText() || '').trim())
 
-  const buildDraft = () => ({
+  const existingServerRef = () =>
+    useEmailStore.getState().drafts.find(d => d.id === draftIdRef.current)?.serverRef ?? null
+
+  const buildDraft = (serverRef = existingServerRef()) => ({
     id: draftIdRef.current,
     accountId,
     to, cc, bcc, subject,
     body: editor?.getHTML() || '',
     savedAt: new Date().toISOString(),
+    serverRef,
   })
 
-  const handleSaveDraft = () => {
+  // Explicit "Save draft": persist locally AND sync to the provider's Drafts
+  // folder so it shows up in Gmail/Outlook and on other devices.
+  const handleSaveDraft = async () => {
     if (!hasDraftContent()) { closeCompose(); return }
-    saveDraft(buildDraft())
-    showNotification('success', 'Draft saved')
+    const prevRef = existingServerRef()
+    try {
+      const attachmentData = attachments.length ? await Promise.all(attachments.map(readFileAsBase64)) : undefined
+      const { ref } = await emailsApi.saveServerDraft(accountId, {
+        to, cc, bcc, subject,
+        html: editor?.getHTML() || '', text: editor?.getText() || '',
+        attachments: attachmentData,
+        replaceRef: prevRef,
+      })
+      saveDraft(buildDraft(ref))
+      showNotification('success', 'Draft saved')
+    } catch {
+      // Provider sync failed — keep a local copy so work isn't lost.
+      saveDraft(buildDraft(prevRef))
+      showNotification('error', 'Draft saved locally (sync to mail server failed)')
+    }
     closeCompose()
   }
 
-  // Close via the header "X": keep work by auto-saving if there's content.
+  // Close via the header "X": keep work by auto-saving locally if there's
+  // content (no server round-trip, to avoid piling up server drafts).
   const handleClose = () => {
     if (hasDraftContent()) saveDraft(buildDraft())
     closeCompose()
   }
 
-  // Discard (trash): drop any saved draft for this compose and close.
+  // Discard (trash): drop the local draft and any server copy, then close.
   const handleDiscard = () => {
+    const ref = existingServerRef()
     deleteDraft(draftIdRef.current)
+    if (ref) emailsApi.deleteServerDraft(accountId, ref).catch(() => {})
     closeCompose()
   }
 

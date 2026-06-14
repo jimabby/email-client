@@ -232,6 +232,33 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
   });
 }
 
+// Creating a message (POST /me/messages) saves it as a draft in the Drafts folder.
+async function saveDraft(account, { to, cc, bcc, subject, text, html, attachments }) {
+  const toArray = Array.isArray(to) ? to : (to ? [to] : []);
+  const created = await graphRequestWithRefresh(account, '/me/messages', 'POST', {
+    subject: subject || '',
+    body: {
+      contentType: html ? 'HTML' : 'Text',
+      content: html || text || ''
+    },
+    toRecipients: toArray.filter(Boolean).map(addr => ({ emailAddress: { address: addr } })),
+    ccRecipients: cc ? [{ emailAddress: { address: cc } }] : [],
+    bccRecipients: bcc ? [{ emailAddress: { address: bcc } }] : [],
+    attachments: (attachments || []).map(a => ({
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: a.filename,
+      contentBytes: a.content,
+      contentType: a.contentType
+    }))
+  });
+  return { type: 'outlook', id: created?.id || null };
+}
+
+async function deleteDraft(account, ref) {
+  if (!ref?.id) return;
+  await graphRequestWithRefresh(account, `/me/messages/${ref.id}`, 'DELETE');
+}
+
 async function markAsRead(account, outlookId) {
   await graphRequestWithRefresh(account, `/me/messages/${outlookId}`, 'PATCH', { isRead: true });
 }
@@ -260,6 +287,8 @@ module.exports = {
   fetchEmailBody,
   getFolders,
   sendEmail,
+  saveDraft,
+  deleteDraft,
   markAsRead,
   markAsUnread,
   toggleStar,

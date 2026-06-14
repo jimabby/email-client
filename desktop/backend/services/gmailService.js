@@ -242,16 +242,16 @@ function wrapBase64(b64) {
   return b64.match(/.{1,76}/g)?.join('\r\n') || b64;
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments }) {
-  const gmail = getGmailClient(account);
+// Build a base64url-encoded RFC822 message for the Gmail send/draft endpoints.
+function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachments }) {
   const hasAttachments = attachments && attachments.length > 0;
 
   const headers = [
     `From: ${account.name || account.email} <${account.email}>`,
-    `To: ${Array.isArray(to) ? to.join(', ') : to}`,
+    to  ? `To: ${Array.isArray(to) ? to.join(', ') : to}` : null,
     cc  ? `Cc: ${cc}`   : null,
     bcc ? `Bcc: ${bcc}` : null,
-    `Subject: ${subject}`,
+    `Subject: ${subject || ''}`,
     'MIME-Version: 1.0',
   ].filter(Boolean);
 
@@ -295,13 +295,32 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
     ].join('\r\n');
   }
 
-  const encodedMessage = Buffer.from(rawMessage).toString('base64')
+  return Buffer.from(rawMessage).toString('base64')
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
+async function sendEmail(account, draft) {
+  const gmail = getGmailClient(account);
   await gmail.users.messages.send({
     userId: 'me',
-    requestBody: { raw: encodedMessage }
+    requestBody: { raw: buildRawMessage(account, draft) }
   });
+}
+
+// Save a draft to the Gmail Drafts folder (synced to all clients).
+async function saveDraft(account, draft) {
+  const gmail = getGmailClient(account);
+  const res = await gmail.users.drafts.create({
+    userId: 'me',
+    requestBody: { message: { raw: buildRawMessage(account, draft) } }
+  });
+  return { type: 'gmail', id: res.data.id || null };
+}
+
+async function deleteDraft(account, ref) {
+  if (!ref?.id) return;
+  const gmail = getGmailClient(account);
+  await gmail.users.drafts.delete({ userId: 'me', id: ref.id });
 }
 
 async function markAsRead(account, gmailId) {
@@ -347,6 +366,8 @@ module.exports = {
   fetchEmailBody,
   getFolders,
   sendEmail,
+  saveDraft,
+  deleteDraft,
   markAsRead,
   markAsUnread,
   toggleStar,

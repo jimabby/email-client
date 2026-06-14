@@ -65,6 +65,15 @@ export interface SnoozeItem {
   createdAt: string;
 }
 
+// Opaque reference to a draft saved in the provider's Drafts folder, so a later
+// save can replace it and sending can remove it.
+export interface ServerDraftRef {
+  type: 'gmail' | 'outlook' | 'imap';
+  id?: string | null;
+  uid?: number | null;
+  mailbox?: string;
+}
+
 export interface Draft {
   id: string;
   accountId: string;
@@ -74,4 +83,5 @@ export interface Draft {
   subject: string;
   body: string;   // HTML
   savedAt: string;
+  serverRef?: ServerDraftRef | null;
 }
