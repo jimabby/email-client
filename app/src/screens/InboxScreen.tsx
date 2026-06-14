@@ -23,13 +23,18 @@ export default function InboxScreen({ navigation, route }: Props) {
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState('');
   const [searchResults, setSearchResults] = useState<EmailSummary[] | null>(null);
+  const [snoozedIds, setSnoozedIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const { emails: list, nextToken: nt } = await api.listEmails(account.id, 'INBOX', 50);
+      const [{ emails: list, nextToken: nt }, snoozed] = await Promise.all([
+        api.listEmails(account.id, 'INBOX', 50),
+        api.listSnoozed().catch(() => []),
+      ]);
       setEmails(list);
       setNextToken(nt);
+      setSnoozedIds(new Set(snoozed.filter((s) => s.accountId === account.id).map((s) => s.emailId)));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -39,6 +44,9 @@ export default function InboxScreen({ navigation, route }: Props) {
   }, [account.id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Refresh when returning to the inbox (e.g. after snoozing/archiving).
+  useEffect(() => navigation.addListener('focus', () => { load(); }), [navigation, load]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -84,7 +92,7 @@ export default function InboxScreen({ navigation, route }: Props) {
     navigation.navigate('Viewer', { account, email });
   };
 
-  const data = searchResults ?? emails;
+  const data = (searchResults ?? emails).filter((e) => !snoozedIds.has(e.id));
 
   return (
     <View style={styles.container}>

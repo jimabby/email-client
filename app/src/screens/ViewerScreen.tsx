@@ -5,11 +5,24 @@ import {
 } from 'react-native';
 import RenderHtml from 'react-native-render-html';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { api, errorMessage } from '../api';
+import { api, errorMessage, resolveArchiveFolder } from '../api';
 import { theme, avatarColor } from '../theme';
-import { initials, senderName, formatFullDate } from '../utils';
+import { initials, senderName, formatFullDate, stripHtml } from '../utils';
 import type { EmailBody } from '../types';
 import type { RootStackParamList } from '../navigation';
+
+// Quick snooze choices (mirrors the desktop viewer).
+function snoozeChoices(): { label: string; until: Date }[] {
+  const now = new Date();
+  const at = (base: Date, h: number) => { const d = new Date(base); d.setHours(h, 0, 0, 0); return d; };
+  const tomorrow = at(new Date(now.getTime() + 86400000), 8);
+  const nextWeek = (() => { const d = at(now, 8); const add = ((1 - d.getDay()) + 7) % 7 || 7; d.setDate(d.getDate() + add); return d; })();
+  return [
+    { label: 'Later today', until: new Date(now.getTime() + 3 * 3600 * 1000) },
+    { label: 'Tomorrow', until: tomorrow },
+    { label: 'Next week', until: nextWeek },
+  ];
+}
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Viewer'>;
 
@@ -66,6 +79,54 @@ export default function ViewerScreen({ navigation, route }: Props) {
     ]);
   };
 
+  const markUnread = async () => {
+    try {
+      await api.markUnread(account.id, email.id, email.folder);
+      navigation.goBack();
+    } catch (err) {
+      Alert.alert('Error', errorMessage(err));
+    }
+  };
+
+  const archive = async () => {
+    try {
+      const folders = await api.getFolders(account.id);
+      await api.move(account.id, email.id, resolveArchiveFolder(folders), email.folder);
+      navigation.goBack();
+    } catch (err) {
+      Alert.alert('Error', errorMessage(err));
+    }
+  };
+
+  const snooze = () => {
+    const choices = snoozeChoices();
+    Alert.alert('Snooze until', undefined, [
+      ...choices.map((c) => ({
+        text: `${c.label} · ${c.until.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`,
+        onPress: async () => {
+          try {
+            await api.snooze(account.id, email.id, c.until.toISOString(), email, email.folder);
+            navigation.goBack();
+          } catch (err) {
+            Alert.alert('Error', errorMessage(err));
+          }
+        },
+      })),
+      { text: 'Cancel', style: 'cancel' as const },
+    ]);
+  };
+
+  const forward = () => {
+    const quoted = body?.text || (body?.html ? stripHtml(body.html) : '') || email.snippet || '';
+    navigation.navigate('Compose', {
+      account,
+      prefill: {
+        subject: `Fwd: ${email.subject.replace(/^fwd:\s*/i, '')}`,
+        body: `\n\n---------- Forwarded message ----------\nFrom: ${email.from}\nSubject: ${email.subject}\n\n${quoted}`,
+      },
+    });
+  };
+
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
@@ -73,13 +134,16 @@ export default function ViewerScreen({ navigation, route }: Props) {
           <TouchableOpacity onPress={toggleStar} hitSlop={8}>
             <Text style={[styles.star, starred && styles.starOn]}>{starred ? '★' : '☆'}</Text>
           </TouchableOpacity>
+          <TouchableOpacity onPress={markUnread} hitSlop={8}>
+            <Text style={styles.headerIcon}>✉︎</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={remove} hitSlop={8}>
             <Text style={styles.trash}>🗑</Text>
           </TouchableOpacity>
         </View>
       ),
     });
-  }, [navigation, starred]);
+  }, [navigation, starred, body]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
@@ -131,12 +195,23 @@ export default function ViewerScreen({ navigation, route }: Props) {
         </View>
       )}
 
-      <TouchableOpacity
-        style={styles.replyBtn}
-        onPress={() => navigation.navigate('Compose', { account, replyTo: email })}
-      >
-        <Text style={styles.replyText}>Reply</Text>
-      </TouchableOpacity>
+      <View style={styles.actionBar}>
+        <TouchableOpacity
+          style={styles.replyBtn}
+          onPress={() => navigation.navigate('Compose', { account, replyTo: email })}
+        >
+          <Text style={styles.replyText}>Reply</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.secondaryBtn} onPress={forward}>
+          <Text style={styles.secondaryText}>Forward</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.secondaryBtn} onPress={snooze}>
+          <Text style={styles.secondaryText}>Snooze</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.secondaryBtn} onPress={archive}>
+          <Text style={styles.secondaryText}>Archive</Text>
+        </TouchableOpacity>
+      </View>
     </ScrollView>
   );
 }
@@ -146,6 +221,7 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: 'row', gap: 18, alignItems: 'center' },
   star: { color: theme.textMuted, fontSize: 22 },
   starOn: { color: theme.accent },
+  headerIcon: { color: theme.textMuted, fontSize: 18 },
   trash: { fontSize: 18 },
   header: { padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
   subject: { color: theme.text, fontSize: 19, fontWeight: '700', marginBottom: 14, lineHeight: 25 },
@@ -166,6 +242,12 @@ const styles = StyleSheet.create({
   },
   attachName: { color: theme.text, fontSize: 13, flex: 1 },
   attachSize: { color: theme.textFaint, fontSize: 12 },
-  replyBtn: { backgroundColor: theme.accent, margin: 16, borderRadius: 10, paddingVertical: 14, alignItems: 'center' },
+  actionBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingTop: 16 },
+  replyBtn: { backgroundColor: theme.accent, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 22, alignItems: 'center' },
   replyText: { color: theme.accentText, fontWeight: '700', fontSize: 15 },
+  secondaryBtn: {
+    backgroundColor: theme.bgElevated, borderColor: theme.border, borderWidth: 1,
+    borderRadius: 10, paddingVertical: 12, paddingHorizontal: 16, alignItems: 'center',
+  },
+  secondaryText: { color: theme.text, fontWeight: '600', fontSize: 14 },
 });

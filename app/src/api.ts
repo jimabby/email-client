@@ -50,6 +50,30 @@ export const api = {
       })
       .then((r) => r.data),
 
+  markUnread: (accountId: string, emailId: string, folder?: string) =>
+    client()
+      .post(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/unread`, {}, {
+        params: folder ? { folder } : {},
+      })
+      .then((r) => r.data),
+
+  move: (accountId: string, emailId: string, targetFolder: string, sourceFolder?: string) =>
+    client()
+      .post(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/move`, { folder: targetFolder }, {
+        params: sourceFolder ? { folder: sourceFolder } : {},
+      })
+      .then((r) => r.data),
+
+  snooze: (accountId: string, emailId: string, until: string, email: EmailSummary, folder?: string) =>
+    client()
+      .post(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/snooze`, { until, email }, {
+        params: folder ? { folder } : {},
+      })
+      .then((r) => r.data),
+
+  listSnoozed: () =>
+    client().get<{ emailId: string; accountId: string }[]>('/emails/snoozed').then((r) => r.data),
+
   star: (accountId: string, emailId: string, starred: boolean, folder?: string) =>
     client()
       .post(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/star`, { starred }, {
@@ -68,7 +92,21 @@ export const api = {
     accountId: string,
     data: { to: string; cc?: string; bcc?: string; subject: string; text?: string; html?: string }
   ) => client().post(`/emails/${accountId}/send`, data).then((r) => r.data),
+
+  saveDraft: (
+    accountId: string,
+    data: { to?: string; cc?: string; bcc?: string; subject?: string; text?: string; html?: string }
+  ) => client().post(`/emails/${accountId}/drafts`, data).then((r) => r.data),
 };
+
+// Pick the best archive destination from an account's real folder list
+// (Gmail IMAP has no "Archive" folder — it uses "[Gmail]/All Mail").
+export function resolveArchiveFolder(folders: Folder[]): string {
+  const match =
+    folders.find((f) => /^archive$/i.test(f.name) || /archive/i.test(f.path)) ||
+    folders.find((f) => /all mail/i.test(f.name) || /all mail/i.test(f.path));
+  return match?.path || 'Archive';
+}
 
 export function errorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
