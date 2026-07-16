@@ -63,6 +63,9 @@ interface EmailStore {
   // Compose
   isComposeOpen: boolean
   composeData: ComposeData | null
+  // Bumped on every openCompose so the modal remounts with fresh fields even
+  // when a compose window is already open (e.g. Reply while composing).
+  composeNonce: number
   openCompose: (data?: Partial<ComposeData>) => void
   closeCompose: () => void
 
@@ -208,12 +211,14 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
 
   isComposeOpen: false,
   composeData: null,
+  composeNonce: 0,
   openCompose: (data) => {
     const accounts = get().accounts
     const currentAccountId = get().currentAccountId
     const defaultAccountId = currentAccountId || accounts[0]?.id || ''
     set({
       isComposeOpen: true,
+      composeNonce: get().composeNonce + 1,
       composeData: {
         to: '', cc: '', bcc: '', subject: '', body: '',
         accountId: defaultAccountId,

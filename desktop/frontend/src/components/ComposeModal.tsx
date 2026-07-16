@@ -254,11 +254,22 @@ export function ComposeModal() {
       const html = editor?.getHTML() || ''
       const text = editor?.getText() || ''
       const attachmentData = attachments.length ? await Promise.all(attachments.map(readFileAsBase64)) : undefined
+      // Reply threading: headers work from any account; the provider-specific
+      // bits (Gmail threadId, Outlook reply draft) only apply when sending
+      // from the account that owns the original message (its id is prefixed
+      // with the account id).
+      const r = composeData?.replyTo
+      const ownsOriginal = !!r?.id && r.id.startsWith(accountId)
       const sendResult = await emailsApi.send(accountId, {
         to, cc: cc || undefined, bcc: bcc || undefined, subject,
         html, text, attachments: attachmentData,
         sendAt: showSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
         undoWindowSec: undoWindowSec > 0 ? undoWindowSec : undefined,
+        inReplyTo: r?.messageId || undefined,
+        references: r?.references || undefined,
+        threadId: ownsOriginal ? r?.threadId || undefined : undefined,
+        replyToEmailId: ownsOriginal ? r?.id : undefined,
+        replyToFolder: ownsOriginal ? r?.folder : undefined,
       })
       // Save contacts for autocomplete
       const parseAddresses = (s: string) => s.split(',').map(a => a.trim()).filter(Boolean)
@@ -557,7 +568,7 @@ export function ComposeModal() {
           <input
             type="datetime-local"
             value={scheduledAt}
-            min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
+            min={new Date(Date.now() + 60_000 - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16)}
             onChange={e => setScheduledAt(e.target.value)}
             className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] focus:outline-none"
           />

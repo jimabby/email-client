@@ -87,8 +87,9 @@ async function graphRequest(accessToken, path, method = 'GET', body = null) {
     throw new Error(`Graph API error: ${res.status} ${error}`);
   }
 
-  if (res.status === 204) return null;
-  return res.json();
+  // Some endpoints (e.g. message /send) return 202/204 with an empty body.
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 
 const FOLDER_MAP = {
@@ -96,8 +97,22 @@ const FOLDER_MAP = {
   'Sent': 'sentitems',
   'Drafts': 'drafts',
   'Trash': 'deleteditems',
-  'Junk': 'junkemail'
+  'Junk': 'junkemail',
+  'Archive': 'archive'
 };
+
+// Turn "Name <a@b.com>, c@d.com" (string or array) into Graph recipient objects.
+function toRecipients(value) {
+  const parts = Array.isArray(value) ? value : String(value || '').split(',');
+  return parts
+    .map(p => {
+      const s = String(p || '').trim();
+      if (!s) return null;
+      const m = s.match(/<([^>]+)>/);
+      return { emailAddress: { address: (m ? m[1] : s).trim() } };
+    })
+    .filter(Boolean);
+}
 
 function _outlookMsgToSummary(account, msg, folder) {
   return {
@@ -164,7 +179,7 @@ async function searchAttachments(account, query, type, folder = 'INBOX', limit =
 
 async function fetchEmailBody(account, outlookId) {
   const [msg, attData] = await Promise.all([
-    graphRequestWithRefresh(account, `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body,hasAttachments`),
+    graphRequestWithRefresh(account, `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body,hasAttachments,internetMessageId`),
     graphRequestWithRefresh(account, `/me/messages/${outlookId}/attachments`).catch(() => ({ value: [] })),
   ]);
 
@@ -191,6 +206,9 @@ async function fetchEmailBody(account, outlookId) {
       : msg.body?.content ? msg.body.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
       : '',
     attachments,
+    // RFC 822 Message-ID — used by other providers' reply headers. Outlook
+    // replies themselves thread via the Graph createReply endpoint instead.
+    messageId: msg.internetMessageId || '',
   };
 }
 
@@ -206,44 +224,58 @@ async function getFolders(account) {
   }));
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments }) {
-  const toArray = Array.isArray(to) ? to : [to];
+async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, replyToProviderId }) {
+  const message = {
+    subject,
+    body: {
+      contentType: html ? 'HTML' : 'Text',
+      content: html || text || ''
+    },
+    toRecipients: toRecipients(to),
+    ccRecipients: toRecipients(cc),
+    bccRecipients: toRecipients(bcc),
+  };
+  const atts = (attachments || []).map(a => ({
+    '@odata.type': '#microsoft.graph.fileAttachment',
+    name: a.filename,
+    contentBytes: a.content,
+    contentType: a.contentType
+  }));
+
+  // Replies: sendMail can't set In-Reply-To (Graph only allows x- headers),
+  // so create a reply draft — which Graph threads onto the conversation —
+  // overwrite its content, and send it.
+  if (replyToProviderId) {
+    try {
+      const draft = await graphRequestWithRefresh(account, `/me/messages/${replyToProviderId}/createReply`, 'POST', {});
+      if (draft?.id) {
+        await graphRequestWithRefresh(account, `/me/messages/${draft.id}`, 'PATCH', message);
+        for (const att of atts) {
+          await graphRequestWithRefresh(account, `/me/messages/${draft.id}/attachments`, 'POST', att);
+        }
+        await graphRequestWithRefresh(account, `/me/messages/${draft.id}/send`, 'POST', null);
+        return;
+      }
+    } catch { /* original may be gone — fall through to a plain send */ }
+  }
 
   await graphRequestWithRefresh(account, '/me/sendMail', 'POST', {
-    message: {
-      subject,
-      body: {
-        contentType: html ? 'HTML' : 'Text',
-        content: html || text || ''
-      },
-      toRecipients: toArray.filter(Boolean).map(addr => ({
-        emailAddress: { address: addr }
-      })),
-      ccRecipients: cc ? [{ emailAddress: { address: cc } }] : [],
-      bccRecipients: bcc ? [{ emailAddress: { address: bcc } }] : [],
-      attachments: (attachments || []).map(a => ({
-        '@odata.type': '#microsoft.graph.fileAttachment',
-        name: a.filename,
-        contentBytes: a.content,
-        contentType: a.contentType
-      }))
-    },
+    message: { ...message, attachments: atts },
     saveToSentItems: true
   });
 }
 
 // Creating a message (POST /me/messages) saves it as a draft in the Drafts folder.
 async function saveDraft(account, { to, cc, bcc, subject, text, html, attachments }) {
-  const toArray = Array.isArray(to) ? to : (to ? [to] : []);
   const created = await graphRequestWithRefresh(account, '/me/messages', 'POST', {
     subject: subject || '',
     body: {
       contentType: html ? 'HTML' : 'Text',
       content: html || text || ''
     },
-    toRecipients: toArray.filter(Boolean).map(addr => ({ emailAddress: { address: addr } })),
-    ccRecipients: cc ? [{ emailAddress: { address: cc } }] : [],
-    bccRecipients: bcc ? [{ emailAddress: { address: bcc } }] : [],
+    toRecipients: toRecipients(to),
+    ccRecipients: toRecipients(cc),
+    bccRecipients: toRecipients(bcc),
     attachments: (attachments || []).map(a => ({
       '@odata.type': '#microsoft.graph.fileAttachment',
       name: a.filename,

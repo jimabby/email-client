@@ -248,21 +248,49 @@ router.get('/:accountId/message/:emailId', async (req, res) => {
 });
 
 // POST /api/emails/:accountId/send
+// Optional threading fields for replies: inReplyTo (original Message-ID),
+// references (original References), threadId (Gmail), replyToEmailId +
+// replyToFolder (composite id — resolved server-side when headers are absent).
 router.post('/:accountId/send', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
-  const { to, cc, bcc, subject, text, html, attachments, sendAt, undoWindowSec } = req.body;
+  const {
+    to, cc, bcc, subject, text, html, attachments, sendAt, undoWindowSec,
+    inReplyTo, references, threadId, replyToEmailId, replyToFolder,
+  } = req.body;
   if (!to || !subject) return res.status(400).json({ error: 'to and subject are required' });
 
   try {
+    const email = { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, threadId };
+
+    // Threading is best-effort: resolve what the client didn't supply.
+    try {
+      if (replyToEmailId) {
+        if (account.type === 'outlook') {
+          // Outlook threads via the Graph reply endpoint, not headers.
+          email.replyToProviderId = gmailOrOutlookId(replyToEmailId);
+        } else if (!email.inReplyTo) {
+          const service = getService(account.type);
+          const meta = account.type === 'gmail'
+            ? await service.getThreadingInfo(account, gmailOrOutlookId(replyToEmailId))
+            : await service.getThreadingInfo(account, imapUid(replyToEmailId), replyToFolder || 'INBOX');
+          if (meta) {
+            email.inReplyTo = meta.inReplyTo || email.inReplyTo;
+            email.references = meta.references || email.references;
+            email.threadId = meta.threadId || email.threadId;
+          }
+        }
+      }
+    } catch { /* send without threading rather than failing */ }
+
     const hasFutureSchedule = !!sendAt && new Date(sendAt).getTime() > Date.now();
     const hasUndoWindow = Number(undoWindowSec) > 0;
 
     if (hasFutureSchedule || hasUndoWindow) {
       const queued = createQueuedSend({
         accountId: account.id,
-        email: { to, cc, bcc, subject, text, html, attachments },
+        email,
         sendAt,
         undoWindowSec: Number(undoWindowSec) || 0,
       });
@@ -276,7 +304,7 @@ router.post('/:accountId/send', async (req, res) => {
     }
 
     const service = getService(account.type);
-    await service.sendEmail(account, { to, cc, bcc, subject, text, html, attachments });
+    await service.sendEmail(account, email);
     res.json({ success: true, queued: false });
   } catch (err) {
     console.error('Send email error:', err);

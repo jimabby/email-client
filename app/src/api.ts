@@ -90,7 +90,12 @@ export const api = {
 
   send: (
     accountId: string,
-    data: { to: string; cc?: string; bcc?: string; subject: string; text?: string; html?: string }
+    data: {
+      to: string; cc?: string; bcc?: string; subject: string; text?: string; html?: string;
+      // Reply threading — the backend resolves In-Reply-To/References (or the
+      // Outlook reply draft) from the original email's composite id.
+      replyToEmailId?: string; replyToFolder?: string;
+    }
   ) => client().post(`/emails/${accountId}/send`, data).then((r) => r.data),
 
   saveDraft: (

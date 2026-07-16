@@ -67,6 +67,12 @@ export const emailsApi = {
     attachments?: { filename: string; contentType: string; content: string }[]
     sendAt?: string
     undoWindowSec?: number
+    // Reply threading (all optional)
+    inReplyTo?: string
+    references?: string
+    threadId?: string
+    replyToEmailId?: string
+    replyToFolder?: string
   }) => api.post<{
     success: boolean
     queued?: boolean

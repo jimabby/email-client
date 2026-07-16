@@ -37,6 +37,16 @@ function getSenderName(from) {
   return m ? m[1].trim() : from;
 }
 
+// Sender names and subjects come from untrusted mail — escape them before
+// interpolating into the report HTML.
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 async function generateReport() {
   const accounts = store.getAccounts();
   if (!accounts.length) return null;
@@ -98,7 +108,7 @@ async function generateReport() {
   const subject = `📬 Hermes Daily Report — ${dayStr}`;
 
   const unreadRows = unreadPrimary.slice(0, 10).map(e =>
-    `<tr><td style="padding:4px 8px;color:#656d76;">${getSenderName(e.from)}</td><td style="padding:4px 8px;color:#1f2328;">${e.subject || '(no subject)'}</td></tr>`
+    `<tr><td style="padding:4px 8px;color:#656d76;">${escapeHtml(getSenderName(e.from))}</td><td style="padding:4px 8px;color:#1f2328;">${escapeHtml(e.subject || '(no subject)')}</td></tr>`
   ).join('');
 
   const html = `

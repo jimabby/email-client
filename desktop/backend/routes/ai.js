@@ -13,10 +13,16 @@ function hasAiKey() {
   return false;
 }
 
-// GET /api/ai/settings — return current provider (no API key exposed)
+// GET /api/ai/settings — return current provider (no API key exposed).
+// Reports the ANTHROPIC_API_KEY env fallback as a configured Claude provider
+// so the UI doesn't show "no key" while AI requests actually work.
 router.get('/settings', (req, res) => {
   const { provider, apiKey } = store.getAiSettings();
-  res.json({ provider: provider || null, configured: !!apiKey });
+  const envFallback = (!provider || provider === 'claude') && !!process.env.ANTHROPIC_API_KEY;
+  res.json({
+    provider: provider || (envFallback ? 'claude' : null),
+    configured: !!apiKey || envFallback
+  });
 });
 
 // POST /api/ai/settings — save provider + API key

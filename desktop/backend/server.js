@@ -41,6 +41,9 @@ if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
   // SPA fallback — return index.html for any non-API route
   app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
     res.sendFile(path.join(frontendDist, 'index.html'));
   });
 }

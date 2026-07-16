@@ -244,6 +244,11 @@ async function fetchEmailBody(account, uid, folder = 'INBOX') {
       date: parsed.date?.toISOString() || '',
       text: parsed.text || '',
       html: parsed.html || parsed.textAsHtml || '',
+      // Threading info so replies can set In-Reply-To/References.
+      messageId: parsed.messageId || '',
+      references: Array.isArray(parsed.references)
+        ? parsed.references.join(' ')
+        : (parsed.references || ''),
       attachments: (parsed.attachments || []).map(a => ({
         filename: a.filename,
         contentType: a.contentType,
@@ -261,16 +266,36 @@ async function getFolders(account) {
   });
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments }) {
+async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references }) {
   const transporter = getTransporter(account);
+  // References for a reply = the original's References + its Message-ID.
+  const replyRefs = [references, inReplyTo].filter(Boolean).join(' ');
   return transporter.sendMail({
     from: `${account.name || account.email} <${account.email}>`,
     to, cc, bcc, subject, text, html,
+    inReplyTo: inReplyTo || undefined,
+    references: replyRefs || undefined,
     attachments: (attachments || []).map(a => ({
       filename: a.filename,
       content: Buffer.from(a.content, 'base64'),
       contentType: a.contentType
     }))
+  });
+}
+
+// Fetch just the headers needed to thread a reply to this message.
+async function getThreadingInfo(account, uid, folder = 'INBOX') {
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(folder);
+    let headers = null;
+    for await (const msg of client.fetch(String(uid), { headers: ['message-id', 'references'] }, { uid: true })) {
+      headers = msg.headers;
+    }
+    if (!headers) return { inReplyTo: '', references: '' };
+    // Unfold wrapped header lines before matching.
+    const text = headers.toString('utf8').replace(/\r?\n[ \t]+/g, ' ');
+    const get = (name) => text.match(new RegExp(`^${name}:\\s*(.+)$`, 'im'))?.[1].trim() || '';
+    return { inReplyTo: get('message-id'), references: get('references') };
   });
 }
 
@@ -387,6 +412,7 @@ module.exports = {
   searchEmails,
   searchAttachments,
   fetchEmailBody,
+  getThreadingInfo,
   getFolders,
   sendEmail,
   saveDraft,

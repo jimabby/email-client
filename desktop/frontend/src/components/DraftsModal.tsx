@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useEmailStore } from '../store/emailStore'
+import { emailsApi } from '../api/client'
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
@@ -27,6 +28,14 @@ export function DraftsModal() {
   }, [accounts])
 
   const close = () => setShowDraftsModal(false)
+
+  // Deleting a draft also removes its server copy (best-effort) so it doesn't
+  // linger in the provider's Drafts folder.
+  const removeDraft = (id: string) => {
+    const draft = drafts.find(d => d.id === id)
+    deleteDraft(id)
+    if (draft?.serverRef) emailsApi.deleteServerDraft(draft.accountId, draft.serverRef).catch(() => {})
+  }
 
   const openDraft = (id: string) => {
     const draft = drafts.find(d => d.id === id)
@@ -83,7 +92,7 @@ export function DraftsModal() {
                   )}
                 </div>
                 <button
-                  onClick={(e) => { e.stopPropagation(); deleteDraft(d.id) }}
+                  onClick={(e) => { e.stopPropagation(); removeDraft(d.id) }}
                   title="Delete draft"
                   className="opacity-0 group-hover:opacity-100 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] p-1 rounded transition-all flex-shrink-0"
                 >

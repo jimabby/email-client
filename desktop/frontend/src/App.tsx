@@ -322,7 +322,7 @@ function useKeyboardShortcuts() {
 }
 
 export default function App() {
-  const { isComposeOpen, showAccountModal, showDraftsModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport, setSnoozes, isChatOpen } = useEmailStore()
+  const { isComposeOpen, composeNonce, showAccountModal, showDraftsModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport, setSnoozes, isChatOpen } = useEmailStore()
   useKeyboardShortcuts()
   const [showShortcuts, setShowShortcuts] = useState(false)
   const appLayoutVars = { '--sidebar-width': '13rem' } as CSSProperties
@@ -468,7 +468,7 @@ export default function App() {
         </div>
 
         <Suspense fallback={null}>
-          {isComposeOpen && <ComposeModal />}
+          {isComposeOpen && <ComposeModal key={composeNonce} />}
           {showAccountModal && <AccountModal />}
           {showDraftsModal && <DraftsModal />}
           <DailyReportModal />

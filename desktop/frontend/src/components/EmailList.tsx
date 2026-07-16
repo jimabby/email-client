@@ -251,10 +251,11 @@ export function EmailList() {
   const handleSelectEmail = async (email: EmailSummary) => {
     setSelectedEmail(email)
     markEmailRead(email.id)
-    if (!currentAccountId) return
     setLoadingBody(true)
     try {
-      setSelectedEmailBody(await emailsApi.getBody(currentAccountId, email.id, email.folder))
+      // Use the email's own account — search across all accounts can surface
+      // results that don't belong to the currently selected account.
+      setSelectedEmailBody(await emailsApi.getBody(email.accountId, email.id, email.folder))
     } catch { setSelectedEmailBody(null) }
     finally { setLoadingBody(false) }
   }
@@ -382,9 +383,30 @@ export function EmailList() {
     finally { setIsSearching(false) }
   }
 
-  const selectedEmails = emails.filter(e => selectedEmailIds.includes(e.id))
-  const selectedVisibleIds = selectedEmails.map(e => e.id)
-  const selectedVisibleCount = selectedVisibleIds.length
+  // Resolve selected emails from whichever list is on screen (search results,
+  // snoozed view, or the folder list) so bulk actions work everywhere.
+  const getSelectedEmails = () => {
+    const pool = searchResults ?? (currentFolder === '__snoozed__' ? snoozedEmails : emails)
+    return pool.filter(e => selectedEmailIds.includes(e.id))
+  }
+
+  // The bulk endpoints operate per account+folder — cross-account search
+  // selections have to be grouped before calling them.
+  const groupSelection = (list: EmailSummary[]) => {
+    const groups = new Map<string, { accountId: string; folder: string; ids: string[] }>()
+    for (const e of list) {
+      const key = `${e.accountId}|${e.folder}`
+      const g = groups.get(key)
+      if (g) g.ids.push(e.id)
+      else groups.set(key, { accountId: e.accountId, folder: e.folder, ids: [e.id] })
+    }
+    return Array.from(groups.values())
+  }
+
+  const removeFromViews = (ids: string[]) => {
+    removeEmails(ids)
+    if (searchResults) setSearchResults(searchResults.filter(e => !ids.includes(e.id)))
+  }
 
   const handleSelectAll = () => {
     const allIds = prioritySorted.map(e => e.id)
@@ -402,52 +424,56 @@ export function EmailList() {
   }
 
   const handleBulkDelete = async () => {
-    if (!currentAccountId) return
-    if (!selectedVisibleCount) { clearEmailSelection(); return }
-    if (!window.confirm(`Delete ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''}?`)) return
+    const selected = getSelectedEmails()
+    if (!selected.length) { clearEmailSelection(); return }
+    if (!window.confirm(`Delete ${selected.length} email${selected.length > 1 ? 's' : ''}?`)) return
     try {
-      await emailsApi.bulkDelete(currentAccountId, selectedVisibleIds, currentFolder)
-      removeEmails(selectedVisibleIds)
-      showNotification('success', `Deleted ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''}`)
+      await Promise.all(groupSelection(selected).map(g => emailsApi.bulkDelete(g.accountId, g.ids, g.folder)))
+      removeFromViews(selected.map(e => e.id))
+      showNotification('success', `Deleted ${selected.length} email${selected.length > 1 ? 's' : ''}`)
     } catch { showNotification('error', 'Failed to delete some emails') }
   }
 
   const handleBulkMarkRead = async () => {
-    if (!currentAccountId) return
-    if (!selectedVisibleCount) { clearEmailSelection(); return }
+    const selected = getSelectedEmails()
+    if (!selected.length) { clearEmailSelection(); return }
     try {
-      await emailsApi.bulkMarkRead(currentAccountId, selectedVisibleIds, currentFolder)
-      markEmailsRead(selectedVisibleIds)
+      await Promise.all(groupSelection(selected).map(g => emailsApi.bulkMarkRead(g.accountId, g.ids, g.folder)))
+      const ids = selected.map(e => e.id)
+      markEmailsRead(ids)
+      if (searchResults) setSearchResults(searchResults.map(e => ids.includes(e.id) ? { ...e, read: true } : e))
     } catch { showNotification('error', 'Failed to mark some emails as read') }
   }
 
   const handleBulkMarkUnread = async () => {
-    if (!currentAccountId) return
-    if (!selectedVisibleCount) { clearEmailSelection(); return }
+    const selected = getSelectedEmails()
+    if (!selected.length) { clearEmailSelection(); return }
     try {
-      await Promise.all(selectedEmails.map(e => emailsApi.markUnread(currentAccountId, e.id, e.folder)))
-      markEmailsUnread(selectedVisibleIds)
+      await Promise.all(selected.map(e => emailsApi.markUnread(e.accountId, e.id, e.folder)))
+      const ids = selected.map(e => e.id)
+      markEmailsUnread(ids)
+      if (searchResults) setSearchResults(searchResults.map(e => ids.includes(e.id) ? { ...e, read: false } : e))
     } catch { showNotification('error', 'Failed to mark some emails as unread') }
   }
 
   const handleBulkMove = async (targetFolder: string) => {
-    if (!currentAccountId) return
-    if (!selectedVisibleCount) { clearEmailSelection(); return }
+    const selected = getSelectedEmails()
+    if (!selected.length) { clearEmailSelection(); return }
     setShowMoveMenu(false)
     try {
-      await emailsApi.bulkMove(currentAccountId, selectedVisibleIds, targetFolder, currentFolder)
-      removeEmails(selectedVisibleIds)
-      showNotification('success', `Moved ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''} to ${targetFolder}`)
+      await Promise.all(groupSelection(selected).map(g => emailsApi.bulkMove(g.accountId, g.ids, targetFolder, g.folder)))
+      removeFromViews(selected.map(e => e.id))
+      showNotification('success', `Moved ${selected.length} email${selected.length > 1 ? 's' : ''} to ${targetFolder}`)
     } catch { showNotification('error', 'Failed to move some emails') }
   }
 
   const handleBulkArchive = async () => {
-    if (!currentAccountId) return
-    if (!selectedVisibleCount) { clearEmailSelection(); return }
+    const selected = getSelectedEmails()
+    if (!selected.length) { clearEmailSelection(); return }
     try {
-      await emailsApi.bulkMove(currentAccountId, selectedVisibleIds, getArchiveFolder(currentAccountId), currentFolder)
-      removeEmails(selectedVisibleIds)
-      showNotification('success', `Archived ${selectedVisibleCount} email${selectedVisibleCount > 1 ? 's' : ''}`)
+      await Promise.all(groupSelection(selected).map(g => emailsApi.bulkMove(g.accountId, g.ids, getArchiveFolder(g.accountId), g.folder)))
+      removeFromViews(selected.map(e => e.id))
+      showNotification('success', `Archived ${selected.length} email${selected.length > 1 ? 's' : ''}`)
     } catch { showNotification('error', 'Failed to archive some emails') }
   }
 

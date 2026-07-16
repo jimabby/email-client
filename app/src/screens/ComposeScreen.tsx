@@ -42,6 +42,8 @@ export default function ComposeScreen({ navigation, route }: Props) {
         subject: subject.trim(),
         text,
         html: bodyHtml(),
+        replyToEmailId: replyTo?.id,
+        replyToFolder: replyTo?.folder,
       });
       Alert.alert('Sent', 'Your email was sent.', [
         { text: 'OK', onPress: () => navigation.goBack() },

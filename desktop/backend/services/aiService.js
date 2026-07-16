@@ -346,9 +346,21 @@ No markdown, no explanation, just the JSON.`;
 
 const VALID_AI_CATEGORIES = new Set(['Primary', 'Social', 'Jobs', 'Promotions', 'Receipts']);
 
-async function categorizeEmailsWithAI(emails) {
+// Resolve effective AI credentials: a saved key, or the ANTHROPIC_API_KEY env
+// fallback when the provider is Claude (or unset) — same rule as routes/ai.js.
+function getEffectiveAiSettings() {
   const { provider, apiKey } = store.getAiSettings();
-  if (!provider || !apiKey) return null; // No AI configured — caller falls back to rules
+  if (apiKey) return { provider: provider || 'claude', apiKey };
+  if ((!provider || provider === 'claude') && process.env.ANTHROPIC_API_KEY) {
+    return { provider: 'claude', apiKey: process.env.ANTHROPIC_API_KEY };
+  }
+  return null;
+}
+
+async function categorizeEmailsWithAI(emails) {
+  const settings = getEffectiveAiSettings();
+  if (!settings) return null; // No AI configured — caller falls back to rules
+  const { provider, apiKey } = settings;
 
   // Build compact email list to minimise tokens
   const emailList = emails.map(e =>
@@ -394,8 +406,9 @@ Return ONLY valid JSON in this exact shape:
 No markdown, no extra text.`;
 
 async function rankEmailsWithAI(emails) {
-  const { provider, apiKey } = store.getAiSettings();
-  if (!provider || !apiKey) return null;
+  const settings = getEffectiveAiSettings();
+  if (!settings) return null;
+  const { provider, apiKey } = settings;
 
   const emailList = emails.map(e =>
     `id:${e.id} | from:${(e.from || '').slice(0, 60)} | subject:${(e.subject || '').slice(0, 80)} | snippet:${(e.snippet || '').slice(0, 120)} | date:${e.date || ''}`
@@ -444,8 +457,9 @@ Return ONLY valid JSON in this exact shape:
 No markdown, no extra text.`;
 
 async function summarizeThreadWithAI({ subject, messages }) {
-  const { provider, apiKey } = store.getAiSettings();
-  if (!provider || !apiKey) return null;
+  const settings = getEffectiveAiSettings();
+  if (!settings) return null;
+  const { provider, apiKey } = settings;
 
   const threadText = messages.map(m =>
     `From: ${m.from || ''}\nDate: ${m.date || ''}\n${(m.body || '').slice(0, 2000)}`

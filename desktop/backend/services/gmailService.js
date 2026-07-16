@@ -175,6 +175,8 @@ async function fetchEmailBody(account, gmailId) {
   const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
 
   const { html, text } = extractBody(detail.data.payload);
+  const messageId = getHeader('Message-ID');
+  const references = getHeader('References');
 
   // Extract attachments from payload parts
   const attachments = [];
@@ -221,7 +223,24 @@ async function fetchEmailBody(account, gmailId) {
     html,
     text,
     attachments,
+    // Threading info so replies can set In-Reply-To/References and stay in
+    // the same Gmail thread.
+    messageId,
+    references,
+    threadId: detail.data.threadId || null,
   };
+}
+
+// Fetch just the headers needed to thread a reply to this message.
+async function getThreadingInfo(account, gmailId) {
+  const gmail = getGmailClient(account);
+  const detail = await gmail.users.messages.get({
+    userId: 'me', id: gmailId, format: 'metadata',
+    metadataHeaders: ['Message-ID', 'References']
+  });
+  const headers = detail.data.payload?.headers || [];
+  const get = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+  return { inReplyTo: get('Message-ID'), references: get('References'), threadId: detail.data.threadId || null };
 }
 
 async function deleteEmail(account, gmailId) {
@@ -242,16 +261,26 @@ function wrapBase64(b64) {
   return b64.match(/.{1,76}/g)?.join('\r\n') || b64;
 }
 
+// RFC 2047-encode a header value when it contains non-ASCII characters.
+function encodeHeader(value) {
+  if (!value || /^[\x20-\x7e]*$/.test(value)) return value;
+  return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
+}
+
 // Build a base64url-encoded RFC822 message for the Gmail send/draft endpoints.
-function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachments }) {
+function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references }) {
   const hasAttachments = attachments && attachments.length > 0;
+  // References for a reply = the original's References + its Message-ID.
+  const replyRefs = [references, inReplyTo].filter(Boolean).join(' ');
 
   const headers = [
-    `From: ${account.name || account.email} <${account.email}>`,
+    `From: ${encodeHeader(account.name || account.email)} <${account.email}>`,
     to  ? `To: ${Array.isArray(to) ? to.join(', ') : to}` : null,
     cc  ? `Cc: ${cc}`   : null,
     bcc ? `Bcc: ${bcc}` : null,
-    `Subject: ${subject || ''}`,
+    `Subject: ${encodeHeader(subject || '')}`,
+    inReplyTo ? `In-Reply-To: ${inReplyTo}` : null,
+    replyRefs ? `References: ${replyRefs}` : null,
     'MIME-Version: 1.0',
   ].filter(Boolean);
 
@@ -301,10 +330,10 @@ function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachment
 
 async function sendEmail(account, draft) {
   const gmail = getGmailClient(account);
-  await gmail.users.messages.send({
-    userId: 'me',
-    requestBody: { raw: buildRawMessage(account, draft) }
-  });
+  const requestBody = { raw: buildRawMessage(account, draft) };
+  // Keep the reply inside the original Gmail thread.
+  if (draft.threadId) requestBody.threadId = draft.threadId;
+  await gmail.users.messages.send({ userId: 'me', requestBody });
 }
 
 // Save a draft to the Gmail Drafts folder (synced to all clients).
@@ -349,7 +378,17 @@ async function toggleStar(account, gmailId, starred) {
 
 async function moveEmail(account, gmailId, fromFolder, toFolder) {
   const gmail = getGmailClient(account);
-  const fromLabel = folderToLabelId(fromFolder);
+  // 'search' is a synthetic folder used for search results — not a real label.
+  const fromLabel = fromFolder === 'search' ? 'INBOX' : folderToLabelId(fromFolder);
+  // Gmail has no Archive label: archiving means removing the source label
+  // (usually INBOX) so the message only remains in All Mail.
+  if (/^archive$/i.test(toFolder) || /all ?mail/i.test(toFolder)) {
+    await gmail.users.messages.modify({
+      userId: 'me', id: gmailId,
+      requestBody: { removeLabelIds: [fromLabel] }
+    });
+    return;
+  }
   const toLabel = folderToLabelId(toFolder);
   await gmail.users.messages.modify({
     userId: 'me', id: gmailId,
@@ -364,6 +403,7 @@ module.exports = {
   searchEmails,
   searchAttachments,
   fetchEmailBody,
+  getThreadingInfo,
   getFolders,
   sendEmail,
   saveDraft,

@@ -27,6 +27,15 @@ function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+// Extract the bare address from "Name <addr>" (or return the string as-is).
+function bareAddress(s: string): string {
+  return (s.match(/<([^>]+)>/)?.[1] || s).trim().toLowerCase()
+}
+
 function extractUnsubscribeLink(html?: string, text?: string): string | null {
   const isUnsub = (s: string) => /unsubscribe|optout|opt-out|manage\s+preferences/i.test(s)
   if (html && typeof window !== 'undefined') {
@@ -61,7 +70,7 @@ export function EmailViewer() {
     selectedEmail, selectedEmailBody, isLoadingBody,
     openCompose, removeEmail, showNotification,
     toggleStarLocal, markEmailUnread, setSelectedEmail,
-    folders, currentAccountId, currentFolder, emails,
+    folders, currentAccountId, currentFolder, emails, accounts,
     snoozeEmailLocal, unsnoozeLocal, getArchiveFolder,
   } = useEmailStore()
 
@@ -144,12 +153,56 @@ export function EmailViewer() {
 
   const body = selectedEmailBody
 
+  // Gmail-style quoted original for reply bodies (plain-text lines inside a
+  // blockquote — the TipTap editor handles that reliably, unlike raw email HTML).
+  const buildQuoteHtml = () => {
+    if (!body) return ''
+    const quoted = (body.text || (body.html ? stripHtml(body.html) : '')).slice(0, 8000)
+    if (!quoted.trim()) return ''
+    const lines = quoted.split('\n').map(l => `<p>${escapeHtml(l)}</p>`).join('')
+    const when = body.date ? formatFullDate(body.date) : ''
+    return `<p></p><p>On ${escapeHtml(when)}, ${escapeHtml(body.from)} wrote:</p><blockquote>${lines}</blockquote>`
+  }
+
+  const replyToPayload = () => body
+    ? {
+        id: selectedEmail!.id, folder: selectedEmail!.folder,
+        from: body.from, to: body.to, subject: body.subject, date: body.date, html: body.html, text: body.text,
+        messageId: body.messageId, references: body.references, threadId: body.threadId,
+      }
+    : undefined
+
   const handleReply = () => openCompose({
     accountId: selectedEmail.accountId,
     to: selectedEmail.from,
     subject: `Re: ${selectedEmail.subject.replace(/^Re:\s*/i, '')}`,
-    replyTo: body ? { id: selectedEmail.id, from: body.from, to: body.to, subject: body.subject, date: body.date, html: body.html, text: body.text } : undefined
+    body: buildQuoteHtml(),
+    replyTo: replyToPayload()
   })
+
+  // Reply All: original sender + all To recipients (minus this account) in To,
+  // original Cc preserved.
+  const handleReplyAll = () => {
+    const self = (accounts.find(a => a.id === selectedEmail.accountId)?.email || '').toLowerCase()
+    const split = (s?: string) => (s || '').split(',').map(x => x.trim()).filter(Boolean)
+    const seen = new Set<string>()
+    const keep = (list: string[]) => list.filter(a => {
+      const addr = bareAddress(a)
+      if (!addr || addr === self || seen.has(addr)) return false
+      seen.add(addr)
+      return true
+    })
+    const toList = keep([selectedEmail.from, ...split(body?.to), ...(selectedEmail.to || []).filter(Boolean)])
+    const ccList = keep(split(body?.cc))
+    openCompose({
+      accountId: selectedEmail.accountId,
+      to: (toList.length ? toList : [selectedEmail.from]).join(', '),
+      cc: ccList.join(', '),
+      subject: `Re: ${selectedEmail.subject.replace(/^Re:\s*/i, '')}`,
+      body: buildQuoteHtml(),
+      replyTo: replyToPayload()
+    })
+  }
 
   const handleDelete = async () => {
     if (!selectedEmail) return
@@ -331,7 +384,7 @@ export function EmailViewer() {
           Reply
         </button>
         <button
-          onClick={() => openCompose({ accountId: selectedEmail.accountId, to: selectedEmail.to?.join(', ') || '', subject: selectedEmail.subject, body: '', replyTo: body ? { id: selectedEmail.id, from: body.from, to: body.to, subject: body.subject, date: body.date, html: body.html, text: body.text } : undefined })}
+          onClick={handleReplyAll}
           className={toolBtn}
           aria-label="Reply to all recipients"
         >

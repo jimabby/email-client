@@ -33,6 +33,10 @@ export interface EmailBody {
   html?: string;
   text?: string;
   attachments?: { filename: string; contentType: string; size: number; content?: string | null }[];
+  // Threading info (set by the backend) so replies keep the conversation.
+  messageId?: string;
+  references?: string;
+  threadId?: string | null;
 }
 
 export interface Folder {
@@ -52,7 +56,7 @@ export interface ComposeData {
   subject: string;
   body: string;
   accountId: string;
-  replyTo?: EmailBody & { id: string };
+  replyTo?: EmailBody & { id: string; folder?: string };
   draftId?: string;
 }
 

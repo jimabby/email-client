@@ -126,7 +126,9 @@ function startApiPollWatcher(account) {
         watcher.lastSeenDate = first.date;
         return;
       }
-      const changed = first.id !== watcher.lastSeenMessageId && first.date !== watcher.lastSeenDate;
+      // Message ids are stable and unique — a different id at the top of the
+      // inbox means new mail (dates can collide, so don't require both).
+      const changed = first.id !== watcher.lastSeenMessageId;
       if (changed) {
         watcher.lastSeenMessageId = first.id;
         watcher.lastSeenDate = first.date;
