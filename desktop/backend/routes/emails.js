@@ -5,6 +5,7 @@ const { categorizeEmails, VALID_CATEGORIES } = require('../services/categorizati
 const { categorizeEmailsWithAI } = require('../services/aiService');
 const { createQueuedSend, cancelQueuedSend } = require('../services/sendQueueService');
 const { ensureWatch, subscribe } = require('../services/mailWatchService');
+const { v4: uuidv4 } = require('uuid');
 
 function getService(accountType) {
   if (accountType === 'gmail') return require('../services/gmailService');
@@ -144,6 +145,53 @@ router.get('/daily-report', (req, res) => {
   res.json(report || null);
 });
 
+// User-defined rules and reusable compose templates.
+router.get('/rules', (req, res) => res.json(store.getRules()));
+router.put('/rules', (req, res) => {
+  const rules = (Array.isArray(req.body.rules) ? req.body.rules : []).slice(0, 100).map(r => ({
+    id: r.id || uuidv4(), name: String(r.name || 'Rule').slice(0, 80), enabled: r.enabled !== false,
+    accountId: r.accountId || undefined, from: String(r.from || '').slice(0, 200), subject: String(r.subject || '').slice(0, 200),
+    action: ['move', 'archive', 'markRead', 'star', 'spam'].includes(r.action) ? r.action : 'markRead',
+    targetFolder: String(r.targetFolder || '').slice(0, 300)
+  }));
+  store.saveRules(rules); res.json(rules);
+});
+router.post('/rules/run', async (req, res) => {
+  const emails = Array.isArray(req.body.emails) ? req.body.emails.slice(0, 100) : [];
+  const rules = store.getRules().filter(r => r.enabled !== false);
+  const applied = [];
+  for (const email of emails) {
+    const account = store.getAccount(email.accountId);
+    if (!account) continue;
+    const rule = rules.find(r => (!r.accountId || r.accountId === account.id)
+      && (!r.from || String(email.from || '').toLowerCase().includes(r.from.toLowerCase()))
+      && (!r.subject || String(email.subject || '').toLowerCase().includes(r.subject.toLowerCase())));
+    if (!rule) continue;
+    try {
+      const service = getService(account.type);
+      const id = account.type === 'imap' ? imapUid(email.id) : gmailOrOutlookId(email.id);
+      if (rule.action === 'markRead') await service.markAsRead(account, id, email.folder || 'INBOX');
+      else if (rule.action === 'star') await service.toggleStar(account, id, ...(account.type === 'imap' ? [email.folder || 'INBOX', true] : [true]));
+      else if (rule.action === 'spam') await service.reportSpam(account, id, email.folder || 'INBOX');
+      else {
+        const target = rule.action === 'archive' ? 'Archive' : rule.targetFolder;
+        if (account.type === 'imap') await service.moveEmail(account, id, email.folder || 'INBOX', target);
+        else if (account.type === 'gmail') await service.moveEmail(account, id, email.folder || 'INBOX', target);
+        else await service.moveEmail(account, id, target);
+      }
+      applied.push({ emailId: email.id, ruleId: rule.id, action: rule.action });
+    } catch (err) { console.warn(`Rule ${rule.id} failed:`, err.message); }
+  }
+  res.json({ applied });
+});
+router.get('/templates', (req, res) => res.json(store.getTemplates()));
+router.put('/templates', (req, res) => {
+  const templates = (Array.isArray(req.body.templates) ? req.body.templates : []).slice(0, 100).map(t => ({
+    id: t.id || uuidv4(), name: String(t.name || 'Template').slice(0, 80), subject: String(t.subject || '').slice(0, 300), body: String(t.body || '').slice(0, 50000)
+  }));
+  store.saveTemplates(templates); res.json(templates);
+});
+
 // GET /api/emails/:accountId?folder=INBOX&limit=50&pageToken=...
 router.get('/:accountId', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
@@ -156,9 +204,12 @@ router.get('/:accountId', async (req, res) => {
   try {
     const service = getService(account.type);
     const result = await service.fetchEmails(account, folder, limit, pageToken);
+    store.saveEmailCache(`list:${account.id}:${folder}:${pageToken || ''}`, result);
     res.json(result); // { emails, nextToken }
   } catch (err) {
     console.error('Fetch emails error:', err);
+    const cached = store.getEmailCache(`list:${account.id}:${folder}:${pageToken || ''}`);
+    if (cached) return res.json({ ...cached.value, offline: true, cachedAt: cached.cachedAt });
     res.status(500).json({ error: err.message });
   }
 });
@@ -240,11 +291,38 @@ router.get('/:accountId/message/:emailId', async (req, res) => {
       }
     } catch { /* ignore */ }
 
+    store.saveEmailCache(`body:${account.id}:${emailId}:${folder}`, body);
     res.json(body);
   } catch (err) {
     console.error('Fetch email body error:', err);
+    const cached = store.getEmailCache(`body:${account.id}:${emailId}:${folder}`);
+    if (cached) return res.json({ ...cached.value, offline: true, cachedAt: cached.cachedAt });
     res.status(500).json({ error: err.message });
   }
+});
+
+router.get('/:accountId/thread/:threadId', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  const service = getService(account.type);
+  if (!service.fetchThread) return res.json([]);
+  try { res.json(await service.fetchThread(account, req.params.threadId)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/:accountId/folders', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (!String(req.body.name || '').trim()) return res.status(400).json({ error: 'Folder name is required' });
+  try { res.json(await getService(account.type).createFolder(account, String(req.body.name).trim())); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.patch('/:accountId/folders/:folderId', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  try { res.json(await getService(account.type).renameFolder(account, req.params.folderId, String(req.body.name || '').trim())); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/emails/:accountId/send
@@ -447,6 +525,34 @@ router.post('/:accountId/message/:emailId/unread', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+router.post('/:accountId/message/:emailId/spam', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  try {
+    const service = getService(account.type);
+    const id = account.type === 'imap' ? imapUid(req.params.emailId) : gmailOrOutlookId(req.params.emailId);
+    await service.reportSpam(account, id, req.query.folder || 'INBOX');
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/:accountId/message/:emailId/block', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  const sender = String(req.body.sender || '').match(/<([^>]+)>/)?.[1] || String(req.body.sender || '');
+  if (!sender.trim()) return res.status(400).json({ error: 'Sender is required' });
+  const rules = store.getRules();
+  if (!rules.some(r => r.action === 'spam' && r.accountId === account.id && r.from === sender.toLowerCase())) {
+    rules.push({ id: uuidv4(), name: `Block ${sender}`, enabled: true, accountId: account.id, from: sender.toLowerCase(), subject: '', action: 'spam', targetFolder: '' });
+    store.saveRules(rules);
+  }
+  try {
+    const service = getService(account.type); const id = account.type === 'imap' ? imapUid(req.params.emailId) : gmailOrOutlookId(req.params.emailId);
+    await service.reportSpam(account, id, req.query.folder || 'INBOX');
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/emails/:accountId/message/:emailId/star

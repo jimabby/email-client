@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { Account, EmailSummary, EmailBody, Folder, SnoozeItem, ServerDraftRef } from '../types/email'
+import type { Account, EmailSummary, EmailBody, Folder, SnoozeItem, ServerDraftRef, MailRule, MailTemplate } from '../types/email'
 
 const api = axios.create({
   baseURL: '/api',
@@ -57,6 +57,15 @@ export const emailsApi = {
   getFolders: (accountId: string) =>
     api.get<Folder[]>(`/emails/${accountId}/folders`).then(r => r.data),
 
+  createFolder: (accountId: string, name: string) => api.post<Folder>(`/emails/${accountId}/folders`, { name }).then(r => r.data),
+  renameFolder: (accountId: string, folderId: string, name: string) => api.patch<Folder>(`/emails/${accountId}/folders/${encodeURIComponent(folderId)}`, { name }).then(r => r.data),
+
+  getRules: () => api.get<MailRule[]>('/emails/rules').then(r => r.data),
+  saveRules: (rules: MailRule[]) => api.put<MailRule[]>('/emails/rules', { rules }).then(r => r.data),
+  runRules: (emails: EmailSummary[]) => api.post<{ applied: { emailId: string; ruleId: string; action: string }[] }>('/emails/rules/run', { emails }).then(r => r.data),
+  getTemplates: () => api.get<MailTemplate[]>('/emails/templates').then(r => r.data),
+  saveTemplates: (templates: MailTemplate[]) => api.put<MailTemplate[]>('/emails/templates', { templates }).then(r => r.data),
+
   send: (accountId: string, data: {
     to: string
     cc?: string
@@ -98,6 +107,10 @@ export const emailsApi = {
     api.post(`/emails/${accountId}/message/${emailId}/unread`, {}, {
       params: folder ? { folder } : {}
     }).then(r => r.data),
+  getThread: (accountId: string, threadId: string) => api.get<{ summary: EmailSummary; body: EmailBody }[]>(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}`).then(r => r.data),
+
+  reportSpam: (accountId: string, emailId: string, folder?: string) => api.post(`/emails/${accountId}/message/${emailId}/spam`, {}, { params: folder ? { folder } : {} }).then(r => r.data),
+  blockSender: (accountId: string, emailId: string, sender: string, folder?: string) => api.post(`/emails/${accountId}/message/${emailId}/block`, { sender }, { params: folder ? { folder } : {} }).then(r => r.data),
 
   star: (accountId: string, emailId: string, starred: boolean, folder?: string) =>
     api.post(`/emails/${accountId}/message/${emailId}/star`, { starred }, {
@@ -177,6 +190,10 @@ export const aiApi = {
 
   summarizeThread: (params: { subject: string; messages: { from: string; date: string; body: string }[] }) =>
     api.post<{ summary: string; keyPoints: string[]; actionItems: string[] }>('/ai/thread-summary', params).then(r => r.data),
+
+  smartReplies: (params: { from: string; subject: string; body: string }) => api.post<{ replies: string[] }>('/ai/smart-replies', params).then(r => r.data),
+  extractActions: (params: { subject: string; body: string }) => api.post<{ actions: { title: string; kind: 'task' | 'calendar'; date?: string; details?: string }[] }>('/ai/extract-actions', params).then(r => r.data),
+  summarizeAttachment: (params: { filename: string; contentType: string; content?: string | null; text?: string }) => api.post<{ summary: string }>('/ai/summarize-attachment', params).then(r => r.data),
 }
 
 // ─── AI Suggestions (streaming) ───────────────────────────────────────────────

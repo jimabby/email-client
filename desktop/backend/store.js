@@ -104,6 +104,25 @@ module.exports = {
     saveStore(store);
   },
 
+  getRules() { return Array.isArray(store.rules) ? store.rules : []; },
+  saveRules(rules) { store.rules = Array.isArray(rules) ? rules : []; saveStore(store); },
+
+  getTemplates() { return Array.isArray(store.templates) ? store.templates : []; },
+  saveTemplates(templates) { store.templates = Array.isArray(templates) ? templates : []; saveStore(store); },
+
+  getEmailCache(key) { return (store.emailCache || {})[key] || null; },
+  saveEmailCache(key, value) {
+    if (!store.emailCache) store.emailCache = {};
+    // Keep the cache useful but bounded: attachment bytes can be tens of MB and
+    // remain available online, while message text is what offline reading needs.
+    const safeValue = JSON.parse(JSON.stringify(value, (name, item) => name === 'content' ? null : item));
+    if (JSON.stringify(safeValue).length > 1024 * 1024) return;
+    store.emailCache[key] = { value: safeValue, cachedAt: new Date().toISOString() };
+    const keys = Object.keys(store.emailCache);
+    for (const old of keys.slice(0, Math.max(0, keys.length - 300))) delete store.emailCache[old];
+    saveStore(store);
+  },
+
   // ─── Email categories cache ───────────────────────────────────────────────
   getEmailCategories() {
     return store.categories || {};

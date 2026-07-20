@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useEmailStore } from '../store/emailStore'
-import { accountsApi, aiApi } from '../api/client'
-import type { Account } from '../types/email'
+import { accountsApi, aiApi, emailsApi } from '../api/client'
+import type { Account, MailRule, MailTemplate } from '../types/email'
 
-type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature'
+type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature' | 'productivity'
 
 const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHost: string; smtpPort: number }> = {
   'Gmail (App Password)': { imapHost: 'imap.gmail.com',        imapPort: 993, smtpHost: 'smtp.gmail.com',        smtpPort: 587 },
@@ -32,8 +32,11 @@ export function AccountModal() {
   const [aiSaving, setAiSaving] = useState(false)
 
   const [signatureText, setSignatureText] = useState(signature)
+  const [rules, setRules] = useState<MailRule[]>([])
+  const [templates, setTemplates] = useState<MailTemplate[]>([])
 
   useEffect(() => { setAiSelectedProvider(aiProvider || 'claude') }, [aiProvider])
+  useEffect(() => { emailsApi.getRules().then(setRules).catch(() => {}); emailsApi.getTemplates().then(setTemplates).catch(() => {}) }, [])
 
   const update = (field: string, value: string | number | boolean) =>
     setForm(f => ({ ...f, [field]: value }))
@@ -106,6 +109,7 @@ export function AccountModal() {
     { id: 'outlook' as Tab,   label: 'Outlook',      sub: 'OAuth' },
     { id: 'ai' as Tab,        label: 'AI',           sub: 'Claude / GPT / Gemini' },
     { id: 'signature' as Tab, label: 'Signature',    sub: 'Email footer' },
+    { id: 'productivity' as Tab, label: 'Rules & Templates', sub: 'Automate mail' },
   ]
 
   return (
@@ -136,7 +140,7 @@ export function AccountModal() {
               </button>
             ))}
             <div className="mt-2 mb-0.5 text-[9px] font-bold text-[#818b98] dark:text-[#484f58] uppercase tracking-widest px-2 py-1.5">Preferences</div>
-            {tabs.filter(t => ['ai','signature'].includes(t.id)).map(t => (
+            {tabs.filter(t => ['ai','signature','productivity'].includes(t.id)).map(t => (
               <button key={t.id} onClick={() => setTab(t.id)}
                 className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors
                   ${tab === t.id
@@ -457,6 +461,25 @@ export function AccountModal() {
                   {aiSaving ? '⟳ Saving…' : `Save ${aiSelectedProvider === 'claude' ? 'Claude' : aiSelectedProvider === 'openai' ? 'ChatGPT' : 'Gemini'} Key`}
                 </button>
               </form>
+            </div>
+          )}
+          {tab === 'productivity' && (
+            <div className="space-y-6">
+              <section>
+                <div className="flex items-center justify-between mb-2"><h3 className="text-sm font-semibold text-[#1f2328] dark:text-[#e6edf3]">Mailbox rules</h3><button onClick={() => setRules(r => [...r, { id: crypto.randomUUID(), name: 'New rule', enabled: true, from: '', subject: '', action: 'markRead' }])} className="text-xs text-[#0969da]">+ Add rule</button></div>
+                <p className="text-[11px] text-[#818b98] mb-3">Rules run when Inbox messages are fetched. Matching is case-insensitive.</p>
+                <div className="space-y-2">{rules.map((rule, i) => <div key={rule.id} className="rounded-lg border border-[#d0d7de] dark:border-[#30363d] p-3 space-y-2">
+                  <div className="flex gap-2"><input value={rule.name} onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,name:e.target.value} : x))} className={inputCls}/><button onClick={() => setRules(r => r.filter(x => x.id !== rule.id))} className="text-xs text-[#cf222e]">Remove</button></div>
+                  <div className="grid grid-cols-2 gap-2"><input value={rule.from || ''} placeholder="From contains…" onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,from:e.target.value} : x))} className={inputCls}/><input value={rule.subject || ''} placeholder="Subject contains…" onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,subject:e.target.value} : x))} className={inputCls}/></div>
+                  <div className="flex gap-2"><select value={rule.action} onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,action:e.target.value as MailRule['action']} : x))} className={inputCls}><option value="markRead">Mark read</option><option value="star">Star</option><option value="archive">Archive</option><option value="move">Move</option><option value="spam">Send to spam</option></select>{rule.action === 'move' && <input value={rule.targetFolder || ''} placeholder="Folder path" onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,targetFolder:e.target.value} : x))} className={inputCls}/>}</div>
+                </div>)}</div>
+                <button onClick={async () => { const saved = await emailsApi.saveRules(rules.filter(r => r.from || r.subject)); setRules(saved); showNotification('success','Rules saved') }} className="mt-3 px-3 py-2 rounded-md bg-[#f59e0b] text-xs font-bold text-[#0d1117]">Save rules</button>
+              </section>
+              <section className="border-t border-[#d0d7de] dark:border-[#30363d] pt-5">
+                <div className="flex items-center justify-between mb-3"><h3 className="text-sm font-semibold text-[#1f2328] dark:text-[#e6edf3]">Templates</h3><button onClick={() => setTemplates(t => [...t, { id: crypto.randomUUID(), name: 'New template', subject: '', body: '' }])} className="text-xs text-[#0969da]">+ Add template</button></div>
+                <div className="space-y-2">{templates.map((template, i) => <div key={template.id} className="rounded-lg border border-[#d0d7de] dark:border-[#30363d] p-3 space-y-2"><div className="flex gap-2"><input value={template.name} onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,name:e.target.value} : x))} className={inputCls}/><button onClick={() => setTemplates(t => t.filter(x => x.id !== template.id))} className="text-xs text-[#cf222e]">Remove</button></div><input value={template.subject} placeholder="Subject" onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,subject:e.target.value} : x))} className={inputCls}/><textarea rows={3} value={template.body} placeholder="Message body" onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,body:e.target.value} : x))} className={inputCls}/></div>)}</div>
+                <button onClick={async () => { const saved = await emailsApi.saveTemplates(templates); setTemplates(saved); showNotification('success','Templates saved') }} className="mt-3 px-3 py-2 rounded-md bg-[#f59e0b] text-xs font-bold text-[#0d1117]">Save templates</button>
+              </section>
             </div>
           )}
           </div>

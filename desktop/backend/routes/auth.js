@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const store = require('../store');
+const { createOAuthState, verifyOAuthState } = require('../middleware/oauthState');
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3001';
 
 function redirectToFrontend(res, params = {}) {
@@ -76,7 +77,7 @@ router.get('/gmail', (req, res) => {
   }
   try {
     const gmailService = require('../services/gmailService');
-    const url = gmailService.getAuthUrl();
+    const url = gmailService.getAuthUrl(createOAuthState('gmail'));
     res.json({ url });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -84,7 +85,11 @@ router.get('/gmail', (req, res) => {
 });
 
 router.get('/gmail/callback', async (req, res) => {
-  const { code, error } = req.query;
+  const { code, error, state } = req.query;
+
+  if (!verifyOAuthState(state, 'gmail')) {
+    return res.status(400).json({ error: 'Invalid or expired OAuth state' });
+  }
 
   if (error) {
     return redirectToFrontend(res, { error });
@@ -127,7 +132,7 @@ router.get('/outlook', async (req, res) => {
   }
   try {
     const outlookService = require('../services/outlookService');
-    const url = await outlookService.getAuthUrl();
+    const url = await outlookService.getAuthUrl(createOAuthState('outlook'));
     res.json({ url });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -135,7 +140,11 @@ router.get('/outlook', async (req, res) => {
 });
 
 router.get('/outlook/callback', async (req, res) => {
-  const { code, error } = req.query;
+  const { code, error, state } = req.query;
+
+  if (!verifyOAuthState(state, 'outlook')) {
+    return res.status(400).json({ error: 'Invalid or expired OAuth state' });
+  }
 
   if (error) {
     return redirectToFrontend(res, { error });

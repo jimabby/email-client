@@ -1,7 +1,7 @@
 const { ConfidentialClientApplication } = require('@azure/msal-node');
 
 const SCOPES = ['https://graph.microsoft.com/Mail.ReadWrite', 'https://graph.microsoft.com/Mail.Send', 'https://graph.microsoft.com/User.Read'];
-const REDIRECT_URI = 'http://localhost:3001/api/auth/outlook/callback';
+const REDIRECT_URI = process.env.OUTLOOK_REDIRECT_URI || 'http://localhost:3001/api/auth/outlook/callback';
 
 function createMsalApp() {
   return new ConfidentialClientApplication({
@@ -13,11 +13,12 @@ function createMsalApp() {
   });
 }
 
-async function getAuthUrl() {
+async function getAuthUrl(state) {
   const msalApp = createMsalApp();
   const authCodeUrlParams = {
     scopes: SCOPES,
-    redirectUri: REDIRECT_URI
+    redirectUri: REDIRECT_URI,
+    state
   };
   return await msalApp.getAuthCodeUrl(authCodeUrlParams);
 }
@@ -128,11 +129,13 @@ function _outlookMsgToSummary(account, msg, folder) {
     starred: msg.flag?.flagStatus === 'flagged',
     folder,
     accountId: account.id,
-    snippet: msg.bodyPreview || ''
+    snippet: msg.bodyPreview || '',
+    threadId: msg.conversationId || null,
+    messageId: msg.internetMessageId || ''
   };
 }
 
-const SELECT_FIELDS = 'id,from,toRecipients,subject,receivedDateTime,isRead,flag,bodyPreview';
+const SELECT_FIELDS = 'id,from,toRecipients,subject,receivedDateTime,isRead,flag,bodyPreview,conversationId,internetMessageId';
 
 async function graphRequestWithRefresh(account, path, method = 'GET', body = null) {
   try {
@@ -222,6 +225,33 @@ async function getFolders(account) {
     name: f.displayName,
     path: f.id
   }));
+}
+
+async function fetchThread(account, conversationId) {
+  const escaped = String(conversationId).replace(/'/g, "''");
+  const data = await graphRequestWithRefresh(account, `/me/messages?$filter=conversationId eq '${escaped}'&$top=50&$select=${SELECT_FIELDS}`);
+  return Promise.all((data.value || []).map(async msg => ({ summary: _outlookMsgToSummary(account, msg, 'conversation'), body: await fetchEmailBody(account, msg.id) })));
+}
+
+async function registerPushWatch(account, notificationUrl, clientState) {
+  const expirationDateTime = new Date(Date.now() + 2.5 * 24 * 60 * 60 * 1000).toISOString();
+  return graphRequestWithRefresh(account, '/subscriptions', 'POST', {
+    changeType: 'created', notificationUrl, resource: '/me/mailFolders/inbox/messages', expirationDateTime, clientState
+  });
+}
+
+async function createFolder(account, name) {
+  const folder = await graphRequestWithRefresh(account, '/me/mailFolders', 'POST', { displayName: name });
+  return { name: folder.displayName, path: folder.id };
+}
+
+async function renameFolder(account, folderId, name) {
+  const folder = await graphRequestWithRefresh(account, `/me/mailFolders/${folderId}`, 'PATCH', { displayName: name });
+  return { name: folder.displayName, path: folder.id };
+}
+
+async function reportSpam(account, outlookId) {
+  await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId: 'junkemail' });
 }
 
 async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, replyToProviderId }) {
@@ -317,7 +347,12 @@ module.exports = {
   searchEmails,
   searchAttachments,
   fetchEmailBody,
+  fetchThread,
   getFolders,
+  createFolder,
+  renameFolder,
+  reportSpam,
+  registerPushWatch,
   sendEmail,
   saveDraft,
   deleteDraft,

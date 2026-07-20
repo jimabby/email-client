@@ -226,6 +226,20 @@ export function EmailList() {
       .catch(() => {})
   }, [emails, currentFolder])
 
+  const lastRulesKey = useRef('')
+  useEffect(() => {
+    if (!emails.length || currentFolder !== 'INBOX') return
+    const key = emails.map(e => e.id).join(',')
+    if (key === lastRulesKey.current) return
+    lastRulesKey.current = key
+    emailsApi.runRules(emails).then(({ applied }) => {
+      if (!applied.length) return
+      const moved = new Set(applied.filter(a => a.action === 'move' || a.action === 'archive').map(a => a.emailId))
+      if (moved.size) setEmails(emails.filter(e => !moved.has(e.id)))
+      for (const item of applied) if (item.action === 'markRead') markEmailRead(item.emailId)
+    }).catch(() => {})
+  }, [emails, currentFolder])
+
   // Clear search when folder changes
   useEffect(() => {
     setSearchInput('')
@@ -604,7 +618,8 @@ export function EmailList() {
     if (!threadView) return []
     const map = new Map<string, EmailSummary[]>()
     for (const email of prioritySorted) {
-      const key = normalizeSubject(email.subject)
+      const providerThread = (email.gmailId || email.outlookId) ? email.threadId : null
+      const key = `${email.accountId}:${providerThread || normalizeSubject(email.subject)}`
       const items = map.get(key)
       if (items) items.push(email)
       else map.set(key, [email])

@@ -1,8 +1,7 @@
 # Hermes Mobile
 
-React Native (Expo) companion app for the Hermes email client. It reads from the
-**same backend** as the desktop app — add accounts on desktop, read and reply on
-your phone.
+React Native (Expo) app for Hermes. For independent mobile use, connect it to an
+always-on cloud backend; the desktop computer does not need to be running.
 
 ## Setup
 
@@ -12,36 +11,31 @@ npm install
 npm start
 ```
 
-Then scan the QR code with the **Expo Go** app (iOS/Android), or press `a`/`i`
-to launch an emulator.
+Then scan the QR code with Expo Go (iOS/Android), or press `a` / `i` to launch
+an emulator.
 
-## Connecting to the backend
+## Connecting to the cloud backend
 
-1. Start the desktop backend (`cd ../desktop/backend && npm start`).
-2. Make sure your phone and computer are on the **same Wi-Fi network**.
-3. Find your computer's LAN IP:
-   - Windows: `ipconfig` → IPv4 Address (e.g. `192.168.1.50`)
-   - macOS/Linux: `ipconfig getifaddr en0` / `hostname -I`
-4. In the app's **Settings** screen, enter `http://<that-ip>:3001` and tap
-   **Test connection**.
+1. Deploy the backend using [`../deploy/README.md`](../deploy/README.md).
+2. In **Settings**, enter its public URL, such as `https://mail.example.com`.
+3. Paste the same random `API_TOKEN` configured on the server.
+4. Tap **Test connection**, then open Accounts.
 
-> The phone cannot reach `localhost` — that points at the phone itself. You must
-> use the computer's network IP.
+The token is stored through Expo SecureStore (iOS Keychain / Android Keystore)
+and is sent as a Bearer token on every private API request.
 
-> By default the desktop backend's CORS allows only localhost origins. Native
-> Expo requests aren't subject to browser CORS, so this works as-is. If you run
-> the mobile app in a **browser** (`npm run web`), add its origin to the CORS
-> list in `desktop/backend/server.js`.
+For local development, the LAN URL still works when the backend is running, and
+`API_TOKEN` may be left unset. Never expose that unauthenticated mode publicly.
 
 ## Screens
 
-- **Settings** — configure the backend URL
-- **Accounts** — lists accounts connected on the desktop app
-- **Inbox** — email list with pull-to-refresh, infinite scroll, and search
-- **Viewer** — full email (HTML rendered), star, delete, reply
-- **Compose** — new message / reply
+- **Settings** - configure the backend URL and private API token
+- **Accounts** - list accounts stored by the cloud backend
+- **Inbox** - email list with pull-to-refresh, infinite scroll, and search
+- **Viewer** - full email (HTML rendered), star, delete, archive, and reply
+- **Compose** - new message, reply, and drafts
 
 ## Stack
 
-Expo SDK 51 · React Native 0.74 · React Navigation · Zustand · axios ·
-react-native-render-html
+Expo SDK 51, React Native 0.74, React Navigation, Zustand, axios, and
+react-native-render-html.

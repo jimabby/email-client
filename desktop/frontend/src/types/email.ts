@@ -22,6 +22,10 @@ export interface EmailSummary {
   folder: string;
   accountId: string;
   snippet?: string;
+  /** Provider conversation id, or a References/Message-ID derived key for IMAP. */
+  threadId?: string | null;
+  messageId?: string;
+  inReplyTo?: string;
 }
 
 export interface EmailBody {
@@ -43,6 +47,19 @@ export interface Folder {
   name: string;
   path: string;
 }
+
+export interface MailRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  accountId?: string;
+  from?: string;
+  subject?: string;
+  action: 'move' | 'archive' | 'markRead' | 'star' | 'spam';
+  targetFolder?: string;
+}
+
+export interface MailTemplate { id: string; name: string; subject: string; body: string }
 
 export type AiMode = 'improve' | 'concise' | 'complete' | 'grammar' | 'formal' | 'friendly' | 'subject' | 'reply' | 'custom';
 

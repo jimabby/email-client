@@ -4,11 +4,11 @@ function createOAuth2Client() {
   return new google.auth.OAuth2(
     process.env.GMAIL_CLIENT_ID,
     process.env.GMAIL_CLIENT_SECRET,
-    'http://localhost:3001/api/auth/gmail/callback'
+    process.env.GMAIL_REDIRECT_URI || 'http://localhost:3001/api/auth/gmail/callback'
   );
 }
 
-function getAuthUrl() {
+function getAuthUrl(state) {
   const oauth2Client = createOAuth2Client();
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -19,7 +19,8 @@ function getAuthUrl() {
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile'
     ],
-    prompt: 'consent'
+    prompt: 'consent',
+    state
   });
 }
 
@@ -111,7 +112,7 @@ function folderToLabelId(folder) {
 async function _fetchMessageMeta(gmail, account, msgId, folder) {
   const detail = await gmail.users.messages.get({
     userId: 'me', id: msgId, format: 'metadata',
-    metadataHeaders: ['From', 'To', 'Subject', 'Date']
+    metadataHeaders: ['From', 'To', 'Subject', 'Date', 'Message-ID', 'In-Reply-To']
   });
   const headers = detail.data.payload?.headers || [];
   const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
@@ -126,7 +127,10 @@ async function _fetchMessageMeta(gmail, account, msgId, folder) {
     starred: detail.data.labelIds?.includes('STARRED') ?? false,
     folder,
     accountId: account.id,
-    snippet: detail.data.snippet || ''
+    snippet: detail.data.snippet || '',
+    threadId: detail.data.threadId || null,
+    messageId: getHeader('Message-ID'),
+    inReplyTo: getHeader('In-Reply-To')
   };
 }
 
@@ -255,6 +259,37 @@ async function getFolders(account) {
   return (res.data.labels || [])
     .filter(l => !l.id.startsWith('Label_'))
     .map(l => ({ name: l.name, path: l.id }));
+}
+
+async function fetchThread(account, threadId) {
+  const gmail = getGmailClient(account);
+  const thread = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'metadata', metadataHeaders: ['From', 'To', 'Subject', 'Date', 'Message-ID', 'In-Reply-To'] });
+  return Promise.all((thread.data.messages || []).map(async msg => ({
+    summary: await _fetchMessageMeta(gmail, account, msg.id, msg.labelIds?.includes('SENT') ? 'SENT' : 'INBOX'),
+    body: await fetchEmailBody(account, msg.id)
+  })));
+}
+
+async function registerPushWatch(account, topicName) {
+  const gmail = getGmailClient(account);
+  return (await gmail.users.watch({ userId: 'me', requestBody: { topicName, labelIds: ['INBOX'], labelFilterBehavior: 'include' } })).data;
+}
+
+async function createFolder(account, name) {
+  const gmail = getGmailClient(account);
+  const result = await gmail.users.labels.create({ userId: 'me', requestBody: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' } });
+  return { name: result.data.name, path: result.data.id };
+}
+
+async function renameFolder(account, folderId, name) {
+  const gmail = getGmailClient(account);
+  const result = await gmail.users.labels.update({ userId: 'me', id: folderId, requestBody: { name } });
+  return { name: result.data.name, path: result.data.id };
+}
+
+async function reportSpam(account, gmailId) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.modify({ userId: 'me', id: gmailId, requestBody: { addLabelIds: ['SPAM'], removeLabelIds: ['INBOX'] } });
 }
 
 function wrapBase64(b64) {
@@ -403,8 +438,13 @@ module.exports = {
   searchEmails,
   searchAttachments,
   fetchEmailBody,
+  fetchThread,
   getThreadingInfo,
   getFolders,
+  createFolder,
+  renameFolder,
+  reportSpam,
+  registerPushWatch,
   sendEmail,
   saveDraft,
   deleteDraft,

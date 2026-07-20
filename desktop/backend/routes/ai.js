@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { streamSuggestion, streamChat, listGeminiModels, rankEmailsWithAI, summarizeThreadWithAI } = require('../services/aiService');
+const { streamSuggestion, streamChat, listGeminiModels, rankEmailsWithAI, summarizeThreadWithAI, generateSmartReplies, extractActionsWithAI, summarizeAttachmentWithAI } = require('../services/aiService');
 const store = require('../store');
 
 // An AI key is available if the user saved one, OR no explicit provider is set
@@ -83,12 +83,55 @@ router.post('/chat', async (req, res) => {
     });
   }
 
-  const { messages, emailContext } = req.body;
+  const { messages, emailContext = {} } = req.body;
   if (!messages?.length) {
     return res.status(400).json({ error: 'messages array is required' });
   }
 
-  await streamChat(res, { messages, emailContext });
+  // Retrieval step: search every connected mailbox with the user's question,
+  // then supply the most relevant message bodies to the model.
+  const query = String(messages[messages.length - 1]?.content || '').slice(0, 500);
+  const retrieved = [];
+  await Promise.all(store.getAccounts().map(async account => {
+    try {
+      const service = account.type === 'gmail' ? require('../services/gmailService') : account.type === 'outlook' ? require('../services/outlookService') : require('../services/imapService');
+      const hits = account.type === 'imap' ? await service.searchEmails(account, query, 'INBOX', 4) : await service.searchEmails(account, query, 4);
+      for (const hit of hits.slice(0, 4)) {
+        try {
+          const id = hit.gmailId || hit.outlookId || hit.uid;
+          const body = account.type === 'imap' ? await service.fetchEmailBody(account, id, hit.folder) : await service.fetchEmailBody(account, id);
+          retrieved.push({ from: hit.from, subject: hit.subject, date: hit.date, body: String(body?.text || body?.html || '').replace(/<[^>]+>/g, ' ').slice(0, 4000) });
+        } catch {}
+      }
+    } catch {}
+  }));
+  await streamChat(res, { messages, emailContext: { ...emailContext, retrieved: retrieved.slice(0, 12) } });
+});
+
+router.post('/smart-replies', async (req, res) => {
+  if (!hasAiKey()) return res.status(400).json({ error: 'No AI configured' });
+  try { res.json({ replies: await generateSmartReplies(req.body) }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/extract-actions', async (req, res) => {
+  if (!hasAiKey()) return res.status(400).json({ error: 'No AI configured' });
+  try { res.json({ actions: await extractActionsWithAI(req.body) }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/summarize-attachment', async (req, res) => {
+  if (!hasAiKey()) return res.status(400).json({ error: 'No AI configured' });
+  try {
+    let text = req.body.text || '';
+    if (!text && req.body.content) {
+      const bytes = Buffer.from(req.body.content, 'base64');
+      if (req.body.contentType === 'application/pdf' || /\.pdf$/i.test(req.body.filename || '')) {
+        const pdf = require('pdf-parse');
+        text = (await pdf(bytes)).text;
+      } else if (/^text\//i.test(req.body.contentType || '')) text = bytes.toString('utf8');
+    }
+    if (!text) return res.status(400).json({ error: 'This attachment type cannot be converted to text' });
+    res.json({ summary: await summarizeAttachmentWithAI({ ...req.body, text }) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/ai/priority

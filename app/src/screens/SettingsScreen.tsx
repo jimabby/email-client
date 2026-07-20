@@ -11,18 +11,19 @@ import type { RootStackParamList } from '../navigation';
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
 export default function SettingsScreen({ navigation }: Props) {
-  const { serverUrl, setServerUrl } = useAppStore();
+  const { serverUrl, apiToken, setServerUrl, setApiToken } = useAppStore();
   const [url, setUrl] = useState(serverUrl);
+  const [token, setToken] = useState(apiToken);
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const save = async () => {
-    await setServerUrl(url);
+    await Promise.all([setServerUrl(url), setApiToken(token)]);
     setStatus({ ok: true, msg: 'Saved' });
   };
 
   const test = async () => {
-    await setServerUrl(url);
+    await Promise.all([setServerUrl(url), setApiToken(token)]);
     setTesting(true);
     setStatus(null);
     try {
@@ -39,17 +40,32 @@ export default function SettingsScreen({ navigation }: Props) {
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20 }}>
       <Text style={styles.label}>Backend server URL</Text>
       <Text style={styles.help}>
-        Enter your computer's address on the same Wi-Fi network, including the
-        port. Example: http://192.168.1.50:3001
+        Enter the public HTTPS address of your Hermes backend.
       </Text>
       <TextInput
         value={url}
         onChangeText={setUrl}
-        placeholder="http://192.168.1.50:3001"
+        placeholder="https://mail.example.com"
         placeholderTextColor={theme.textFaint}
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
+        style={styles.input}
+      />
+
+      <Text style={[styles.label, { marginTop: 20 }]}>API token</Text>
+      <Text style={styles.help}>
+        Use the same API_TOKEN configured on the cloud server. It is kept in the
+        phone's encrypted credential storage.
+      </Text>
+      <TextInput
+        value={token}
+        onChangeText={setToken}
+        placeholder="Paste your private API token"
+        placeholderTextColor={theme.textFaint}
+        autoCapitalize="none"
+        autoCorrect={false}
+        secureTextEntry
         style={styles.input}
       />
 
@@ -82,8 +98,8 @@ export default function SettingsScreen({ navigation }: Props) {
       ) : null}
 
       <Text style={styles.note}>
-        Accounts are added on the desktop app. This mobile app reads from the same
-        backend, so any account you've connected on desktop appears here.
+        The cloud backend stays online independently of your PC. For internet use,
+        always use HTTPS and a long random API token.
       </Text>
     </ScrollView>
   );

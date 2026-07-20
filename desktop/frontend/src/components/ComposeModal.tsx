@@ -7,7 +7,7 @@ import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi, streamAiSuggestion } from '../api/client'
-import type { AiMode } from '../types/email'
+import type { AiMode, MailTemplate } from '../types/email'
 
 const AI_MODES: { value: AiMode; label: string; icon: string; description: string }[] = [
   { value: 'improve',  label: 'Improve',      icon: '✨', description: 'Make it more professional and clear' },
@@ -192,8 +192,14 @@ export function ComposeModal() {
   const [aiDone, setAiDone]             = useState(false)
   const [aiError, setAiError]           = useState('')
   const [expandedAiHeight, setExpandedAiHeight] = useState(220)
+  const [templates, setTemplates] = useState<MailTemplate[]>([])
+  const [smartCompletion, setSmartCompletion] = useState('')
+  const smartTimerRef = useRef<number | null>(null)
+  const smartAbortRef = useRef<{ abort: () => void } | null>(null)
   const abortRef = useRef<{ abort: () => void } | null>(null)
   const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(null)
+
+  useEffect(() => { emailsApi.getTemplates().then(setTemplates).catch(() => {}) }, [])
 
   // Build initial content: reply body stays as-is; new emails get signature
   const initialHtml = (() => {
@@ -220,6 +226,12 @@ export function ComposeModal() {
         class: 'flex-1 px-4 py-3 text-sm text-[#24292f] dark:text-[#c9d1d9] leading-relaxed focus:outline-none min-h-[120px]',
       },
       handleKeyDown: (_view, event) => {
+        if (event.key === 'Tab' && smartCompletion) {
+          event.preventDefault()
+          editor?.commands.setContent(smartCompletion)
+          setSmartCompletion('')
+          return true
+        }
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
           event.preventDefault()
           sendRef.current()
@@ -228,7 +240,25 @@ export function ComposeModal() {
         return false
       },
     },
+    onUpdate: ({ editor: current }) => {
+      setSmartCompletion('')
+      if (!aiConfigured) return
+      if (smartTimerRef.current) window.clearTimeout(smartTimerRef.current)
+      const text = current.getText().trim()
+      if (text.length < 20) return
+      smartTimerRef.current = window.setTimeout(async () => {
+        smartAbortRef.current?.abort()
+        let completion = ''
+        smartAbortRef.current = await streamAiSuggestion(
+          { subject, body: text, mode: 'complete' },
+          chunk => { completion += chunk; setSmartCompletion(completion) },
+          () => {}, () => setSmartCompletion('')
+        )
+      }, 700)
+    },
   })
+
+  useEffect(() => () => { if (smartTimerRef.current) window.clearTimeout(smartTimerRef.current); smartAbortRef.current?.abort() }, [])
 
   const readFileAsBase64 = (file: File): Promise<{ filename: string; contentType: string; content: string }> =>
     new Promise((resolve) => {
@@ -597,6 +627,11 @@ export function ComposeModal() {
       <div className="flex-1 overflow-y-auto">
         <EditorContent editor={editor} className="h-full" />
       </div>
+      {smartCompletion && smartCompletion !== editor?.getText() && (
+        <button onClick={() => { editor?.commands.setContent(smartCompletion); setSmartCompletion('') }} className="mx-4 mb-2 text-left rounded-md border border-dashed border-violet-400/60 bg-violet-50 dark:bg-violet-500/10 px-3 py-2 text-xs text-violet-700 dark:text-violet-300">
+          <span className="opacity-70">Smart compose · Tab to accept</span><br/>{smartCompletion.slice(0, 240)}
+        </button>
+      )}
     </div>
   )
 
@@ -638,6 +673,18 @@ export function ComposeModal() {
       <div className="flex-1">
         <span className="text-[10px] text-[#afb8c1] dark:text-[#484f58] hidden sm:inline">Ctrl+Enter to send</span>
       </div>
+      {templates.length > 0 && (
+        <select defaultValue="" onChange={e => {
+          const template = templates.find(t => t.id === e.target.value)
+          if (!template) return
+          if (template.subject) setSubject(template.subject)
+          editor?.commands.setContent(template.body)
+          e.currentTarget.value = ''
+        }} className="text-[11px] px-2 py-1.5 rounded-md border border-[#d0d7de] dark:border-[#30363d] bg-white dark:bg-[#161b22] text-[#656d76] dark:text-[#8b949e]">
+          <option value="">Template…</option>
+          {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      )}
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
       <button onClick={() => fileInputRef.current?.click()} title="Attach files"
         className="p-2 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors relative">

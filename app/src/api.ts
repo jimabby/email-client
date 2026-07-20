@@ -2,19 +2,19 @@ import axios from 'axios';
 import { useAppStore } from './store';
 import type { Account, EmailSummary, EmailBody, Folder } from './types';
 
-// The base URL is dynamic (set on the Settings screen) because a phone can't
-// reach the desktop's localhost — it needs the machine's LAN IP, e.g.
-// http://192.168.1.50:3001
+// The base URL and private token are configured on the Settings screen. In
+// production this should be the HTTPS URL of the always-on cloud backend.
 function client() {
-  const baseURL = useAppStore.getState().serverUrl;
+  const { serverUrl: baseURL, apiToken } = useAppStore.getState();
   return axios.create({
     baseURL: `${baseURL}/api`,
     timeout: 20000,
+    headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : undefined,
   });
 }
 
 export const api = {
-  health: () => client().get<{ status: string }>('/health').then((r) => r.data),
+  health: () => client().get<{ status: string; authenticated: boolean }>('/auth-check').then((r) => r.data),
 
   listAccounts: () =>
     client().get<Account[]>('/auth/accounts').then((r) => r.data),

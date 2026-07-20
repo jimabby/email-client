@@ -148,6 +148,25 @@ function startApiPollWatcher(account) {
   return watcher;
 }
 
+function startPushWatcher(account) {
+  const service = getService(account.type);
+  const watcher = { type: `${account.type}-push`, accountId: account.id, renewTimer: null, stop: async () => { if (watcher.renewTimer) clearTimeout(watcher.renewTimer); } };
+  const renew = async () => {
+    const fresh = store.getAccount(account.id);
+    if (!fresh) return;
+    try {
+      if (fresh.type === 'gmail') await service.registerPushWatch(fresh, process.env.GMAIL_PUBSUB_TOPIC);
+      else {
+        const subscription = await service.registerPushWatch(fresh, `${process.env.PUBLIC_WEBHOOK_URL.replace(/\/$/, '')}/api/webhooks/outlook`, process.env.WEBHOOK_CLIENT_STATE);
+        if (subscription?.id) store.updateAccount(fresh.id, { graphSubscriptionId: subscription.id });
+      }
+    } catch (err) { console.warn(`[watch] ${fresh.type} push registration failed, polling remains available:`, err.message); }
+    watcher.renewTimer = setTimeout(renew, fresh.type === 'gmail' ? 6 * 24 * 60 * 60 * 1000 : 2 * 24 * 60 * 60 * 1000);
+  };
+  renew().catch(() => {});
+  return watcher;
+}
+
 function ensureWatch(accountOrId) {
   const account = typeof accountOrId === 'string'
     ? store.getAccount(accountOrId)
@@ -156,9 +175,9 @@ function ensureWatch(accountOrId) {
   if (!account) return null;
   if (watchers.has(account.id)) return watchers.get(account.id);
 
-  const watcher = account.type === 'imap'
-    ? startImapWatcher(account)
-    : startApiPollWatcher(account);
+  const canPush = account.type === 'gmail' ? !!process.env.GMAIL_PUBSUB_TOPIC
+    : account.type === 'outlook' ? !!(process.env.PUBLIC_WEBHOOK_URL && process.env.WEBHOOK_CLIENT_STATE) : false;
+  const watcher = account.type === 'imap' ? startImapWatcher(account) : canPush ? startPushWatcher(account) : startApiPollWatcher(account);
 
   watchers.set(account.id, watcher);
   return watcher;

@@ -235,6 +235,12 @@ export function Sidebar() {
                         <button
                           key={folder.path}
                           onClick={() => handleFolderClick(account.id, folder.path)}
+                          onDoubleClick={async (e) => {
+                            e.preventDefault()
+                            const name = prompt('Rename folder', folder.name)
+                            if (!name || name === folder.name) return
+                            try { const updated = await emailsApi.renameFolder(account.id, folder.path, name); setFolders(account.id, accountFolders.map(f => f.path === folder.path ? updated : f)) } catch (err) { console.error(err) }
+                          }}
                           className={`w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors mb-0.5
                             ${isActiveFolder
                               ? 'bg-[rgba(245,158,11,0.12)] text-[#b45309] dark:text-[#f59e0b] font-semibold'
@@ -253,6 +259,11 @@ export function Sidebar() {
                         </button>
                       )
                     })}
+                    <button onClick={async () => {
+                      const name = prompt('New folder name')
+                      if (!name) return
+                      try { const created = await emailsApi.createFolder(account.id, name); setFolders(account.id, [...accountFolders, created]) } catch (err) { console.error(err) }
+                    }} className="w-full px-2 py-1.5 text-left text-[11px] text-[#818b98] hover:text-[#f59e0b]">+ New folder <span className="opacity-60">· double-click to rename</span></button>
                   </div>
                 )}
               </div>

@@ -31,6 +31,27 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
+function sanitizeEmailHtml(html: string, allowRemoteImages: boolean): { html: string; blocked: number } {
+  const clean = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['p','div','span','a','b','i','em','strong','br','ul','ol','li','h1','h2','h3','h4','h5','h6','table','tr','td','th','tbody','thead','img','blockquote','pre','code','hr','font'],
+    ALLOWED_ATTR: ['href','src','alt','class','style','target','rel','colspan','rowspan','width','height','color','size']
+  })
+  const doc = new DOMParser().parseFromString(clean, 'text/html')
+  let blocked = 0
+  for (const img of Array.from(doc.querySelectorAll('img'))) {
+    const src = img.getAttribute('src') || ''
+    const isRemote = /^https?:\/\//i.test(src) || src.startsWith('//')
+    const tiny = Number(img.getAttribute('width') || 0) <= 1 && Number(img.getAttribute('height') || 0) <= 1
+    if (tiny) { img.remove(); blocked++; continue }
+    if (isRemote && !allowRemoteImages) { img.removeAttribute('src'); img.setAttribute('alt', img.getAttribute('alt') || '[remote image blocked]'); blocked++ }
+  }
+  for (const el of Array.from(doc.querySelectorAll<HTMLElement>('[style]'))) {
+    if (/url\s*\(\s*['"]?(?:https?:)?\/\//i.test(el.getAttribute('style') || '')) { el.removeAttribute('style'); blocked++ }
+  }
+  for (const a of Array.from(doc.querySelectorAll('a'))) { a.setAttribute('rel', 'noopener noreferrer'); a.setAttribute('target', '_blank') }
+  return { html: doc.body.innerHTML, blocked }
+}
+
 // Extract the bare address from "Name <addr>" (or return the string as-is).
 function bareAddress(s: string): string {
   return (s.match(/<([^>]+)>/)?.[1] || s).trim().toLowerCase()
@@ -81,6 +102,12 @@ export function EmailViewer() {
   const [threadSummary, setThreadSummary] = useState<{ summary: string; keyPoints: string[]; actionItems: string[] } | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [showRemoteImages, setShowRemoteImages] = useState(false)
+  const [conversationBodies, setConversationBodies] = useState<Array<{ email: typeof selectedEmail; body: NonNullable<typeof selectedEmailBody> }>>([])
+  const [smartReplies, setSmartReplies] = useState<string[]>([])
+  const [actions, setActions] = useState<{ title: string; kind: 'task' | 'calendar'; date?: string; details?: string }[]>([])
+  const [actionsLoading, setActionsLoading] = useState(false)
+  const [attachmentSummaries, setAttachmentSummaries] = useState<Record<number, string>>({})
 
   useEffect(() => {
     return () => {
@@ -105,7 +132,32 @@ export function EmailViewer() {
     setThreadSummary(null)
     setSummaryError(null)
     setSummaryLoading(false)
+    setShowRemoteImages(false)
+    setActions([])
+    setAttachmentSummaries({})
   }, [selectedEmail?.id])
+
+  useEffect(() => {
+    if (!selectedEmail || !selectedEmailBody) { setConversationBodies([]); setSmartReplies([]); return }
+    let cancelled = false
+    const providerThread = (selectedEmail.gmailId || selectedEmail.outlookId) ? selectedEmail.threadId : null
+    const candidates = emails.filter(e => e.id !== selectedEmail.id && e.accountId === selectedEmail.accountId &&
+      (providerThread ? e.threadId === providerThread : normalizeSubject(e.subject) === normalizeSubject(selectedEmail.subject)))
+      .sort((a, b) => Date.parse(a.date) - Date.parse(b.date)).slice(-9)
+    const conversationRequest = providerThread
+      ? emailsApi.getThread(selectedEmail.accountId, providerThread).then(items => items.filter(x => x.summary.id !== selectedEmail.id).map(x => ({ email: x.summary, body: x.body })))
+      : Promise.all(candidates.map(async email => ({ email, body: await emailsApi.getBody(email.accountId, email.id, email.folder) })))
+    conversationRequest
+      .then(items => { if (!cancelled) setConversationBodies(items) }).catch(() => { if (!cancelled) setConversationBodies([]) })
+
+    const cacheKey = `hermes-smart-replies:${selectedEmail.id}`
+    try { const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (Array.isArray(cached)) setSmartReplies(cached) } catch {}
+    if (!localStorage.getItem(cacheKey)) {
+      aiApi.smartReplies({ from: selectedEmail.from, subject: selectedEmail.subject, body: selectedEmailBody.text || stripHtml(selectedEmailBody.html || '') })
+        .then(({ replies }) => { if (!cancelled) { setSmartReplies(replies); localStorage.setItem(cacheKey, JSON.stringify(replies)) } }).catch(() => {})
+    }
+    return () => { cancelled = true }
+  }, [selectedEmail?.id, selectedEmailBody, emails])
 
   if (!selectedEmail) {
     return (
@@ -180,6 +232,14 @@ export function EmailViewer() {
     replyTo: replyToPayload()
   })
 
+  const handleSmartReply = (reply: string) => openCompose({
+    accountId: selectedEmail.accountId,
+    to: selectedEmail.from,
+    subject: `Re: ${selectedEmail.subject.replace(/^Re:\s*/i, '')}`,
+    body: `<p>${escapeHtml(reply)}</p>${buildQuoteHtml()}`,
+    replyTo: replyToPayload()
+  })
+
   // Reply All: original sender + all To recipients (minus this account) in To,
   // original Cc preserved.
   const handleReplyAll = () => {
@@ -214,6 +274,16 @@ export function EmailViewer() {
     } catch {
       showNotification('error', 'Failed to delete email')
     }
+  }
+
+  const handleSpam = async () => {
+    try { await emailsApi.reportSpam(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder); removeEmail(selectedEmail.id); showNotification('success', 'Reported as spam') }
+    catch { showNotification('error', 'Failed to report spam') }
+  }
+  const handleBlock = async () => {
+    if (!confirm(`Block ${selectedEmail.from}? Future messages will go to spam.`)) return
+    try { await emailsApi.blockSender(selectedEmail.accountId, selectedEmail.id, selectedEmail.from, selectedEmail.folder); removeEmail(selectedEmail.id); showNotification('success', 'Sender blocked') }
+    catch { showNotification('error', 'Failed to block sender') }
   }
 
   const handleArchive = async () => {
@@ -343,12 +413,16 @@ export function EmailViewer() {
     }
   }
 
-  const sanitizedHtml = body?.html
-    ? DOMPurify.sanitize(body.html, {
-        ALLOWED_TAGS: ['p','div','span','a','b','i','em','strong','br','ul','ol','li','h1','h2','h3','h4','h5','h6','table','tr','td','th','tbody','thead','img','blockquote','pre','code','hr','font'],
-        ALLOWED_ATTR: ['href','src','alt','class','style','target','rel','colspan','rowspan','width','height','color','size']
-      })
-    : null
+  const handleExtractActions = async () => {
+    if (!body) return
+    setActionsLoading(true)
+    try { setActions((await aiApi.extractActions({ subject: body.subject, body: body.text || stripHtml(body.html || '') })).actions) }
+    catch { showNotification('error', 'Failed to extract actions') }
+    finally { setActionsLoading(false) }
+  }
+
+  const sanitized = body?.html ? sanitizeEmailHtml(body.html, showRemoteImages) : null
+  const sanitizedHtml = sanitized?.html || null
 
   const toolBtn = 'flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors'
   const iconBtn = 'p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors'
@@ -399,6 +473,7 @@ export function EmailViewer() {
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3h10M3 7h7M3 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
           {summaryLoading ? 'Summarizing…' : 'Summarize'}
         </button>
+        <button onClick={handleExtractActions} className={toolBtn} disabled={actionsLoading} title="Find tasks and dates">{actionsLoading ? 'Finding…' : 'Actions'}</button>
 
         {unsubscribeLink && (
           <button
@@ -497,6 +572,8 @@ export function EmailViewer() {
         <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#fff0ee] dark:hover:bg-[#f85149]/10 rounded-md transition-colors" title="Delete (d)" aria-label="Delete email">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
+        <button onClick={handleSpam} className="p-1.5 text-[#818b98] hover:text-[#cf222e] rounded-md" title="Report spam">Spam</button>
+        <button onClick={handleBlock} className="p-1.5 text-[#818b98] hover:text-[#cf222e] rounded-md" title="Block sender">Block</button>
       </div>
 
       {/* Header */}
@@ -523,6 +600,37 @@ export function EmailViewer() {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-6 py-5" onClick={() => { setShowMoveMenu(false); setShowSnoozeMenu(false) }}>
+        {sanitized?.blocked ? (
+          <div className="mb-4 flex items-center justify-between rounded-md bg-[#fff8ec] dark:bg-[#1c2128] px-3 py-2 text-xs text-[#656d76] dark:text-[#8b949e]">
+            <span>{sanitized.blocked} remote image{sanitized.blocked === 1 ? '' : 's'} blocked for privacy.</span>
+            <button onClick={() => setShowRemoteImages(true)} className="font-semibold text-[#0969da]">Show images</button>
+          </div>
+        ) : null}
+        {conversationBodies.length > 0 && (
+          <div className="mb-5 space-y-2">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-[#818b98]">Earlier in this conversation</div>
+            {conversationBodies.map(({ email, body: prior }) => (
+              <details key={email!.id} className="rounded-lg border border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
+                <summary className="cursor-pointer px-3 py-2 text-xs"><strong>{prior.from}</strong><span className="float-right text-[#818b98]">{formatFullDate(prior.date)}</span></summary>
+                <div className="border-t border-[#d0d7de] dark:border-[#30363d] px-3 py-3 text-xs whitespace-pre-wrap">{prior.text || stripHtml(prior.html || '')}</div>
+              </details>
+            ))}
+          </div>
+        )}
+        {actions.length > 0 && (
+          <div className="mb-5 rounded-lg border border-[#d0d7de] dark:border-[#30363d] p-3">
+            <div className="text-xs font-semibold mb-2">Suggested actions</div>
+            {actions.map((a, i) => <div key={i} className="flex items-center gap-2 text-xs py-1"><span className="flex-1">{a.kind === 'calendar' ? '📅' : '✓'} {a.title}{a.date ? ` — ${a.date}` : ''}</span><button onClick={() => {
+              if (a.kind === 'calendar') {
+                const start = new Date(a.date || Date.now()).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+                const ics = `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nDTSTART:${start}\r\nSUMMARY:${a.title.replace(/\n/g, ' ')}\r\nDESCRIPTION:${(a.details || '').replace(/\n/g, ' ')}\r\nEND:VEVENT\r\nEND:VCALENDAR`
+                const url = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' })); const link = document.createElement('a'); link.href = url; link.download = 'hermes-event.ics'; link.click(); URL.revokeObjectURL(url)
+              } else {
+                const reminders = JSON.parse(localStorage.getItem('hermes-reminders') || '[]'); reminders.push({ ...a, createdAt: new Date().toISOString(), emailId: selectedEmail.id }); localStorage.setItem('hermes-reminders', JSON.stringify(reminders)); showNotification('success', 'Reminder created')
+              }
+            }} className="text-[#0969da]">{a.kind === 'calendar' ? 'Add to calendar' : 'Create reminder'}</button></div>)}
+          </div>
+        )}
         {threadSummary && (
           <div className="mb-5 border border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22] rounded-lg p-4">
             <div className="text-xs font-semibold text-[#656d76] dark:text-[#8b949e] mb-2">AI Thread Summary</div>
@@ -592,7 +700,15 @@ export function EmailViewer() {
                         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       </button>
                     )}
+                    {att.content && (att.contentType === 'application/pdf' || att.contentType?.startsWith('text/')) && (
+                      <button onClick={async () => {
+                        setAttachmentSummaries(s => ({ ...s, [i]: 'Summarizing…' }))
+                        try { const r = await aiApi.summarizeAttachment(att); setAttachmentSummaries(s => ({ ...s, [i]: r.summary })) }
+                        catch { setAttachmentSummaries(s => ({ ...s, [i]: 'Unable to summarize this attachment.' })) }
+                      }} className="text-[#7c3aed] text-[11px]">Summarize</button>
+                    )}
                   </div>
+                  {attachmentSummaries[i] && <div className="rounded-md bg-[#f6f8fa] dark:bg-[#161b22] p-3 text-xs whitespace-pre-wrap">{attachmentSummaries[i]}</div>}
                   {att.content && previewOpen[i] && isPreviewable(att) && (
                     <div className="border border-[#d0d7de] dark:border-[#30363d] rounded-md overflow-hidden bg-white dark:bg-[#0d1117] w-full">
                       {att.contentType?.toLowerCase().startsWith('image/') ? (
@@ -605,6 +721,12 @@ export function EmailViewer() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+        {smartReplies.length > 0 && (
+          <div className="mt-6 border-t border-[#d0d7de] dark:border-[#30363d] pt-4">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-[#818b98] mb-2">Smart reply</div>
+            <div className="flex flex-wrap gap-2">{smartReplies.map(reply => <button key={reply} onClick={() => handleSmartReply(reply)} className="rounded-full border border-[#7c3aed]/50 px-3 py-1.5 text-xs text-[#7c3aed] hover:bg-[#7c3aed]/10">{reply}</button>)}</div>
           </div>
         )}
       </div>

@@ -124,7 +124,10 @@ async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = nu
         read: msg.flags.has('\\Seen'),
         starred: msg.flags.has('\\Flagged'),
         folder,
-        accountId: account.id
+        accountId: account.id,
+        threadId: msg.envelope.inReplyTo || msg.envelope.messageId || null,
+        messageId: msg.envelope.messageId || '',
+        inReplyTo: msg.envelope.inReplyTo || ''
       });
     }
     return { emails, nextToken: start > 1 ? String(start - 1) : null };
@@ -154,7 +157,10 @@ async function searchEmails(account, query, folder = 'INBOX', limit = 50) {
         read: msg.flags.has('\\Seen'),
         starred: msg.flags.has('\\Flagged'),
         folder,
-        accountId: account.id
+        accountId: account.id,
+        threadId: msg.envelope.inReplyTo || msg.envelope.messageId || null,
+        messageId: msg.envelope.messageId || '',
+        inReplyTo: msg.envelope.inReplyTo || ''
       });
     }
     return emails;
@@ -264,6 +270,27 @@ async function getFolders(account) {
     const list = await client.list();
     return list.map(f => ({ name: f.name, path: f.path, delimiter: f.delimiter }));
   });
+}
+
+async function createFolder(account, name) {
+  return getConn(account).run(async client => {
+    await client.mailboxCreate(name);
+    return { name, path: name };
+  });
+}
+
+async function renameFolder(account, folder, name) {
+  return getConn(account).run(async client => {
+    await client.mailboxRename(folder, name);
+    return { name, path: name };
+  });
+}
+
+async function reportSpam(account, uid, folder = 'INBOX') {
+  const list = await getFolders(account);
+  const spam = list.find(f => /spam|junk/i.test(f.name));
+  if (!spam) throw new Error('This account has no Spam/Junk folder');
+  return moveEmail(account, uid, folder, spam.path);
 }
 
 async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references }) {
@@ -414,6 +441,9 @@ module.exports = {
   fetchEmailBody,
   getThreadingInfo,
   getFolders,
+  createFolder,
+  renameFolder,
+  reportSpam,
   sendEmail,
   saveDraft,
   deleteDraft,

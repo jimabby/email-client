@@ -1,0 +1,41 @@
+services:
+  backend:
+    build:
+      context: ../desktop/backend
+    restart: unless-stopped
+    env_file: ${HERMES_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      HERMES_DATA_DIR: /data
+    volumes:
+      - hermes-data:/data
+    networks:
+      - hermes
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      HERMES_DOMAIN: ${HERMES_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - hermes
+
+networks:
+  hermes:
+
+volumes:
+  hermes-data:
+  caddy-data:
+  caddy-config:
