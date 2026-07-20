@@ -150,7 +150,25 @@ function startApiPollWatcher(account) {
 
 function startPushWatcher(account) {
   const service = getService(account.type);
-  const watcher = { type: `${account.type}-push`, accountId: account.id, renewTimer: null, stop: async () => { if (watcher.renewTimer) clearTimeout(watcher.renewTimer); } };
+  const watcher = {
+    type: `${account.type}-push`,
+    accountId: account.id,
+    renewTimer: null,
+    pollFallback: null,
+    stop: async () => {
+      if (watcher.renewTimer) clearTimeout(watcher.renewTimer);
+      if (watcher.pollFallback) { await watcher.pollFallback.stop?.(); watcher.pollFallback = null; }
+    },
+  };
+  // If push registration fails we have no delivery mechanism, so start an API
+  // poller as a fallback (this is what the "polling remains available" log
+  // promises). Once push registration later succeeds, tear the poller down.
+  const ensurePollFallback = () => {
+    if (!watcher.pollFallback) watcher.pollFallback = startApiPollWatcher(account);
+  };
+  const clearPollFallback = () => {
+    if (watcher.pollFallback) { watcher.pollFallback.stop?.(); watcher.pollFallback = null; }
+  };
   const renew = async () => {
     const fresh = store.getAccount(account.id);
     if (!fresh) return;
@@ -160,7 +178,11 @@ function startPushWatcher(account) {
         const subscription = await service.registerPushWatch(fresh, `${process.env.PUBLIC_WEBHOOK_URL.replace(/\/$/, '')}/api/webhooks/outlook`, process.env.WEBHOOK_CLIENT_STATE);
         if (subscription?.id) store.updateAccount(fresh.id, { graphSubscriptionId: subscription.id });
       }
-    } catch (err) { console.warn(`[watch] ${fresh.type} push registration failed, polling remains available:`, err.message); }
+      clearPollFallback();
+    } catch (err) {
+      console.warn(`[watch] ${fresh.type} push registration failed, falling back to polling:`, err.message);
+      ensurePollFallback();
+    }
     watcher.renewTimer = setTimeout(renew, fresh.type === 'gmail' ? 6 * 24 * 60 * 60 * 1000 : 2 * 24 * 60 * 60 * 1000);
   };
   renew().catch(() => {});

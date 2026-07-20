@@ -9,6 +9,9 @@ node_modules/
 # Email account credentials — NEVER commit this
 backend/accounts.json
 
+# Cached message data (regenerated at runtime)
+backend/email-cache.json
+
 # Build output
 frontend/dist/
 dist-electron/

@@ -6,6 +6,10 @@ const { v4: uuidv4 } = require('uuid');
 // In dev mode it falls back to the backend directory.
 const DATA_DIR  = process.env.HERMES_DATA_DIR || __dirname;
 const STORE_FILE = path.join(DATA_DIR, 'accounts.json');
+// The email cache is high-churn (rewritten on every list/body fetch) and can
+// grow to hundreds of MB. Keep it in its own file so account credentials and
+// OAuth tokens in accounts.json aren't rewritten — or put at risk — each fetch.
+const CACHE_FILE = path.join(DATA_DIR, 'email-cache.json');
 
 // On first launch of a packaged app the user-data dir won't have accounts.json yet.
 // If there's a bundled seed file next to this module, copy it over once.
@@ -57,7 +61,42 @@ function saveStore(data) {
   });
 }
 
+function loadCache() {
+  try {
+    if (fs.existsSync(CACHE_FILE)) return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+  } catch (e) {
+    console.error('Failed to load email cache:', e.message);
+  }
+  return {};
+}
+
+let cacheSaveQueued = false;
+
+function saveCache() {
+  if (cacheSaveQueued) return;
+  cacheSaveQueued = true;
+  queueMicrotask(() => {
+    cacheSaveQueued = false;
+    try {
+      const tmpFile = CACHE_FILE + '.tmp';
+      fs.writeFileSync(tmpFile, JSON.stringify(emailCache));
+      fs.renameSync(tmpFile, CACHE_FILE);
+    } catch (e) {
+      console.error('Failed to save email cache:', e.message);
+    }
+  });
+}
+
 const store = loadStore();
+const emailCache = loadCache();
+
+// One-time migration: older builds stored the cache inside accounts.json.
+if (store.emailCache && typeof store.emailCache === 'object') {
+  Object.assign(emailCache, store.emailCache);
+  delete store.emailCache;
+  saveCache();
+  saveStore(store);
+}
 
 module.exports = {
   getAccounts() {
@@ -110,17 +149,16 @@ module.exports = {
   getTemplates() { return Array.isArray(store.templates) ? store.templates : []; },
   saveTemplates(templates) { store.templates = Array.isArray(templates) ? templates : []; saveStore(store); },
 
-  getEmailCache(key) { return (store.emailCache || {})[key] || null; },
+  getEmailCache(key) { return emailCache[key] || null; },
   saveEmailCache(key, value) {
-    if (!store.emailCache) store.emailCache = {};
     // Keep the cache useful but bounded: attachment bytes can be tens of MB and
     // remain available online, while message text is what offline reading needs.
     const safeValue = JSON.parse(JSON.stringify(value, (name, item) => name === 'content' ? null : item));
     if (JSON.stringify(safeValue).length > 1024 * 1024) return;
-    store.emailCache[key] = { value: safeValue, cachedAt: new Date().toISOString() };
-    const keys = Object.keys(store.emailCache);
-    for (const old of keys.slice(0, Math.max(0, keys.length - 300))) delete store.emailCache[old];
-    saveStore(store);
+    emailCache[key] = { value: safeValue, cachedAt: new Date().toISOString() };
+    const keys = Object.keys(emailCache);
+    for (const old of keys.slice(0, Math.max(0, keys.length - 300))) delete emailCache[old];
+    saveCache();
   },
 
   // ─── Email categories cache ───────────────────────────────────────────────

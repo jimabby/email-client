@@ -21,6 +21,10 @@ const AI_MODES: { value: AiMode; label: string; icon: string; description: strin
   { value: 'custom',   label: 'Custom',        icon: '🎯', description: 'Give your own instruction' },
 ]
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
 // ─── Contact Autocomplete Field ───────────────────────────────────────────────
 
 function ContactField({
@@ -194,6 +198,11 @@ export function ComposeModal() {
   const [expandedAiHeight, setExpandedAiHeight] = useState(220)
   const [templates, setTemplates] = useState<MailTemplate[]>([])
   const [smartCompletion, setSmartCompletion] = useState('')
+  // The tiptap editor's handleKeyDown / onUpdate closures are created once and
+  // capture their initial values, so read live state through refs (same reason
+  // sendRef exists for Ctrl+Enter).
+  const smartCompletionRef = useRef('')
+  const subjectRef = useRef('')
   const smartTimerRef = useRef<number | null>(null)
   const smartAbortRef = useRef<{ abort: () => void } | null>(null)
   const abortRef = useRef<{ abort: () => void } | null>(null)
@@ -212,6 +221,7 @@ export function ComposeModal() {
   })()
 
   const sendRef = useRef<() => void>(() => {})
+  const acceptSmartRef = useRef<() => void>(() => {})
 
   const editor = useEditor({
     extensions: [
@@ -226,10 +236,9 @@ export function ComposeModal() {
         class: 'flex-1 px-4 py-3 text-sm text-[#24292f] dark:text-[#c9d1d9] leading-relaxed focus:outline-none min-h-[120px]',
       },
       handleKeyDown: (_view, event) => {
-        if (event.key === 'Tab' && smartCompletion) {
+        if (event.key === 'Tab' && smartCompletionRef.current) {
           event.preventDefault()
-          editor?.commands.setContent(smartCompletion)
-          setSmartCompletion('')
+          acceptSmartRef.current()
           return true
         }
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
@@ -250,13 +259,32 @@ export function ComposeModal() {
         smartAbortRef.current?.abort()
         let completion = ''
         smartAbortRef.current = await streamAiSuggestion(
-          { subject, body: text, mode: 'complete' },
+          { subject: subjectRef.current, body: text, mode: 'complete' },
           chunk => { completion += chunk; setSmartCompletion(completion) },
           () => {}, () => setSmartCompletion('')
         )
       }, 700)
     },
   })
+
+  // Keep refs read by the editor's stable closures in sync with live state.
+  useEffect(() => { smartCompletionRef.current = smartCompletion }, [smartCompletion])
+  useEffect(() => { subjectRef.current = subject }, [subject])
+
+  // Accept the smart-compose suggestion: append the continuation to the
+  // existing content (it's a continuation, not a replacement) so the user's
+  // draft, formatting, and signature are preserved.
+  const acceptSmartCompletion = () => {
+    const completion = smartCompletionRef.current
+    if (!completion || !editor) return
+    const html = completion
+      .split(/\n{2,}/)
+      .map(block => `<p>${escapeHtml(block).replace(/\n/g, '<br>')}</p>`)
+      .join('')
+    editor.chain().focus('end').insertContent(html).run()
+    setSmartCompletion('')
+  }
+  acceptSmartRef.current = acceptSmartCompletion
 
   useEffect(() => () => { if (smartTimerRef.current) window.clearTimeout(smartTimerRef.current); smartAbortRef.current?.abort() }, [])
 
@@ -628,7 +656,7 @@ export function ComposeModal() {
         <EditorContent editor={editor} className="h-full" />
       </div>
       {smartCompletion && smartCompletion !== editor?.getText() && (
-        <button onClick={() => { editor?.commands.setContent(smartCompletion); setSmartCompletion('') }} className="mx-4 mb-2 text-left rounded-md border border-dashed border-violet-400/60 bg-violet-50 dark:bg-violet-500/10 px-3 py-2 text-xs text-violet-700 dark:text-violet-300">
+        <button onClick={acceptSmartCompletion} className="mx-4 mb-2 text-left rounded-md border border-dashed border-violet-400/60 bg-violet-50 dark:bg-violet-500/10 px-3 py-2 text-xs text-violet-700 dark:text-violet-300">
           <span className="opacity-70">Smart compose · Tab to accept</span><br/>{smartCompletion.slice(0, 240)}
         </button>
       )}

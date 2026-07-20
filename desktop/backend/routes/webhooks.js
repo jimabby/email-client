@@ -1,9 +1,34 @@
 const express = require('express');
+const { OAuth2Client } = require('google-auth-library');
 const router = express.Router();
 const store = require('../store');
 const { notifyNewMail } = require('../services/mailWatchService');
 
-router.post('/gmail', (req, res) => {
+// When GMAIL_PUBSUB_SA_EMAIL is set, require a valid Google-signed OIDC token
+// on Gmail push requests so only Google's Pub/Sub can trigger refreshes.
+// Configure the push subscription with an OIDC service-account token whose
+// audience is the webhook URL (or GMAIL_PUBSUB_AUDIENCE). Left unset, the
+// endpoint stays open (spurious refreshes only) to preserve existing setups.
+const oidcClient = new OAuth2Client();
+
+async function verifyGmailPush(req) {
+  const expectedEmail = process.env.GMAIL_PUBSUB_SA_EMAIL;
+  if (!expectedEmail) return true; // verification not configured
+  const header = req.get('authorization') || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!token) return false;
+  try {
+    const audience = process.env.GMAIL_PUBSUB_AUDIENCE || undefined;
+    const ticket = await oidcClient.verifyIdToken({ idToken: token, audience });
+    const payload = ticket.getPayload();
+    return payload?.email_verified === true && payload.email === expectedEmail;
+  } catch {
+    return false;
+  }
+}
+
+router.post('/gmail', async (req, res) => {
+  if (!(await verifyGmailPush(req))) return res.status(403).end();
   try {
     const encoded = req.body?.message?.data;
     const event = encoded ? JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) : {};

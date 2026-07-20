@@ -41,7 +41,13 @@ function sanitizeEmailHtml(html: string, allowRemoteImages: boolean): { html: st
   for (const img of Array.from(doc.querySelectorAll('img'))) {
     const src = img.getAttribute('src') || ''
     const isRemote = /^https?:\/\//i.test(src) || src.startsWith('//')
-    const tiny = Number(img.getAttribute('width') || 0) <= 1 && Number(img.getAttribute('height') || 0) <= 1
+    // Only treat an image as a tracking pixel when it explicitly declares a
+    // 1px (or smaller) dimension. Most legitimate images omit width/height, so
+    // a missing attribute must NOT be read as 0 — otherwise everything gets
+    // permanently removed and "Show images" can't bring it back.
+    const w = img.getAttribute('width')
+    const h = img.getAttribute('height')
+    const tiny = w !== null && h !== null && Number(w) <= 1 && Number(h) <= 1
     if (tiny) { img.remove(); blocked++; continue }
     if (isRemote && !allowRemoteImages) { img.removeAttribute('src'); img.setAttribute('alt', img.getAttribute('alt') || '[remote image blocked]'); blocked++ }
   }
@@ -356,6 +362,15 @@ export function EmailViewer() {
     }
   }
 
+  // "Create reminder" resurfaces the email later via the same server-backed
+  // snooze scheduler (a standalone reminder store had no surface that read it).
+  const handleReminder = (dateHint?: string) => {
+    const parsed = dateHint ? new Date(dateHint) : null
+    let when = parsed && !isNaN(parsed.getTime()) && parsed.getTime() > Date.now() ? parsed : null
+    if (!when) { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); when = d }
+    handleSnooze(when)
+  }
+
   const handleUnsnooze = async () => {
     if (!selectedEmail) return
     const email = selectedEmail
@@ -626,7 +641,7 @@ export function EmailViewer() {
                 const ics = `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nDTSTART:${start}\r\nSUMMARY:${a.title.replace(/\n/g, ' ')}\r\nDESCRIPTION:${(a.details || '').replace(/\n/g, ' ')}\r\nEND:VEVENT\r\nEND:VCALENDAR`
                 const url = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' })); const link = document.createElement('a'); link.href = url; link.download = 'hermes-event.ics'; link.click(); URL.revokeObjectURL(url)
               } else {
-                const reminders = JSON.parse(localStorage.getItem('hermes-reminders') || '[]'); reminders.push({ ...a, createdAt: new Date().toISOString(), emailId: selectedEmail.id }); localStorage.setItem('hermes-reminders', JSON.stringify(reminders)); showNotification('success', 'Reminder created')
+                handleReminder(a.date)
               }
             }} className="text-[#0969da]">{a.kind === 'calendar' ? 'Add to calendar' : 'Create reminder'}</button></div>)}
           </div>
