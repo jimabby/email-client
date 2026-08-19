@@ -35,6 +35,7 @@ export interface EmailBody {
     filename: string;
     contentType: string;
     size: number;
+    /** Always null — bytes are fetched on demand from the attachment endpoint. */
     content?: string | null;
   }[];
 }
@@ -42,4 +43,24 @@ export interface EmailBody {
 export interface Folder {
   name: string;
   path: string;
+}
+
+/** unreadCounts response: accountId -> folderPath -> counts */
+export type UnreadCounts = Record<string, Record<string, { unread: number; total: number }>>;
+
+export type OutboxStatus = 'pending' | 'sending' | 'retrying' | 'sent' | 'failed' | 'cancelled';
+
+export interface OutboxItem {
+  id: string;
+  accountId: string;
+  to: string;
+  subject: string;
+  status: OutboxStatus;
+  sendAt: string;
+  nextAttemptAt?: string;
+  attempts?: number;
+  error?: string | null;
+  createdAt: string;
+  sentAt?: string;
+  hasAttachments?: boolean;
 }

@@ -1,21 +1,49 @@
-# Hermes — AI-Powered Email Client
+# Hermes ï¿½ AI-Powered Email Client
 
 A fast, dark-themed desktop/web email client for Gmail, Outlook, and any IMAP/SMTP provider. Hermes supports multiple AI providers (OpenAI, Gemini, Claude) and adds smart features like priority inbox, thread summaries, and smart unsubscribe.
 
 ## Highlights
 
-- **Multi-account** — Gmail (OAuth), Outlook (OAuth), and any IMAP/SMTP server
-- **Full email client** — read, compose, reply, forward, delete, move, star
-- **AI Assist** — improve drafts with 9 modes (Improve, Concise, Complete, Fix Grammar, Formal, Friendly, Subject Ideas, Draft Reply, Custom)
-- **Priority inbox (AI)** — rank emails by urgency/importance in one click
-- **Thread summaries (AI)** — summarize long threads in a single click
-- **Smart unsubscribe** — detects unsubscribe links and surfaces one-click action
-- **Attachment search** — search by attachment name/type
-- **Inline previews** — view images/PDFs without downloading
-- **Saved searches** — automatically saves recent searches (with delete options)
-- **Thread view** — group replies by conversation
-- **Real-time updates** — SSE streaming for new mail
-- **Desktop app** — runs as a native Electron app or in the browser
+- **Multi-account** ï¿½ Gmail (OAuth), Outlook (OAuth), and any IMAP/SMTP server
+- **Full email client** ï¿½ read, compose, reply, forward, delete, move, star
+- **AI Assist** ï¿½ improve drafts with 9 modes (Improve, Concise, Complete, Fix Grammar, Formal, Friendly, Subject Ideas, Draft Reply, Custom)
+- **Priority inbox (AI)** ï¿½ rank emails by urgency/importance in one click
+- **Thread summaries (AI)** ï¿½ summarize long threads in a single click
+- **Smart unsubscribe** ï¿½ detects unsubscribe links and surfaces one-click action
+- **Attachment search** ï¿½ search by attachment name/type
+- **Inline previews** ï¿½ view images/PDFs without downloading
+- **Saved searches** ï¿½ automatically saves recent searches (with delete options)
+- **Local search index** ï¿½ instant cross-account search with `from:`, `subject:`,
+  `has:attachment`, `is:unread`, `is:starred`, and `"quoted phrases"`
+- **Thread view** ï¿½ group replies by conversation
+- **Real-time updates** ï¿½ SSE streaming for new mail
+- **Desktop notifications & tray** ï¿½ new mail arrives with the window closed
+- **Outbox** ï¿½ sends are queued server-side and retried after a network failure
+- **Rules** ï¿½ multi-condition, multi-action rules that run as mail arrives
+- **Send-as aliases** ï¿½ pick a different From address per message
+- **Desktop app** ï¿½ runs as a native Electron app or in the browser
+
+## Security notes
+
+- **Credentials are encrypted at rest.** IMAP passwords, OAuth refresh tokens,
+  MSAL caches, and AI API keys are sealed with AES-256-GCM. The packaged app
+  keeps the master key in the OS keychain (DPAPI / Keychain / libsecret) and
+  hands it to the backend in memory; a server deployment supplies it via
+  `HERMES_SECRET_KEY`.
+- **The API is loopback-only by default.** Without an `API_TOKEN` the API is
+  unauthenticated, so the server refuses to bind anything but `127.0.0.1`. To
+  expose it, set `API_TOKEN` (see `deploy/`).
+- **TLS certificates are verified.** An account can opt out per-account when a
+  self-hosted server uses a self-signed certificate; that checkbox is the only
+  way to disable validation.
+- **The backend runs in its own process.** A crash or a slow MIME parse can't
+  take the window down with it.
+
+## Tests
+
+```bash
+cd backend && npm test
+```
 
 ## Quick Start
 
@@ -52,9 +80,9 @@ Note: In the app, go to **Settings ? AI** and select your provider + API key.
 
 ### 3. Start
 
-**Browser mode** — double-click `start.bat`
+**Browser mode** ï¿½ double-click `start.bat`
 
-**Desktop app** — double-click `start-desktop.bat`
+**Desktop app** ï¿½ double-click `start-desktop.bat`
 
 Or manually:
 ```bash
@@ -102,11 +130,11 @@ Works with any provider. Click **Add Account ? IMAP/SMTP**.
 4. Create a client secret
 5. Copy Client ID and Secret to `backend/.env`
 
-## AI Features — Where to Find Them
+## AI Features ï¿½ Where to Find Them
 
 - **Priority inbox**: list header toggle (right side)
-- **Thread summary**: “Summarize” button in the email viewer toolbar
-- **Smart unsubscribe**: “Unsubscribe” button appears in viewer when detected
+- **Thread summary**: ï¿½Summarizeï¿½ button in the email viewer toolbar
+- **Smart unsubscribe**: ï¿½Unsubscribeï¿½ button appears in viewer when detected
 - **AI draft assist**: Compose window ? AI Assist
 
 ## Architecture
@@ -114,35 +142,35 @@ Works with any provider. Click **Add Account ? IMAP/SMTP**.
 ```
 hermes/
 +-- electron/          # Electron desktop wrapper
-¦   +-- main.js        # Starts backend + opens app window
+ï¿½   +-- main.js        # Starts backend + opens app window
 +-- backend/           # Node.js + Express
-¦   +-- server.js
-¦   +-- routes/
-¦   ¦   +-- auth.js    # OAuth + account management
-¦   ¦   +-- emails.js  # Email CRUD
-¦   ¦   +-- ai.js      # AI endpoints
-¦   +-- services/
-¦       +-- gmailService.js
-¦       +-- outlookService.js
-¦       +-- imapService.js
-¦       +-- aiService.js
+ï¿½   +-- server.js
+ï¿½   +-- routes/
+ï¿½   ï¿½   +-- auth.js    # OAuth + account management
+ï¿½   ï¿½   +-- emails.js  # Email CRUD
+ï¿½   ï¿½   +-- ai.js      # AI endpoints
+ï¿½   +-- services/
+ï¿½       +-- gmailService.js
+ï¿½       +-- outlookService.js
+ï¿½       +-- imapService.js
+ï¿½       +-- aiService.js
 +-- frontend/          # React + TypeScript + Vite + Tailwind
     +-- src/
         +-- App.tsx
         +-- components/
-        ¦   +-- HermesLogo.tsx
-        ¦   +-- Sidebar.tsx
-        ¦   +-- EmailList.tsx
-        ¦   +-- EmailViewer.tsx
-        ¦   +-- ComposeModal.tsx
-        ¦   +-- AccountModal.tsx
+        ï¿½   +-- HermesLogo.tsx
+        ï¿½   +-- Sidebar.tsx
+        ï¿½   +-- EmailList.tsx
+        ï¿½   +-- EmailViewer.tsx
+        ï¿½   +-- ComposeModal.tsx
+        ï¿½   +-- AccountModal.tsx
         +-- store/emailStore.ts
         +-- api/client.ts
 ```
 
 ## Security Notes
 
-- Account credentials are stored in `backend/accounts.json` — this file is in `.gitignore` and should never be committed
+- Account credentials are stored in `backend/accounts.json` ï¿½ this file is in `.gitignore` and should never be committed
 - The `.env` file with your API keys is also in `.gitignore`
 - For production use, add database encryption and HTTPS
-- AI features send email data to the selected provider. Review the provider’s privacy policy.
+- AI features send email data to the selected provider. Review the providerï¿½s privacy policy.

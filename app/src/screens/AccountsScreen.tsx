@@ -7,7 +7,7 @@ import { api, errorMessage } from '../api';
 import { useAppStore } from '../store';
 import { theme } from '../theme';
 import { initials } from '../utils';
-import type { Account } from '../types';
+import type { Account, UnreadCounts } from '../types';
 import type { RootStackParamList } from '../navigation';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Accounts'>;
@@ -25,10 +25,14 @@ export default function AccountsScreen({ navigation }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [unread, setUnread] = useState<UnreadCounts>({});
+
   const load = useCallback(async () => {
     setError(null);
     try {
       setAccounts(await api.listAccounts());
+      // Real inbox totals from the provider, not a count of a fetched page.
+      api.unreadCounts(['INBOX']).then(setUnread).catch(() => {});
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -97,6 +101,13 @@ export default function AccountsScreen({ navigation }: Props) {
             <Text style={styles.name} numberOfLines={1}>{item.name || item.email}</Text>
             <Text style={styles.email} numberOfLines={1}>{item.email}</Text>
           </View>
+          {(unread[item.id]?.INBOX?.unread ?? 0) > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>
+                {unread[item.id].INBOX.unread > 99 ? '99+' : unread[item.id].INBOX.unread}
+              </Text>
+            </View>
+          )}
           <Text style={styles.chevron}>›</Text>
         </TouchableOpacity>
       )}
@@ -120,6 +131,11 @@ const styles = StyleSheet.create({
   avatarText: { color: '#fff', fontWeight: '700', fontSize: 14 },
   name: { color: theme.text, fontWeight: '600', fontSize: 15 },
   email: { color: theme.textMuted, fontSize: 13, marginTop: 2 },
+  badge: {
+    backgroundColor: theme.accent, borderRadius: 10, minWidth: 20,
+    paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center',
+  },
+  badgeText: { color: theme.accentText, fontSize: 11, fontWeight: '700' },
   chevron: { color: theme.textFaint, fontSize: 26, fontWeight: '300' },
   errorTitle: { color: theme.text, fontSize: 16, fontWeight: '600', marginBottom: 8, textAlign: 'center' },
   errorMsg: { color: theme.textMuted, fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 16 },

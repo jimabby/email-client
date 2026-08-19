@@ -11,8 +11,12 @@ record pointing `mail.example.com` to the VPS.
 
 1. Copy this repository to the VPS.
 2. Copy `deploy/.env.example` to `deploy/.env` and replace every placeholder.
-3. Generate `API_TOKEN`, `SESSION_SECRET`, and `WEBHOOK_CLIENT_STATE` separately
-   with `openssl rand -hex 32`.
+3. Generate `API_TOKEN`, `HERMES_SECRET_KEY`, and `WEBHOOK_CLIENT_STATE`
+   separately with `openssl rand -hex 32`.
+
+   `HERMES_SECRET_KEY` encrypts stored credentials at rest — **back it up
+   somewhere safe**. If it is lost, the sealed values remain on disk untouched
+   but cannot be decrypted, and every account has to be re-authorised.
 4. If using OAuth, register the public HTTPS callback URLs shown in `.env` with
    Google and Microsoft.
 5. Start the service:
@@ -30,11 +34,38 @@ published directly; only Caddy can reach port 3001.
 ## Move existing accounts
 
 The existing `desktop/backend/accounts.json` contains credentials and OAuth
-tokens. Transfer it over an encrypted channel, then copy it into the private
-Docker volume (never commit it):
+tokens, sealed with the key that machine used. Because the VPS has a different
+`HERMES_SECRET_KEY`, the file has to be re-keyed rather than copied verbatim —
+run this on the machine that can still read it, with its own key in the
+environment:
 
 ```sh
-docker compose cp /secure/path/accounts.json backend:/data/accounts.json
+cd desktop/backend
+HERMES_SECRET_KEY=<the-old-key> node -e "
+  const secrets = require('./services/secretStore');
+  const fs = require('fs');
+  const plain = secrets.openObject(JSON.parse(fs.readFileSync('accounts.json', 'utf8')));
+  fs.writeFileSync('accounts.plain.json', JSON.stringify(plain, null, 2), { mode: 0o600 });
+"
+HERMES_SECRET_KEY=<the-new-vps-key> node -e "
+  const secrets = require('./services/secretStore');
+  const fs = require('fs');
+  const plain = JSON.parse(fs.readFileSync('accounts.plain.json', 'utf8'));
+  fs.writeFileSync('accounts.rekeyed.json', JSON.stringify(secrets.sealObject(plain), null, 2), { mode: 0o600 });
+"
+rm accounts.plain.json   # holds cleartext credentials — delete it immediately
+```
+
+On a desktop install the old key lives in the OS keychain rather than the
+environment; run the first command from the app's data directory with
+`HERMES_SECRET_KEY` unset only if that machine has no keychain. Otherwise it is
+simpler to re-add the accounts on the server.
+
+Transfer the re-keyed file over an encrypted channel, then copy it into the
+private Docker volume (never commit it):
+
+```sh
+docker compose cp /secure/path/accounts.rekeyed.json backend:/data/accounts.json
 docker compose restart backend
 ```
 

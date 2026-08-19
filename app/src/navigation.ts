@@ -10,4 +10,5 @@ export type RootStackParamList = {
     prefill?: { to?: string; cc?: string; bcc?: string; subject?: string; body?: string };
   };
   Settings: undefined;
+  Outbox: undefined;
 };

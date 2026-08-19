@@ -6,8 +6,18 @@ import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { useEmailStore } from '../store/emailStore'
-import { emailsApi, streamAiSuggestion } from '../api/client'
-import type { AiMode, MailTemplate } from '../types/email'
+import { emailsApi, streamAiSuggestion, type StreamHandle } from '../api/client'
+import type { AiMode, Alias, DraftAttachment, MailTemplate } from '../types/email'
+
+// Providers reject very large messages, and base64 inflates bytes by ~33%.
+// Refuse locally with a clear message instead of letting the request die with
+// an opaque 413 after the whole payload has been uploaded.
+const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+/** A file chosen in this session, or one restored from a draft/forward. */
+type PendingAttachment =
+  | { kind: 'file'; file: File; name: string; size: number }
+  | { kind: 'data'; data: DraftAttachment; name: string; size: number }
 
 const AI_MODES: { value: AiMode; label: string; icon: string; description: string }[] = [
   { value: 'improve',  label: 'Improve',      icon: '✨', description: 'Make it more professional and clear' },
@@ -181,7 +191,13 @@ export function ComposeModal() {
   const [accountId, setAccountId] = useState(composeData?.accountId || accounts[0]?.id || '')
   const [showCcBcc, setShowCcBcc] = useState(!!(composeData?.cc || composeData?.bcc))
   const [isSending, setIsSending] = useState(false)
-  const [attachments, setAttachments] = useState<File[]>([])
+  // Restored drafts and forwards arrive with their attachment bytes already
+  // in hand; newly picked files are read lazily at send time.
+  const [attachments, setAttachments] = useState<PendingAttachment[]>(
+    (composeData?.attachments || []).map(data => ({ kind: 'data' as const, data, name: data.filename, size: data.size }))
+  )
+  const [sendAs, setSendAs] = useState(composeData?.sendAs || '')
+  const [aliases, setAliasOptions] = useState<Alias[]>([])
   const [undoWindowSec, setUndoWindowSec] = useState(60)
   const [showSchedule, setShowSchedule] = useState(false)
   const [scheduledAt, setScheduledAt] = useState('')
@@ -204,11 +220,29 @@ export function ComposeModal() {
   const smartCompletionRef = useRef('')
   const subjectRef = useRef('')
   const smartTimerRef = useRef<number | null>(null)
-  const smartAbortRef = useRef<{ abort: () => void } | null>(null)
-  const abortRef = useRef<{ abort: () => void } | null>(null)
+  const smartAbortRef = useRef<StreamHandle | null>(null)
+  const abortRef = useRef<StreamHandle | null>(null)
   const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(null)
 
   useEffect(() => { emailsApi.getTemplates().then(setTemplates).catch(() => {}) }, [])
+
+  // Send-as identities for whichever account is selected.
+  useEffect(() => {
+    if (!accountId) { setAliasOptions([]); return }
+    let cancelled = false
+    emailsApi.getAliases(accountId)
+      .then(list => {
+        if (cancelled) return
+        setAliasOptions(list)
+        // Keep an explicit choice; otherwise fall back to a configured default.
+        setSendAs(current => {
+          if (current && list.some(a => a.email === current)) return current
+          return list.find(a => a.isDefault)?.email || ''
+        })
+      })
+      .catch(() => { if (!cancelled) setAliasOptions([]) })
+    return () => { cancelled = true }
+  }, [accountId])
 
   // Build initial content: reply body stays as-is; new emails get signature
   const initialHtml = (() => {
@@ -222,6 +256,10 @@ export function ComposeModal() {
 
   const sendRef = useRef<() => void>(() => {})
   const acceptSmartRef = useRef<() => void>(() => {})
+  // Baseline for "did the user actually type anything?" — see hasDraftContent.
+  const initialTextRef = useRef(
+    initialHtml.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
+  )
 
   const editor = useEditor({
     extensions: [
@@ -255,15 +293,18 @@ export function ComposeModal() {
       if (smartTimerRef.current) window.clearTimeout(smartTimerRef.current)
       const text = current.getText().trim()
       if (text.length < 20) return
-      smartTimerRef.current = window.setTimeout(async () => {
+      smartTimerRef.current = window.setTimeout(() => {
+        // streamAiSuggestion now hands back the handle synchronously, so the
+        // previous suggestion is genuinely aborted instead of being left to
+        // run to completion in the background on every keystroke pause.
         smartAbortRef.current?.abort()
         let completion = ''
-        smartAbortRef.current = await streamAiSuggestion(
+        smartAbortRef.current = streamAiSuggestion(
           { subject: subjectRef.current, body: text, mode: 'complete' },
           chunk => { completion += chunk; setSmartCompletion(completion) },
           () => {}, () => setSmartCompletion('')
         )
-      }, 700)
+      }, 900)
     },
   })
 
@@ -288,30 +329,58 @@ export function ComposeModal() {
 
   useEffect(() => () => { if (smartTimerRef.current) window.clearTimeout(smartTimerRef.current); smartAbortRef.current?.abort() }, [])
 
-  const readFileAsBase64 = (file: File): Promise<{ filename: string; contentType: string; content: string }> =>
-    new Promise((resolve) => {
+  const readFileAsBase64 = (file: File): Promise<DraftAttachment> =>
+    new Promise((resolve, reject) => {
       const reader = new FileReader()
+      reader.onerror = () => reject(new Error(`Could not read ${file.name}`))
       reader.onload = () => {
-        const base64 = (reader.result as string).split(',')[1]
-        resolve({ filename: file.name, contentType: file.type || 'application/octet-stream', content: base64 })
+        const base64 = (reader.result as string).split(',')[1] || ''
+        resolve({
+          filename: file.name,
+          contentType: file.type || 'application/octet-stream',
+          content: base64,
+          size: file.size,
+        })
       }
       reader.readAsDataURL(file)
     })
 
+  /** Materialise every attachment (files and restored ones) as base64. */
+  const resolveAttachments = async (): Promise<DraftAttachment[]> =>
+    Promise.all(attachments.map(a => (a.kind === 'data' ? Promise.resolve(a.data) : readFileAsBase64(a.file))))
+
+  const totalAttachmentBytes = attachments.reduce((sum, a) => sum + a.size, 0)
+  const overAttachmentLimit = totalAttachmentBytes > MAX_TOTAL_ATTACHMENT_BYTES
+
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) setAttachments(prev => [...prev, ...Array.from(e.target.files!)])
+    const picked = Array.from(e.target.files || [])
     e.target.value = ''
+    if (!picked.length) return
+
+    const additional = picked.reduce((sum, f) => sum + f.size, 0)
+    if (totalAttachmentBytes + additional > MAX_TOTAL_ATTACHMENT_BYTES) {
+      showNotification('error', `Attachments must total under ${Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024)} MB`)
+      return
+    }
+    setAttachments(prev => [
+      ...prev,
+      ...picked.map(file => ({ kind: 'file' as const, file, name: file.name, size: file.size })),
+    ])
   }
 
   const handleSend = async () => {
     if (!to || !subject) { showNotification('error', 'Please fill in To and Subject fields'); return }
     if (!accountId) { showNotification('error', 'Please select an account'); return }
     if (showSchedule && !scheduledAt) { showNotification('error', 'Please choose a scheduled send time'); return }
+    if (overAttachmentLimit) {
+      showNotification('error', `Attachments must total under ${Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024)} MB`)
+      return
+    }
     setIsSending(true)
     try {
       const html = editor?.getHTML() || ''
       const text = editor?.getText() || ''
-      const attachmentData = attachments.length ? await Promise.all(attachments.map(readFileAsBase64)) : undefined
+      const attachmentData = attachments.length ? await resolveAttachments() : undefined
       // Reply threading: headers work from any account; the provider-specific
       // bits (Gmail threadId, Outlook reply draft) only apply when sending
       // from the account that owns the original message (its id is prefixed
@@ -323,6 +392,7 @@ export function ComposeModal() {
         html, text, attachments: attachmentData,
         sendAt: showSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
         undoWindowSec: undoWindowSec > 0 ? undoWindowSec : undefined,
+        sendAs: sendAs ? { email: sendAs, name: aliases.find(a => a.email === sendAs)?.name } : undefined,
         inReplyTo: r?.messageId || undefined,
         references: r?.references || undefined,
         threadId: ownsOriginal ? r?.threadId || undefined : undefined,
@@ -333,7 +403,12 @@ export function ComposeModal() {
       const parseAddresses = (s: string) => s.split(',').map(a => a.trim()).filter(Boolean)
       addContacts([...parseAddresses(to), ...parseAddresses(cc), ...parseAddresses(bcc)])
 
-      if (sendResult.queued) {
+      // Every send is queued now (that is what survives a dropped connection),
+      // but a message with no schedule and no undo window goes out within
+      // seconds, so calling it "queued" would just be confusing.
+      const isDeferred = (showSchedule && !!scheduledAt) || undoWindowSec > 0
+
+      if (sendResult.queued && isDeferred) {
         const when = sendResult.sendAt ? new Date(sendResult.sendAt).toLocaleString() : 'soon'
         const undoTimeoutMs = sendResult.canUndoUntil
           ? Math.max(4500, new Date(sendResult.canUndoUntil).getTime() - Date.now() + 1200)
@@ -360,7 +435,11 @@ export function ComposeModal() {
           { action, timeoutMs: undoTimeoutMs }
         )
       } else {
-        showNotification('success', 'Email sent!')
+        showNotification('success', 'Email sent!', {
+          // The send happens on the server moments from now; if it fails the
+          // outbox holds it, so point there rather than claiming success blindly.
+          action: { label: 'Outbox', onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
+        })
       }
       // Clear any saved draft for this compose (local + server copy).
       const sentRef = useEmailStore.getState().drafts.find(d => d.id === draftIdRef.current)?.serverRef
@@ -374,19 +453,29 @@ export function ComposeModal() {
   sendRef.current = handleSend
 
   // ─── Drafts ──────────────────────────────────────────────────────────────
-  const hasDraftContent = () =>
-    !!(to.trim() || cc.trim() || bcc.trim() || subject.trim() || (editor?.getText() || '').trim())
+
+  // The editor is pre-filled with the signature for new messages, so a
+  // never-touched compose window still reports non-empty text. Compare against
+  // the content the window opened with instead, or closing a blank compose
+  // silently litters the drafts list.
+  const hasDraftContent = () => {
+    if (to.trim() || cc.trim() || bcc.trim() || subject.trim() || attachments.length) return true
+    const current = (editor?.getText() || '').replace(/\s+/g, ' ').trim()
+    return !!current && current !== initialTextRef.current
+  }
 
   const existingServerRef = () =>
     useEmailStore.getState().drafts.find(d => d.id === draftIdRef.current)?.serverRef ?? null
 
-  const buildDraft = (serverRef = existingServerRef()) => ({
+  const buildDraft = (serverRef = existingServerRef(), attachmentData?: DraftAttachment[]) => ({
     id: draftIdRef.current,
     accountId,
     to, cc, bcc, subject,
     body: editor?.getHTML() || '',
     savedAt: new Date().toISOString(),
     serverRef,
+    // Without this a saved draft came back with its attachments silently gone.
+    attachments: attachmentData,
   })
 
   // Explicit "Save draft": persist locally AND sync to the provider's Drafts
@@ -394,19 +483,24 @@ export function ComposeModal() {
   const handleSaveDraft = async () => {
     if (!hasDraftContent()) { closeCompose(); return }
     const prevRef = existingServerRef()
+    let attachmentData: DraftAttachment[] | undefined
     try {
-      const attachmentData = attachments.length ? await Promise.all(attachments.map(readFileAsBase64)) : undefined
+      attachmentData = attachments.length ? await resolveAttachments() : undefined
+    } catch {
+      attachmentData = undefined
+    }
+    try {
       const { ref } = await emailsApi.saveServerDraft(accountId, {
         to, cc, bcc, subject,
         html: editor?.getHTML() || '', text: editor?.getText() || '',
         attachments: attachmentData,
         replaceRef: prevRef,
       })
-      saveDraft(buildDraft(ref))
+      saveDraft(buildDraft(ref, attachmentData))
       showNotification('success', 'Draft saved')
     } catch {
       // Provider sync failed — keep a local copy so work isn't lost.
-      saveDraft(buildDraft(prevRef))
+      saveDraft(buildDraft(prevRef, attachmentData))
       showNotification('error', 'Draft saved locally (sync to mail server failed)')
     }
     closeCompose()
@@ -414,8 +508,15 @@ export function ComposeModal() {
 
   // Close via the header "X": keep work by auto-saving locally if there's
   // content (no server round-trip, to avoid piling up server drafts).
-  const handleClose = () => {
-    if (hasDraftContent()) saveDraft(buildDraft())
+  const handleClose = async () => {
+    if (!hasDraftContent()) { closeCompose(); return }
+    let attachmentData: DraftAttachment[] | undefined
+    try {
+      attachmentData = attachments.length ? await resolveAttachments() : undefined
+    } catch {
+      attachmentData = undefined
+    }
+    saveDraft(buildDraft(existingServerRef(), attachmentData))
     closeCompose()
   }
 
@@ -427,7 +528,7 @@ export function ComposeModal() {
     closeCompose()
   }
 
-  const handleAiSuggest = useCallback(async () => {
+  const handleAiSuggest = useCallback(() => {
     if (isAiLoading) { abortRef.current?.abort(); setIsAiLoading(false); return }
     setIsAiLoading(true); setAiDone(false); setAiSuggestion(''); setAiError('')
     const bodyText = editor?.getText() || ''
@@ -440,13 +541,14 @@ export function ComposeModal() {
             || ''
         }
       : undefined
-    const controller = await streamAiSuggestion(
+    // Assigned synchronously, so "Stop" aborts *this* request rather than the
+    // previous one.
+    abortRef.current = streamAiSuggestion(
       { subject, body: bodyText, mode: aiMode, customPrompt: aiMode === 'custom' ? customPrompt : undefined, replyTo },
       (text) => setAiSuggestion(prev => prev + text),
       () => { setIsAiLoading(false); setAiDone(true) },
       (err) => { setIsAiLoading(false); setAiError(err) }
     )
-    abortRef.current = { abort: () => controller.abort() }
   }, [subject, editor, aiMode, customPrompt, composeData, isAiLoading])
 
   const applyAiSuggestion = () => {
@@ -454,7 +556,13 @@ export function ComposeModal() {
       const first = aiSuggestion.split('\n').filter(l => l.trim())[0]?.replace(/^\d+\.\s*/, '').trim()
       if (first) setSubject(first)
     } else {
-      editor?.commands.setContent(`<p>${aiSuggestion.replace(/\n/g, '</p><p>')}</p>`)
+      // The model's output is plain text — escape it so a stray "<" can't be
+      // parsed as markup and mangle (or inject into) the editor content.
+      const paragraphs = aiSuggestion
+        .split(/\n{2,}/)
+        .map(block => `<p>${escapeHtml(block).replace(/\n/g, '<br>')}</p>`)
+        .join('')
+      editor?.commands.setContent(paragraphs || '<p></p>')
     }
     setAiSuggestion(''); setAiDone(false)
     showNotification('success', 'AI suggestion applied!')
@@ -589,13 +697,30 @@ export function ComposeModal() {
   // Shared compose fields + editor
   const composeFields = (
     <div className="flex flex-col flex-1 min-h-0">
-      {accounts.length > 1 && (
+      {(accounts.length > 1 || aliases.length > 0) && (
         <div className={rowCls}>
           <span className={labelCls}>From</span>
           <select value={accountId} onChange={e => setAccountId(e.target.value)}
             className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] focus:outline-none">
             {accounts.map(a => <option key={a.id} value={a.id} className="bg-white dark:bg-[#161b22]">{a.email}</option>)}
           </select>
+          {aliases.length > 0 && (
+            <select
+              value={sendAs}
+              onChange={e => setSendAs(e.target.value)}
+              title="Send as"
+              className="text-xs bg-transparent text-[#656d76] dark:text-[#8b949e] focus:outline-none max-w-[45%]"
+            >
+              <option value="" className="bg-white dark:bg-[#161b22]">
+                {accounts.find(a => a.id === accountId)?.email || 'Default address'}
+              </option>
+              {aliases.map(alias => (
+                <option key={alias.email} value={alias.email} className="bg-white dark:bg-[#161b22]">
+                  {alias.name ? `${alias.name} <${alias.email}>` : alias.email}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       )}
       <div className={rowCls}>
@@ -640,15 +765,21 @@ export function ComposeModal() {
         </div>
       )}
       {attachments.length > 0 && (
-        <div className="px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d] flex flex-wrap gap-1.5">
-          {attachments.map((f, i) => (
-            <div key={i} className="flex items-center gap-1 bg-[#eaeef2] dark:bg-[#21262d] rounded px-2 py-1 text-[11px] text-[#1f2328] dark:text-[#e6edf3]">
-              <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
-              <span className="max-w-[120px] truncate">{f.name}</span>
-              <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(f.size / 1024)}KB)</span>
-              <button onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="ml-0.5 text-[#818b98] hover:text-[#cf222e] dark:hover:text-[#f85149]">×</button>
-            </div>
-          ))}
+        <div className="px-4 py-2 border-b border-[#d0d7de] dark:border-[#30363d]">
+          <div className="flex flex-wrap gap-1.5">
+            {attachments.map((f, i) => (
+              <div key={i} className="flex items-center gap-1 bg-[#eaeef2] dark:bg-[#21262d] rounded px-2 py-1 text-[11px] text-[#1f2328] dark:text-[#e6edf3]">
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                <span className="max-w-[120px] truncate">{f.name}</span>
+                <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(f.size / 1024)}KB)</span>
+                <button onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="ml-0.5 text-[#818b98] hover:text-[#cf222e] dark:hover:text-[#f85149]">×</button>
+              </div>
+            ))}
+          </div>
+          <div className={`mt-1 text-[10px] ${overAttachmentLimit ? 'text-[#cf222e] dark:text-[#f85149]' : 'text-[#818b98] dark:text-[#484f58]'}`}>
+            {Math.round(totalAttachmentBytes / 1024)} KB of {Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024)} MB
+            {overAttachmentLimit && ' — too large to send'}
+          </div>
         </div>
       )}
       <RichToolbar editor={editor} />

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const secrets = require('./services/secretStore');
 
 // In packaged Electron app, HERMES_DATA_DIR points to the writable AppData folder.
 // In dev mode it falls back to the backend directory.
@@ -10,6 +11,10 @@ const STORE_FILE = path.join(DATA_DIR, 'accounts.json');
 // grow to hundreds of MB. Keep it in its own file so account credentials and
 // OAuth tokens in accounts.json aren't rewritten — or put at risk — each fetch.
 const CACHE_FILE = path.join(DATA_DIR, 'email-cache.json');
+// Categories churn on every inbox load and grow to thousands of entries.
+// Keeping them out of accounts.json means a category refresh never rewrites
+// the file holding credentials.
+const CATEGORIES_FILE = path.join(DATA_DIR, 'categories.json');
 
 // On first launch of a packaged app the user-data dir won't have accounts.json yet.
 // If there's a bundled seed file next to this module, copy it over once.
@@ -31,74 +36,121 @@ function ensureDataDir() {
 
 ensureDataDir();
 
+function readJson(file, fallback) {
+  try {
+    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    console.error(`Failed to load ${path.basename(file)}:`, e.message);
+  }
+  return fallback;
+}
+
+function writeJsonAtomic(file, data) {
+  const tmpFile = `${file}.tmp`;
+  fs.writeFileSync(tmpFile, data, { mode: 0o600 });
+  fs.renameSync(tmpFile, file);
+}
+
 function loadStore() {
-  try {
-    if (fs.existsSync(STORE_FILE)) {
-      return JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
-    }
-  } catch (e) {
-    console.error('Failed to load store:', e.message);
-  }
-  return { accounts: [], aiSettings: {} };
+  // Credentials are sealed on disk; the in-memory copy is plaintext so the
+  // provider services keep working with ordinary strings.
+  return secrets.openObject(readJson(STORE_FILE, { accounts: [], aiSettings: {} }));
 }
 
-let saveQueued = false;
+// ─── Debounced, flushable writers ───────────────────────────────────────────
+// Coalesce bursts of mutations into one write, but always leave a way to force
+// the pending write out (process exit, tests).
 
-function saveStore(data) {
-  // Debounce rapid consecutive writes into a single microtask
-  if (saveQueued) return;
-  saveQueued = true;
-  queueMicrotask(() => {
-    saveQueued = false;
+function makeWriter(file, serialize) {
+  let queued = false;
+  let timer = null;
+
+  const flush = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (!queued) return;
+    queued = false;
     try {
-      // Atomic write: write to temp file, then rename (rename is atomic on most OS)
-      const tmpFile = STORE_FILE + '.tmp';
-      fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2));
-      fs.renameSync(tmpFile, STORE_FILE);
+      writeJsonAtomic(file, serialize());
     } catch (e) {
-      console.error('Failed to save store:', e.message);
+      console.error(`Failed to save ${path.basename(file)}:`, e.message);
     }
-  });
-}
+  };
 
-function loadCache() {
-  try {
-    if (fs.existsSync(CACHE_FILE)) return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-  } catch (e) {
-    console.error('Failed to load email cache:', e.message);
-  }
-  return {};
-}
+  const schedule = () => {
+    queued = true;
+    if (timer) return;
+    timer = setTimeout(() => { timer = null; flush(); }, 50);
+    timer.unref?.();
+  };
 
-let cacheSaveQueued = false;
-
-function saveCache() {
-  if (cacheSaveQueued) return;
-  cacheSaveQueued = true;
-  queueMicrotask(() => {
-    cacheSaveQueued = false;
-    try {
-      const tmpFile = CACHE_FILE + '.tmp';
-      fs.writeFileSync(tmpFile, JSON.stringify(emailCache));
-      fs.renameSync(tmpFile, CACHE_FILE);
-    } catch (e) {
-      console.error('Failed to save email cache:', e.message);
-    }
-  });
+  return { schedule, flush };
 }
 
 const store = loadStore();
-const emailCache = loadCache();
+const emailCache = readJson(CACHE_FILE, {});
+const categories = readJson(CATEGORIES_FILE, {});
 
-// One-time migration: older builds stored the cache inside accounts.json.
+const storeWriter = makeWriter(STORE_FILE, () => JSON.stringify(secrets.sealObject(store), null, 2));
+const cacheWriter = makeWriter(CACHE_FILE, () => JSON.stringify(emailCache));
+const categoriesWriter = makeWriter(CATEGORIES_FILE, () => JSON.stringify(categories));
+
+const saveStore = () => storeWriter.schedule();
+const saveCache = () => cacheWriter.schedule();
+const saveCategories = () => categoriesWriter.schedule();
+
+function flushAll() {
+  storeWriter.flush();
+  cacheWriter.flush();
+  categoriesWriter.flush();
+}
+
+// Never lose the last few mutations when the process goes away.
+process.on('exit', flushAll);
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => { flushAll(); process.exit(0); });
+}
+
+// ─── One-time migrations ────────────────────────────────────────────────────
+
+// Older builds stored the message cache inside accounts.json.
 if (store.emailCache && typeof store.emailCache === 'object') {
   Object.assign(emailCache, store.emailCache);
   delete store.emailCache;
   saveCache();
-  saveStore(store);
+  saveStore();
 }
 
+// Older builds stored categories inside accounts.json.
+if (store.categories && typeof store.categories === 'object') {
+  Object.assign(categories, store.categories);
+  delete store.categories;
+  saveCategories();
+  saveStore();
+}
+
+// Rules gained structured conditions; keep old single-field rules working by
+// promoting them to the new shape on read.
+function normalizeRule(rule) {
+  if (Array.isArray(rule.conditions) && rule.conditions.length && Array.isArray(rule.actions)) return rule;
+  const conditions = Array.isArray(rule.conditions) && rule.conditions.length ? rule.conditions : [];
+  if (!conditions.length) {
+    if (rule.from) conditions.push({ field: 'from', op: 'contains', value: rule.from });
+    if (rule.subject) conditions.push({ field: 'subject', op: 'contains', value: rule.subject });
+  }
+  const actions = Array.isArray(rule.actions) && rule.actions.length
+    ? rule.actions
+    : [{ type: rule.action || 'markRead', targetFolder: rule.targetFolder || '' }];
+  return { ...rule, match: rule.match || 'all', conditions, actions };
+}
+
+// Rewrite accounts.json once so any existing plaintext credentials get sealed.
+if (Array.isArray(store.accounts) && store.accounts.length) saveStore();
+
 module.exports = {
+  flush: flushAll,
+  dataDir: DATA_DIR,
+  secretsBackend: secrets.backend,
+
   getAccounts() {
     return store.accounts;
   },
@@ -114,7 +166,7 @@ module.exports = {
       ...accountData
     };
     store.accounts.push(account);
-    saveStore(store);
+    saveStore();
     return account;
   },
 
@@ -122,7 +174,7 @@ module.exports = {
     const idx = store.accounts.findIndex(a => a.id === id);
     if (idx === -1) return null;
     store.accounts[idx] = { ...store.accounts[idx], ...updates };
-    saveStore(store);
+    saveStore();
     return store.accounts[idx];
   },
 
@@ -130,8 +182,23 @@ module.exports = {
     const idx = store.accounts.findIndex(a => a.id === id);
     if (idx === -1) return false;
     store.accounts.splice(idx, 1);
-    saveStore(store);
+    saveStore();
     return true;
+  },
+
+  // ─── Send-as aliases ──────────────────────────────────────────────────────
+  // Extra identities the user may send from on a given account.
+  getAliases(accountId) {
+    const account = store.accounts.find(a => a.id === accountId);
+    return Array.isArray(account?.aliases) ? account.aliases : [];
+  },
+
+  saveAliases(accountId, aliases) {
+    const account = store.accounts.find(a => a.id === accountId);
+    if (!account) return null;
+    account.aliases = aliases;
+    saveStore();
+    return account.aliases;
   },
 
   getAiSettings() {
@@ -140,14 +207,28 @@ module.exports = {
 
   saveAiSettings({ provider, apiKey }) {
     store.aiSettings = { provider, apiKey };
-    saveStore(store);
+    saveStore();
   },
 
-  getRules() { return Array.isArray(store.rules) ? store.rules : []; },
-  saveRules(rules) { store.rules = Array.isArray(rules) ? rules : []; saveStore(store); },
+  getRules() { return (Array.isArray(store.rules) ? store.rules : []).map(normalizeRule); },
+  saveRules(rules) { store.rules = Array.isArray(rules) ? rules : []; saveStore(); },
 
   getTemplates() { return Array.isArray(store.templates) ? store.templates : []; },
-  saveTemplates(templates) { store.templates = Array.isArray(templates) ? templates : []; saveStore(store); },
+  saveTemplates(templates) { store.templates = Array.isArray(templates) ? templates : []; saveStore(); },
+
+  // Ids of messages the rule engine has already processed, so re-listing a
+  // folder never re-applies destructive actions to the same message.
+  hasRuleRun(emailId) {
+    return !!(store.ruleRuns && store.ruleRuns[emailId]);
+  },
+
+  markRuleRun(emailId) {
+    if (!store.ruleRuns) store.ruleRuns = {};
+    store.ruleRuns[emailId] = Date.now();
+    const keys = Object.keys(store.ruleRuns);
+    if (keys.length > 5000) for (const k of keys.slice(0, keys.length - 5000)) delete store.ruleRuns[k];
+    saveStore();
+  },
 
   getEmailCache(key) { return emailCache[key] || null; },
   saveEmailCache(key, value) {
@@ -163,13 +244,12 @@ module.exports = {
 
   // ─── Email categories cache ───────────────────────────────────────────────
   getEmailCategories() {
-    return store.categories || {};
+    return categories;
   },
 
   saveEmailCategories(map) {
-    if (!store.categories) store.categories = {};
-    Object.assign(store.categories, map);
-    saveStore(store);
+    Object.assign(categories, map);
+    saveCategories();
   },
 
   // ─── Daily report run tracking ───────────────────────────────────────────
@@ -179,7 +259,7 @@ module.exports = {
 
   saveLastReportDate(dateStr) {
     store.lastReportDate = dateStr;
-    saveStore(store);
+    saveStore();
   },
 
   // ─── Daily report (one-shot, cleared after read) ──────────────────────────
@@ -189,15 +269,15 @@ module.exports = {
 
   savePendingReport(report) {
     store.pendingReport = report;
-    saveStore(store);
+    saveStore();
   },
 
   clearPendingReport() {
     delete store.pendingReport;
-    saveStore(store);
+    saveStore();
   },
 
-  // Scheduled/deferred send queue
+  // ─── Send queue / outbox ──────────────────────────────────────────────────
   getSendQueue() {
     if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
     return store.sendQueue;
@@ -206,7 +286,7 @@ module.exports = {
   addSendQueueItem(item) {
     if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
     store.sendQueue.push(item);
-    saveStore(store);
+    saveStore();
     return item;
   },
 
@@ -215,7 +295,7 @@ module.exports = {
     const idx = store.sendQueue.findIndex(i => i.id === id);
     if (idx === -1) return null;
     store.sendQueue[idx] = { ...store.sendQueue[idx], ...updates };
-    saveStore(store);
+    saveStore();
     return store.sendQueue[idx];
   },
 
@@ -224,17 +304,27 @@ module.exports = {
     return store.sendQueue.find(i => i.id === id) || null;
   },
 
-  // Remove completed/failed/cancelled items older than 24 hours
+  removeSendQueueItem(id) {
+    if (!Array.isArray(store.sendQueue)) return false;
+    const idx = store.sendQueue.findIndex(i => i.id === id);
+    if (idx === -1) return false;
+    store.sendQueue.splice(idx, 1);
+    saveStore();
+    return true;
+  },
+
+  // Remove sent/cancelled items older than 24 hours. Failed items stay until
+  // the user deals with them — that is the whole point of an outbox.
   pruneSendQueue() {
     if (!Array.isArray(store.sendQueue)) return;
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const before = store.sendQueue.length;
     store.sendQueue = store.sendQueue.filter(item => {
-      if (item.status === 'pending' || item.status === 'sending') return true;
-      const doneAt = item.sentAt || item.failedAt || item.cancelledAt;
+      if (item.status !== 'sent' && item.status !== 'cancelled') return true;
+      const doneAt = item.sentAt || item.cancelledAt;
       return doneAt && new Date(doneAt).getTime() > cutoff;
     });
-    if (store.sendQueue.length !== before) saveStore(store);
+    if (store.sendQueue.length !== before) saveStore();
   },
 
   // ─── Snooze ────────────────────────────────────────────────────────────────
@@ -251,7 +341,7 @@ module.exports = {
     const idx = store.snoozes.findIndex(s => s.emailId === item.emailId);
     if (idx === -1) store.snoozes.push(item);
     else store.snoozes[idx] = item;
-    saveStore(store);
+    saveStore();
     return item;
   },
 
@@ -260,7 +350,7 @@ module.exports = {
     const idx = store.snoozes.findIndex(s => s.emailId === emailId);
     if (idx === -1) return false;
     store.snoozes.splice(idx, 1);
-    saveStore(store);
+    saveStore();
     return true;
   },
 
@@ -276,16 +366,14 @@ module.exports = {
     const validIds = new Set(store.accounts.map(a => a.id));
     const before = store.snoozes.length;
     store.snoozes = store.snoozes.filter(s => validIds.has(s.accountId));
-    if (store.snoozes.length !== before) saveStore(store);
+    if (store.snoozes.length !== before) saveStore();
   },
 
   // Limit categories cache to prevent unbounded growth
   pruneCategories(maxEntries = 5000) {
-    if (!store.categories) return;
-    const keys = Object.keys(store.categories);
+    const keys = Object.keys(categories);
     if (keys.length <= maxEntries) return;
-    const toRemove = keys.slice(0, keys.length - maxEntries);
-    for (const k of toRemove) delete store.categories[k];
-    saveStore(store);
+    for (const k of keys.slice(0, keys.length - maxEntries)) delete categories[k];
+    saveCategories();
   }
 };

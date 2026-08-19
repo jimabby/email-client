@@ -42,6 +42,7 @@ class ImapConnection {
       port: this.account.imapPort || 993,
       secure: this.account.imapSecure !== false,
       auth: { user: this.account.email, pass: this.account.password },
+      tls: { rejectUnauthorized: this.account.allowInsecureTLS !== true },
       logger: false
     });
     await client.connect();
@@ -62,10 +63,21 @@ class ImapConnection {
 const imapPool = new Map(); // accountId -> ImapConnection
 
 function getConn(account) {
-  if (!imapPool.has(account.id)) {
-    imapPool.set(account.id, new ImapConnection(account));
+  const existing = imapPool.get(account.id);
+  // A pooled connection captures the account object it was built from. If the
+  // stored credentials or host changed since then, drop it so the next call
+  // reconnects with the new settings instead of failing with the old password.
+  if (existing) {
+    const stale = existing.account.password !== account.password
+      || existing.account.imapHost !== account.imapHost
+      || existing.account.imapPort !== account.imapPort;
+    if (!stale) return existing;
+    existing.close().catch(() => {});
+    imapPool.delete(account.id);
   }
-  return imapPool.get(account.id);
+  const conn = new ImapConnection(account);
+  imapPool.set(account.id, conn);
+  return conn;
 }
 
 // Call this when an account is removed so the connection is cleaned up.
@@ -80,57 +92,111 @@ async function closeConnection(accountId) {
 // ─── SMTP Pool ────────────────────────────────────────────────────────────────
 // Reuse pooled SMTP connections so sending doesn't re-negotiate TLS every time.
 
-const smtpPool = new Map(); // accountId -> nodemailer transporter
+const smtpPool = new Map(); // accountId -> { transporter, fingerprint }
+
+// Certificate validation stays ON. Turning it off silently accepts any
+// certificate, which exposes the account password and every outgoing message
+// to anyone able to intercept the connection. Accounts that genuinely need it
+// (a self-hosted server with a self-signed cert) must opt in explicitly.
+function tlsOptions(account) {
+  return { rejectUnauthorized: account.allowInsecureTLS !== true };
+}
+
+function smtpFingerprint(account) {
+  return [account.smtpHost, account.smtpPort, account.smtpSecure, account.password, account.allowInsecureTLS].join('|');
+}
 
 function getTransporter(account) {
-  if (smtpPool.has(account.id)) return smtpPool.get(account.id);
-  const t = nodemailer.createTransport({
+  const fingerprint = smtpFingerprint(account);
+  const cached = smtpPool.get(account.id);
+  if (cached && cached.fingerprint === fingerprint) return cached.transporter;
+  if (cached) { try { cached.transporter.close(); } catch { /* already gone */ } }
+
+  const transporter = nodemailer.createTransport({
     host: account.smtpHost,
     port: account.smtpPort || 587,
     secure: account.smtpSecure || false,
     auth: { user: account.email, pass: account.password },
-    tls: { rejectUnauthorized: false },
+    tls: tlsOptions(account),
     pool: true,        // keep SMTP connections alive
     maxConnections: 1
   });
-  smtpPool.set(account.id, t);
-  return t;
+  smtpPool.set(account.id, { transporter, fingerprint });
+  return transporter;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+// Envelope → EmailSummary. Shared by list, search, and attachment search so
+// the three paths can't drift apart.
+function toSummary(account, msg, folder) {
+  const envelope = msg.envelope || {};
+  return {
+    id: `${account.id}::${msg.uid}`,
+    uid: msg.uid,
+    from: envelope.from?.[0]
+      ? `${envelope.from[0].name || ''} <${envelope.from[0].address}>`.trim()
+      : 'Unknown',
+    to: (envelope.to || []).map(a => a.address),
+    subject: envelope.subject || '(no subject)',
+    date: envelope.date?.toISOString() || new Date().toISOString(),
+    read: msg.flags?.has('\\Seen') ?? false,
+    starred: msg.flags?.has('\\Flagged') ?? false,
+    folder,
+    accountId: account.id,
+    threadId: envelope.inReplyTo || envelope.messageId || null,
+    messageId: envelope.messageId || '',
+    inReplyTo: envelope.inReplyTo || '',
+  };
+}
+
 async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = null) {
   return getConn(account).run(async (client) => {
-    const emails = [];
     const mailbox = await client.mailboxOpen(folder);
-    const total = mailbox.exists;
-    if (total === 0) return { emails: [], nextToken: null };
+    if (mailbox.exists === 0) return { emails: [], nextToken: null };
 
-    // pageToken is the upper ceiling (sequence number) for load-more
-    const ceiling = pageToken ? parseInt(pageToken) : total;
-    const start = Math.max(1, ceiling - limit + 1);
-    for await (const msg of client.fetch(`${start}:${ceiling}`, {
-      envelope: true, uid: true, flags: true
-    })) {
-      emails.unshift({
-        id: `${account.id}::${msg.uid}`,
-        uid: msg.uid,
-        from: msg.envelope.from?.[0]
-          ? `${msg.envelope.from[0].name || ''} <${msg.envelope.from[0].address}>`.trim()
-          : 'Unknown',
-        to: (msg.envelope.to || []).map(a => a.address),
-        subject: msg.envelope.subject || '(no subject)',
-        date: msg.envelope.date?.toISOString() || new Date().toISOString(),
-        read: msg.flags.has('\\Seen'),
-        starred: msg.flags.has('\\Flagged'),
-        folder,
-        accountId: account.id,
-        threadId: msg.envelope.inReplyTo || msg.envelope.messageId || null,
-        messageId: msg.envelope.messageId || '',
-        inReplyTo: msg.envelope.inReplyTo || ''
-      });
+    // Page by UID, not sequence number. Sequence numbers shift whenever mail
+    // arrives or is expunged, so a sequence-based page token silently skips or
+    // repeats messages while the user is scrolling.
+    const ceiling = pageToken ? parseInt(pageToken, 10) : (mailbox.uidNext ? mailbox.uidNext - 1 : '*');
+    if (pageToken && (!Number.isFinite(ceiling) || ceiling < 1)) {
+      return { emails: [], nextToken: null };
     }
-    return { emails, nextToken: start > 1 ? String(start - 1) : null };
+
+    // UID ranges are sparse, so ask for a generous window and keep the newest
+    // `limit` messages from it.
+    const range = ceiling === '*' ? '1:*' : `1:${ceiling}`;
+    const uids = await client.search({ uid: range }, { uid: true });
+    if (!uids || !uids.length) return { emails: [], nextToken: null };
+
+    uids.sort((a, b) => a - b);
+    const pageUids = uids.slice(-limit);
+    const emails = [];
+    for await (const msg of client.fetch(pageUids, { envelope: true, uid: true, flags: true }, { uid: true })) {
+      emails.push(toSummary(account, msg, folder));
+    }
+    emails.sort((a, b) => b.uid - a.uid);
+
+    const lowestUid = pageUids[0];
+    const hasMore = uids.length > pageUids.length;
+    return { emails, nextToken: hasMore && lowestUid > 1 ? String(lowestUid - 1) : null };
+  });
+}
+
+// Unread/total per folder without pulling any message — this is what the
+// sidebar badges need.
+async function getUnreadCounts(account, folders = ['INBOX']) {
+  return getConn(account).run(async (client) => {
+    const counts = {};
+    for (const folder of folders) {
+      try {
+        const status = await client.status(folder, { unseen: true, messages: true });
+        counts[folder] = { unread: status.unseen || 0, total: status.messages || 0 };
+      } catch {
+        counts[folder] = { unread: 0, total: 0 };
+      }
+    }
+    return counts;
   });
 }
 
@@ -145,24 +211,9 @@ async function searchEmails(account, query, folder = 'INBOX', limit = 50) {
     const recentUids = uids.slice(-limit);
     const emails = [];
     for await (const msg of client.fetch(recentUids, { envelope: true, uid: true, flags: true }, { uid: true })) {
-      emails.unshift({
-        id: `${account.id}::${msg.uid}`,
-        uid: msg.uid,
-        from: msg.envelope.from?.[0]
-          ? `${msg.envelope.from[0].name || ''} <${msg.envelope.from[0].address}>`.trim()
-          : 'Unknown',
-        to: (msg.envelope.to || []).map(a => a.address),
-        subject: msg.envelope.subject || '(no subject)',
-        date: msg.envelope.date?.toISOString() || new Date().toISOString(),
-        read: msg.flags.has('\\Seen'),
-        starred: msg.flags.has('\\Flagged'),
-        folder,
-        accountId: account.id,
-        threadId: msg.envelope.inReplyTo || msg.envelope.messageId || null,
-        messageId: msg.envelope.messageId || '',
-        inReplyTo: msg.envelope.inReplyTo || ''
-      });
+      emails.push(toSummary(account, msg, folder));
     }
+    emails.sort((a, b) => b.uid - a.uid);
     return emails;
   });
 }
@@ -182,50 +233,63 @@ function _attachmentMatches(att, query, type) {
   return filename.endsWith(ext) || filename.includes(t);
 }
 
+// Walk a BODYSTRUCTURE tree and collect the parts that look like attachments.
+// This comes back in the FETCH response itself — no message bodies are
+// downloaded, which is the difference between a few KB and several hundred MB
+// for a single search.
+function collectStructureAttachments(node, out = []) {
+  if (!node) return out;
+  if (Array.isArray(node.childNodes) && node.childNodes.length) {
+    for (const child of node.childNodes) collectStructureAttachments(child, out);
+    return out;
+  }
+  const disposition = String(node.disposition || '').toLowerCase();
+  const filename = node.dispositionParameters?.filename
+    || node.parameters?.name
+    || '';
+  const isAttachment = disposition === 'attachment' || (!!filename && disposition !== 'inline');
+  if (isAttachment) {
+    out.push({
+      filename,
+      contentType: node.type || 'application/octet-stream',
+      size: node.size || 0,
+      part: node.part || '1',
+    });
+  }
+  return out;
+}
+
 async function searchAttachments(account, query, type, folder = 'INBOX', limit = 50) {
   return getConn(account).run(async (client) => {
     const emails = [];
     const mailbox = await client.mailboxOpen(folder);
-    const total = mailbox.exists;
-    if (total === 0) return [];
+    if (mailbox.exists === 0) return [];
 
-    const maxScan = Math.max(limit * 8, 200);
-    const ceiling = total;
-    const start = Math.max(1, ceiling - maxScan + 1);
-
-    const collected = [];
-    for await (const msg of client.fetch(`${start}:${ceiling}`, {
-      envelope: true, uid: true, flags: true, source: true
-    })) {
-      collected.push(msg);
+    // Let the server narrow the candidate set first when it can.
+    let candidateUids;
+    try {
+      candidateUids = await client.search({ header: { 'content-type': 'multipart/mixed' } }, { uid: true });
+    } catch {
+      candidateUids = null;
     }
+    if (!candidateUids || !candidateUids.length) {
+      candidateUids = await client.search({ all: true }, { uid: true });
+    }
+    if (!candidateUids?.length) return [];
 
-    for (let i = collected.length - 1; i >= 0; i--) {
-      const msg = collected[i];
-      if (!msg.source) continue;
-      const parsed = await simpleParser(msg.source);
-      const attachments = parsed.attachments || [];
-      const hasMatch = attachments.some(att => _attachmentMatches(att, query, type));
-      if (!hasMatch) continue;
+    candidateUids.sort((a, b) => b - a);
+    const scanUids = candidateUids.slice(0, Math.max(limit * 10, 500));
 
-      emails.push({
-        id: `${account.id}::${msg.uid}`,
-        uid: msg.uid,
-        from: msg.envelope?.from?.[0]
-          ? `${msg.envelope.from[0].name || ''} <${msg.envelope.from[0].address}>`.trim()
-          : 'Unknown',
-        to: (msg.envelope?.to || []).map(a => a.address),
-        subject: msg.envelope?.subject || '(no subject)',
-        date: msg.envelope?.date?.toISOString() || new Date().toISOString(),
-        read: msg.flags?.has('\\Seen'),
-        starred: msg.flags?.has('\\Flagged'),
-        folder,
-        accountId: account.id
-      });
-
+    for await (const msg of client.fetch(scanUids, {
+      envelope: true, uid: true, flags: true, bodyStructure: true,
+    }, { uid: true })) {
+      const attachments = collectStructureAttachments(msg.bodyStructure);
+      if (!attachments.some(att => _attachmentMatches(att, query, type))) continue;
+      emails.push(toSummary(account, msg, folder));
       if (emails.length >= limit) break;
     }
 
+    emails.sort((a, b) => b.uid - a.uid);
     return emails;
   });
 }
@@ -255,12 +319,36 @@ async function fetchEmailBody(account, uid, folder = 'INBOX') {
       references: Array.isArray(parsed.references)
         ? parsed.references.join(' ')
         : (parsed.references || ''),
+      // Metadata only — bytes come from getAttachment on demand so a message
+      // with large attachments doesn't have to be buffered through the API
+      // just to display its text.
       attachments: (parsed.attachments || []).map(a => ({
         filename: a.filename,
         contentType: a.contentType,
         size: a.size,
-        content: a.content ? a.content.toString('base64') : null,
+        content: null,
       }))
+    };
+  });
+}
+
+// Fetch a single attachment's bytes by its position in the fetchEmailBody list.
+async function getAttachment(account, uid, folder = 'INBOX', index = 0) {
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(folder);
+    let rawEmail = null;
+    for await (const msg of client.fetch(String(uid), { source: true }, { uid: true })) {
+      rawEmail = msg.source;
+    }
+    if (!rawEmail) throw new Error('Message not found');
+
+    const parsed = await simpleParser(rawEmail);
+    const att = (parsed.attachments || [])[index];
+    if (!att) throw new Error('Attachment not found');
+    return {
+      filename: att.filename || `attachment-${index}`,
+      contentType: att.contentType || 'application/octet-stream',
+      content: att.content,
     };
   });
 }
@@ -293,12 +381,25 @@ async function reportSpam(account, uid, folder = 'INBOX') {
   return moveEmail(account, uid, folder, spam.path);
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references }) {
+// Resolve the identity to send as — an explicit alias the account registered,
+// or the account's own address.
+function resolveFrom(account, sendAs) {
+  const wanted = String(sendAs?.email || '').trim().toLowerCase();
+  if (wanted && wanted !== String(account.email).toLowerCase()) {
+    const alias = (account.aliases || []).find(a => String(a.email).toLowerCase() === wanted);
+    if (alias) return { name: alias.name || account.name || alias.email, address: alias.email };
+  }
+  return { name: account.name || account.email, address: account.email };
+}
+
+async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs }) {
   const transporter = getTransporter(account);
   // References for a reply = the original's References + its Message-ID.
   const replyRefs = [references, inReplyTo].filter(Boolean).join(' ');
   return transporter.sendMail({
-    from: `${account.name || account.email} <${account.email}>`,
+    // nodemailer escapes and encodes these fields itself, so a newline in a
+    // name or address can't inject extra headers.
+    from: resolveFrom(account, sendAs),
     to, cc, bcc, subject, text, html,
     inReplyTo: inReplyTo || undefined,
     references: replyRefs || undefined,
@@ -404,8 +505,10 @@ async function toggleStar(account, uid, folder = 'INBOX', starred) {
 async function moveEmail(account, uid, fromFolder, toFolder) {
   return getConn(account).run(async (client) => {
     await client.mailboxOpen(fromFolder);
-    await client.messageCopy(String(uid), toFolder, { uid: true });
-    await client.messageDelete(String(uid), { uid: true });
+    // MOVE is atomic where the server supports it; ImapFlow falls back to
+    // COPY + STORE + EXPUNGE itself when it doesn't, so there's no window
+    // where the message exists in both folders or in neither.
+    await client.messageMove(String(uid), toFolder, { uid: true });
   });
 }
 
@@ -423,6 +526,10 @@ async function testConnection(account) {
     port: account.imapPort || 993,
     secure: account.imapSecure !== false,
     auth: { user: account.email, pass: account.password },
+    tls: { rejectUnauthorized: account.allowInsecureTLS !== true },
+    // Never let a wrong host hang the "Add account" dialog indefinitely.
+    greetingTimeout: 15000,
+    socketTimeout: 30000,
     logger: false
   });
   try {
@@ -439,6 +546,8 @@ module.exports = {
   searchEmails,
   searchAttachments,
   fetchEmailBody,
+  getAttachment,
+  getUnreadCounts,
   getThreadingInfo,
   getFolders,
   createFolder,

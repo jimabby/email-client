@@ -9,8 +9,15 @@ node_modules/
 # Email account credentials — NEVER commit this
 backend/accounts.json
 
+# Encryption keys for the credential store — NEVER commit these
+backend/secret.key
+backend/master.key
+*.key
+
 # Cached message data (regenerated at runtime)
 backend/email-cache.json
+backend/categories.json
+backend/search-index.json
 
 # Build output
 frontend/dist/

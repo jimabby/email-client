@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { useAppStore } from './store';
-import type { Account, EmailSummary, EmailBody, Folder } from './types';
+import type { Account, EmailSummary, EmailBody, Folder, OutboxItem, UnreadCounts } from './types';
 
 // The base URL and private token are configured on the Settings screen. In
 // production this should be the HTTPS URL of the always-on cloud backend.
@@ -102,7 +102,50 @@ export const api = {
     accountId: string,
     data: { to?: string; cc?: string; bcc?: string; subject?: string; text?: string; html?: string }
   ) => client().post(`/emails/${accountId}/drafts`, data).then((r) => r.data),
+
+  // Real per-folder unread totals from the provider.
+  unreadCounts: (folders: string[] = ['INBOX']) =>
+    client()
+      .get<UnreadCounts>('/emails/unread-counts', { params: { folders: folders.join(',') } })
+      .then((r) => r.data),
+
+  // ─── Outbox ───────────────────────────────────────────────────────────────
+  // Sends are queued on the server and retried after a network failure, so the
+  // phone can compose on a flaky connection without losing the message.
+  outbox: () => client().get<OutboxItem[]>('/emails/outbox').then((r) => r.data),
+  retryOutbox: (jobId: string) => client().post(`/emails/outbox/${jobId}/retry`).then((r) => r.data),
+  cancelOutbox: (jobId: string) => client().post(`/emails/outbox/${jobId}/cancel`).then((r) => r.data),
+  discardOutbox: (jobId: string) => client().delete(`/emails/outbox/${jobId}`).then((r) => r.data),
+
+  // Instant local search across every indexed message, no provider round-trip.
+  searchIndex: (query: string, opts: { accountId?: string; folder?: string; limit?: number } = {}) =>
+    client()
+      .get<{ emails: EmailSummary[] }>('/emails/search-index', {
+        params: { q: query, accountId: opts.accountId, folder: opts.folder, limit: opts.limit ?? 50 },
+      })
+      .then((r) => r.data.emails),
 };
+
+/**
+ * Absolute URL for one attachment, with the bearer token as a query parameter
+ * so the OS browser/viewer can fetch it. Attachment bytes are no longer inlined
+ * in the message payload.
+ */
+export function attachmentUrl(
+  accountId: string,
+  emailId: string,
+  index: number,
+  opts: { folder?: string; inline?: boolean } = {}
+): string {
+  const { serverUrl, apiToken } = useAppStore.getState();
+  const params = new URLSearchParams();
+  if (opts.folder) params.set('folder', opts.folder);
+  if (opts.inline) params.set('inline', 'true');
+  if (apiToken) params.set('access_token', apiToken);
+  const query = params.toString();
+  const base = `${serverUrl}/api/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}`;
+  return query ? `${base}?${query}` : base;
+}
 
 // Pick the best archive destination from an account's real folder list
 // (Gmail IMAP has no "Archive" folder — it uses "[Gmail]/All Mail").

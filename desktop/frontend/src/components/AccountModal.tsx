@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { accountsApi, aiApi, emailsApi } from '../api/client'
-import type { Account, MailRule, MailTemplate } from '../types/email'
+import type { Account, Alias, MailTemplate } from '../types/email'
 
 type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature' | 'productivity'
 
@@ -16,7 +16,11 @@ const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHos
 const inputCls = 'w-full px-3 py-2 text-sm bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] rounded-md focus:outline-none focus:border-[#f59e0b]/60 transition-colors'
 
 export function AccountModal() {
-  const { setShowAccountModal, addAccount, showNotification, setAiConfig, aiProvider, aiConfigured, signature, setSignature, accounts, accountSignatures, setAccountSignature } = useEmailStore()
+  const {
+    setShowAccountModal, addAccount, showNotification, setAiConfig, aiProvider, aiConfigured,
+    signature, setSignature, accounts, accountSignatures, setAccountSignature,
+    setShowRulesModal, setAliases,
+  } = useEmailStore()
   const [tab, setTab]       = useState<Tab>('imap')
   const [preset, setPreset] = useState('Gmail (App Password)')
   const [isLoading, setIsLoading] = useState(false)
@@ -25,18 +29,28 @@ export function AccountModal() {
     email: '', name: '', password: '',
     imapHost: 'imap.gmail.com', imapPort: 993, imapSecure: true,
     smtpHost: 'smtp.gmail.com', smtpPort: 587, smtpSecure: false,
+    allowInsecureTLS: false,
   })
+
+  const [aliasAccountId, setAliasAccountId] = useState(accounts[0]?.id || '')
+  const [aliasList, setAliasList] = useState<Alias[]>([])
 
   const [aiSelectedProvider, setAiSelectedProvider] = useState<'claude' | 'openai' | 'gemini'>(aiProvider || 'claude')
   const [aiApiKey, setAiApiKey] = useState('')
   const [aiSaving, setAiSaving] = useState(false)
 
   const [signatureText, setSignatureText] = useState(signature)
-  const [rules, setRules] = useState<MailRule[]>([])
   const [templates, setTemplates] = useState<MailTemplate[]>([])
 
   useEffect(() => { setAiSelectedProvider(aiProvider || 'claude') }, [aiProvider])
-  useEffect(() => { emailsApi.getRules().then(setRules).catch(() => {}); emailsApi.getTemplates().then(setTemplates).catch(() => {}) }, [])
+  useEffect(() => { emailsApi.getTemplates().then(setTemplates).catch(() => {}) }, [])
+
+  useEffect(() => {
+    if (!aliasAccountId) return
+    emailsApi.getAliases(aliasAccountId)
+      .then(list => { setAliasList(list); setAliases(aliasAccountId, list) })
+      .catch(() => setAliasList([]))
+  }, [aliasAccountId])
 
   const update = (field: string, value: string | number | boolean) =>
     setForm(f => ({ ...f, [field]: value }))
@@ -54,6 +68,7 @@ export function AccountModal() {
         email: form.email, name: form.name || form.email, password: form.password,
         imapHost: form.imapHost, imapPort: form.imapPort, imapSecure: form.imapSecure,
         smtpHost: form.smtpHost, smtpPort: form.smtpPort, smtpSecure: form.smtpSecure,
+        allowInsecureTLS: form.allowInsecureTLS,
       })
       addAccount(data.account as Account)
       showNotification('success', `${form.email} added!`)
@@ -221,6 +236,22 @@ export function AccountModal() {
                   </div>
                 </div>
               </div>
+
+              <label className="flex items-start gap-2 text-[11px] text-[#656d76] dark:text-[#8b949e]">
+                <input
+                  type="checkbox"
+                  checked={form.allowInsecureTLS}
+                  onChange={e => update('allowInsecureTLS', e.target.checked)}
+                  className="accent-[#cf222e] mt-0.5"
+                />
+                <span>
+                  Accept self-signed certificates
+                  <span className="block text-[10px] text-[#cf222e] dark:text-[#f85149]">
+                    Only for a server you control. This disables certificate checks, so anyone able to
+                    intercept the connection can read your password and your mail.
+                  </span>
+                </span>
+              </label>
 
               <button type="submit" disabled={isLoading}
                 className="w-full bg-[#f59e0b] text-[#0d1117] py-2.5 rounded-md text-sm font-bold hover:bg-[#fbbf24] transition-colors disabled:opacity-50">
@@ -466,15 +497,83 @@ export function AccountModal() {
           {tab === 'productivity' && (
             <div className="space-y-6">
               <section>
-                <div className="flex items-center justify-between mb-2"><h3 className="text-sm font-semibold text-[#1f2328] dark:text-[#e6edf3]">Mailbox rules</h3><button onClick={() => setRules(r => [...r, { id: crypto.randomUUID(), name: 'New rule', enabled: true, from: '', subject: '', action: 'markRead' }])} className="text-xs text-[#0969da]">+ Add rule</button></div>
-                <p className="text-[11px] text-[#818b98] mb-3">Rules run when Inbox messages are fetched. Matching is case-insensitive.</p>
-                <div className="space-y-2">{rules.map((rule, i) => <div key={rule.id} className="rounded-lg border border-[#d0d7de] dark:border-[#30363d] p-3 space-y-2">
-                  <div className="flex gap-2"><input value={rule.name} onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,name:e.target.value} : x))} className={inputCls}/><button onClick={() => setRules(r => r.filter(x => x.id !== rule.id))} className="text-xs text-[#cf222e]">Remove</button></div>
-                  <div className="grid grid-cols-2 gap-2"><input value={rule.from || ''} placeholder="From contains…" onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,from:e.target.value} : x))} className={inputCls}/><input value={rule.subject || ''} placeholder="Subject contains…" onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,subject:e.target.value} : x))} className={inputCls}/></div>
-                  <div className="flex gap-2"><select value={rule.action} onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,action:e.target.value as MailRule['action']} : x))} className={inputCls}><option value="markRead">Mark read</option><option value="star">Star</option><option value="archive">Archive</option><option value="move">Move</option><option value="spam">Send to spam</option></select>{rule.action === 'move' && <input value={rule.targetFolder || ''} placeholder="Folder path" onChange={e => setRules(r => r.map((x,j) => j === i ? {...x,targetFolder:e.target.value} : x))} className={inputCls}/>}</div>
-                </div>)}</div>
-                <button onClick={async () => { const saved = await emailsApi.saveRules(rules.filter(r => r.from || r.subject)); setRules(saved); showNotification('success','Rules saved') }} className="mt-3 px-3 py-2 rounded-md bg-[#f59e0b] text-xs font-bold text-[#0d1117]">Save rules</button>
+                <h3 className="text-sm font-semibold text-[#1f2328] dark:text-[#e6edf3] mb-1">Mailbox rules</h3>
+                <p className="text-[11px] text-[#818b98] mb-3">
+                  Rules run on the server as mail arrives, with multiple conditions and actions per rule.
+                </p>
+                <button
+                  onClick={() => { setShowAccountModal(false); setShowRulesModal(true) }}
+                  className="px-3 py-2 rounded-md bg-[#f59e0b] text-xs font-bold text-[#0d1117] hover:bg-[#fbbf24] transition-colors"
+                >
+                  Open rules editor
+                </button>
               </section>
+
+              <section className="border-t border-[#d0d7de] dark:border-[#30363d] pt-5">
+                <h3 className="text-sm font-semibold text-[#1f2328] dark:text-[#e6edf3] mb-1">Send-as addresses</h3>
+                <p className="text-[11px] text-[#818b98] mb-3">
+                  Extra identities you can pick in the From field. The address must already be authorised
+                  with your provider, or it will reject the message.
+                </p>
+                <select
+                  value={aliasAccountId}
+                  onChange={e => setAliasAccountId(e.target.value)}
+                  className={`${inputCls} mb-3`}
+                  aria-label="Account for aliases"
+                >
+                  {accounts.map(a => <option key={a.id} value={a.id}>{a.email}</option>)}
+                </select>
+                <div className="space-y-2">
+                  {aliasList.map((alias, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <input
+                        value={alias.email}
+                        placeholder="alias@example.com"
+                        onChange={e => setAliasList(list => list.map((x, j) => j === i ? { ...x, email: e.target.value } : x))}
+                        className={inputCls}
+                      />
+                      <input
+                        value={alias.name || ''}
+                        placeholder="Display name"
+                        onChange={e => setAliasList(list => list.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+                        className={inputCls}
+                      />
+                      <label className="flex items-center gap-1 text-[10px] text-[#656d76] dark:text-[#8b949e] whitespace-nowrap">
+                        <input
+                          type="radio"
+                          name="default-alias"
+                          checked={!!alias.isDefault}
+                          onChange={() => setAliasList(list => list.map((x, j) => ({ ...x, isDefault: j === i })))}
+                          className="accent-[#f59e0b]"
+                        />
+                        Default
+                      </label>
+                      <button onClick={() => setAliasList(list => list.filter((_, j) => j !== i))} className="text-xs text-[#cf222e]">×</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2 mt-3">
+                  <button onClick={() => setAliasList(list => [...list, { email: '', name: '' }])} className="text-xs text-[#0969da]">+ Add address</button>
+                  <div className="flex-1" />
+                  <button
+                    onClick={async () => {
+                      try {
+                        const saved = await emailsApi.saveAliases(aliasAccountId, aliasList.filter(a => a.email.trim()))
+                        setAliasList(saved)
+                        setAliases(aliasAccountId, saved)
+                        showNotification('success', 'Send-as addresses saved')
+                      } catch (err) {
+                        showNotification('error', err instanceof Error ? err.message : 'Could not save addresses')
+                      }
+                    }}
+                    disabled={!aliasAccountId}
+                    className="px-3 py-2 rounded-md bg-[#f59e0b] text-xs font-bold text-[#0d1117] disabled:opacity-50"
+                  >
+                    Save addresses
+                  </button>
+                </div>
+              </section>
+
               <section className="border-t border-[#d0d7de] dark:border-[#30363d] pt-5">
                 <div className="flex items-center justify-between mb-3"><h3 className="text-sm font-semibold text-[#1f2328] dark:text-[#e6edf3]">Templates</h3><button onClick={() => setTemplates(t => [...t, { id: crypto.randomUUID(), name: 'New template', subject: '', body: '' }])} className="text-xs text-[#0969da]">+ Add template</button></div>
                 <div className="space-y-2">{templates.map((template, i) => <div key={template.id} className="rounded-lg border border-[#d0d7de] dark:border-[#30363d] p-3 space-y-2"><div className="flex gap-2"><input value={template.name} onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,name:e.target.value} : x))} className={inputCls}/><button onClick={() => setTemplates(t => t.filter(x => x.id !== template.id))} className="text-xs text-[#cf222e]">Remove</button></div><input value={template.subject} placeholder="Subject" onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,subject:e.target.value} : x))} className={inputCls}/><textarea rows={3} value={template.body} placeholder="Message body" onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,body:e.target.value} : x))} className={inputCls}/></div>)}</div>

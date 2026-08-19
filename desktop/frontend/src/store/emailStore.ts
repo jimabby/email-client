@@ -1,5 +1,9 @@
 import { create } from 'zustand'
-import type { Account, EmailSummary, EmailBody, Folder, ComposeData, EmailCategory, SnoozeItem, Draft } from '../types/email'
+import type {
+  Account, EmailSummary, EmailBody, Folder, ComposeData, EmailCategory, SnoozeItem,
+  Draft, UnreadCounts, OutboxItem, Alias,
+} from '../types/email'
+import { readJson, writeJson, writeListWithinQuota } from '../lib/storage'
 
 interface EmailStore {
   // Accounts
@@ -20,6 +24,22 @@ interface EmailStore {
   // Resolve the best "archive" destination for an account from its real folder
   // list (Gmail IMAP has no "Archive" folder — it uses "[Gmail]/All Mail").
   getArchiveFolder: (accountId: string) => string
+
+  // Real per-folder unread totals from the provider (not a count of the
+  // currently loaded page).
+  unreadCounts: UnreadCounts
+  setUnreadCounts: (counts: UnreadCounts) => void
+  getUnreadCount: (accountId: string, folder: string) => number
+
+  // Outbox
+  outbox: OutboxItem[]
+  setOutbox: (items: OutboxItem[]) => void
+  showOutboxModal: boolean
+  setShowOutboxModal: (show: boolean) => void
+
+  // Send-as aliases, keyed by account id
+  aliases: Record<string, Alias[]>
+  setAliases: (accountId: string, aliases: Alias[]) => void
 
   // Emails list
   emails: EmailSummary[]
@@ -120,6 +140,10 @@ interface EmailStore {
   showDraftsModal: boolean
   setShowDraftsModal: (show: boolean) => void
 
+  // Rules editor
+  showRulesModal: boolean
+  setShowRulesModal: (show: boolean) => void
+
   // AI Chat
   isChatOpen: boolean
   toggleChat: () => void
@@ -153,6 +177,18 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
       fl.find(f => /all mail/i.test(f.name) || /all mail/i.test(f.path))
     return match?.path || 'Archive'
   },
+
+  unreadCounts: {},
+  setUnreadCounts: (counts) => set({ unreadCounts: counts }),
+  getUnreadCount: (accountId, folder) => get().unreadCounts[accountId]?.[folder]?.unread ?? 0,
+
+  outbox: [],
+  setOutbox: (items) => set({ outbox: items }),
+  showOutboxModal: false,
+  setShowOutboxModal: (show) => set({ showOutboxModal: show }),
+
+  aliases: {},
+  setAliases: (accountId, aliases) => set((s) => ({ aliases: { ...s.aliases, [accountId]: aliases } })),
 
   emails: [],
   isLoadingEmails: false,
@@ -282,18 +318,17 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   setPendingReport: (report) => set({ pendingReport: report }),
   clearPendingReport: () => set({ pendingReport: null }),
 
-  // Signature — persisted in localStorage (global + per-account)
-  signature: localStorage.getItem('hermes-signature') || '',
+  // Signature — persisted in localStorage (global + per-account).
+  // Stored as a raw string, not JSON, so existing signatures keep working.
+  signature: (() => { try { return localStorage.getItem('hermes-signature') || '' } catch { return '' } })(),
   setSignature: (sig) => {
-    localStorage.setItem('hermes-signature', sig)
+    try { localStorage.setItem('hermes-signature', sig) } catch { /* quota or private mode */ }
     set({ signature: sig })
   },
-  accountSignatures: (() => {
-    try { return JSON.parse(localStorage.getItem('hermes-account-signatures') || '{}') } catch { return {} }
-  })(),
+  accountSignatures: readJson<Record<string, string>>('hermes-account-signatures', {}),
   setAccountSignature: (accountId, sig) => set((s) => {
     const next = { ...s.accountSignatures, [accountId]: sig }
-    localStorage.setItem('hermes-account-signatures', JSON.stringify(next))
+    writeJson('hermes-account-signatures', next)
     return { accountSignatures: next }
   }),
   getSignatureForAccount: (accountId) => {
@@ -302,9 +337,7 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   },
 
   // Contacts autocomplete — persisted in localStorage
-  contacts: (() => {
-    try { return JSON.parse(localStorage.getItem('hermes-contacts') || '[]') } catch { return [] }
-  })(),
+  contacts: readJson<string[]>('hermes-contacts', []),
   addContacts: (addresses) => set((s) => {
     const normalized = addresses
       .map(a => a.trim())
@@ -333,7 +366,7 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     }
 
     const merged = next.slice(0, 200)
-    localStorage.setItem('hermes-contacts', JSON.stringify(merged))
+    writeJson('hermes-contacts', merged)
     return { contacts: merged }
   }),
 
@@ -354,42 +387,53 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     snoozes: s.snoozes.filter(sn => sn.emailId !== emailId),
   })),
 
-  // Drafts — persisted in localStorage
-  drafts: (() => {
-    try { return JSON.parse(localStorage.getItem('hermes-drafts') || '[]') } catch { return [] }
-  })(),
+  // Drafts — persisted in localStorage. Drafts carry base64 attachments, so a
+  // save can exceed the origin quota; the oldest drafts are shed rather than
+  // letting the write throw out of the setter and take the UI with it.
+  drafts: readJson<Draft[]>('hermes-drafts', []),
   saveDraft: (draft) => set((s) => {
     const next = [draft, ...s.drafts.filter(d => d.id !== draft.id)]
-    localStorage.setItem('hermes-drafts', JSON.stringify(next))
-    return { drafts: next }
+    const { stored, dropped } = writeListWithinQuota('hermes-drafts', next)
+    if (dropped > 0) {
+      // The draft being saved is first in the list, so it is never the one shed.
+      console.warn(`[drafts] Local storage full — dropped ${dropped} older draft(s).`)
+    }
+    return { drafts: stored }
   }),
   deleteDraft: (id) => set((s) => {
     const next = s.drafts.filter(d => d.id !== id)
-    localStorage.setItem('hermes-drafts', JSON.stringify(next))
+    writeJson('hermes-drafts', next)
     return { drafts: next }
   }),
   showDraftsModal: false,
   setShowDraftsModal: (show) => set({ showDraftsModal: show }),
+
+  showRulesModal: false,
+  setShowRulesModal: (show) => set({ showRulesModal: show }),
 
   // AI Chat
   isChatOpen: false,
   toggleChat: () => set((s) => ({ isChatOpen: !s.isChatOpen })),
 
   // Theme — persisted in localStorage, defaults to dark
-  theme: (localStorage.getItem('hermes-theme') as 'dark' | 'light') || 'dark',
+  theme: (() => {
+    try { return (localStorage.getItem('hermes-theme') as 'dark' | 'light') || 'dark' } catch { return 'dark' }
+  })(),
   toggleTheme: () => set((s) => {
     const next = s.theme === 'dark' ? 'light' : 'dark'
-    localStorage.setItem('hermes-theme', next)
+    try { localStorage.setItem('hermes-theme', next) } catch { /* ignore */ }
     return { theme: next }
   }),
 
   threadView: (() => {
-    const raw = localStorage.getItem('hermes-thread-view')
-    return raw ? raw === 'true' : true
+    try {
+      const raw = localStorage.getItem('hermes-thread-view')
+      return raw ? raw === 'true' : true
+    } catch { return true }
   })(),
   toggleThreadView: () => set((s) => {
     const next = !s.threadView
-    localStorage.setItem('hermes-thread-view', String(next))
+    try { localStorage.setItem('hermes-thread-view', String(next)) } catch { /* ignore */ }
     return { threadView: next }
   }),
 }))

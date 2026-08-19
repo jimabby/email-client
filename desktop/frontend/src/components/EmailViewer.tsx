@@ -1,20 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import DOMPurify from 'dompurify'
 import { useEmailStore } from '../store/emailStore'
 import { aiApi, emailsApi } from '../api/client'
+import { Avatar, bareAddress } from './Avatar'
+import { readJson, writeJson } from '../lib/storage'
+import type { Attachment, DraftAttachment } from '../types/email'
 
 function formatFullDate(dateStr: string): string {
   try { return format(parseISO(dateStr), 'EEEE, MMMM d, yyyy h:mm a') }
   catch { return dateStr }
-}
-
-function getInitials(from: string): string {
-  const name = from.replace(/<.*>/, '').trim()
-  if (!name) return '?'
-  const parts = name.split(' ')
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
-  return name.slice(0, 2).toUpperCase()
 }
 
 function normalizeSubject(subject: string): string {
@@ -58,11 +53,6 @@ function sanitizeEmailHtml(html: string, allowRemoteImages: boolean): { html: st
   return { html: doc.body.innerHTML, blocked }
 }
 
-// Extract the bare address from "Name <addr>" (or return the string as-is).
-function bareAddress(s: string): string {
-  return (s.match(/<([^>]+)>/)?.[1] || s).trim().toLowerCase()
-}
-
 function extractUnsubscribeLink(html?: string, text?: string): string | null {
   const isUnsub = (s: string) => /unsubscribe|optout|opt-out|manage\s+preferences/i.test(s)
   if (html && typeof window !== 'undefined') {
@@ -83,6 +73,28 @@ function extractUnsubscribeLink(html?: string, text?: string): string | null {
     if (url) return url.replace(/[)>.,]*$/, '')
   }
   return null
+}
+
+// Smart replies were cached one localStorage key per message, which grew
+// without bound and could never be pruned. One bounded LRU map instead.
+const SMART_REPLY_KEY = 'hermes-smart-replies'
+const SMART_REPLY_LIMIT = 200
+
+function readSmartReplyCache(): Record<string, string[]> {
+  return readJson<Record<string, string[]>>(SMART_REPLY_KEY, {})
+}
+
+function readSmartReplies(emailId: string): string[] | null {
+  const cached = readSmartReplyCache()[emailId]
+  return Array.isArray(cached) ? cached : null
+}
+
+function writeSmartReplies(emailId: string, replies: string[]) {
+  const cache = readSmartReplyCache()
+  cache[emailId] = replies
+  const keys = Object.keys(cache)
+  for (const stale of keys.slice(0, Math.max(0, keys.length - SMART_REPLY_LIMIT))) delete cache[stale]
+  writeJson(SMART_REPLY_KEY, cache)
 }
 
 const StarIcon = ({ filled }: { filled?: boolean }) => (
@@ -143,27 +155,62 @@ export function EmailViewer() {
     setAttachmentSummaries({})
   }, [selectedEmail?.id])
 
+  // Keyed on the message id only. Depending on `emails` re-ran this on every
+  // background inbox refresh, re-fetching the whole conversation and firing a
+  // fresh smart-replies request each time.
+  const conversationCandidates = useMemo<string>(() => {
+    if (!selectedEmail) return ''
+    const providerThread = (selectedEmail.gmailId || selectedEmail.outlookId) ? selectedEmail.threadId : null
+    return emails
+      .filter(e => e.id !== selectedEmail.id && e.accountId === selectedEmail.accountId &&
+        (providerThread ? e.threadId === providerThread : normalizeSubject(e.subject) === normalizeSubject(selectedEmail.subject)))
+      .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
+      .slice(-9)
+      .map(e => e.id)
+      .join(',')
+  }, [emails, selectedEmail?.id])
+
   useEffect(() => {
     if (!selectedEmail || !selectedEmailBody) { setConversationBodies([]); setSmartReplies([]); return }
     let cancelled = false
-    const providerThread = (selectedEmail.gmailId || selectedEmail.outlookId) ? selectedEmail.threadId : null
-    const candidates = emails.filter(e => e.id !== selectedEmail.id && e.accountId === selectedEmail.accountId &&
-      (providerThread ? e.threadId === providerThread : normalizeSubject(e.subject) === normalizeSubject(selectedEmail.subject)))
-      .sort((a, b) => Date.parse(a.date) - Date.parse(b.date)).slice(-9)
-    const conversationRequest = providerThread
-      ? emailsApi.getThread(selectedEmail.accountId, providerThread).then(items => items.filter(x => x.summary.id !== selectedEmail.id).map(x => ({ email: x.summary, body: x.body })))
-      : Promise.all(candidates.map(async email => ({ email, body: await emailsApi.getBody(email.accountId, email.id, email.folder) })))
-    conversationRequest
-      .then(items => { if (!cancelled) setConversationBodies(items) }).catch(() => { if (!cancelled) setConversationBodies([]) })
 
-    const cacheKey = `hermes-smart-replies:${selectedEmail.id}`
-    try { const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (Array.isArray(cached)) setSmartReplies(cached) } catch {}
-    if (!localStorage.getItem(cacheKey)) {
-      aiApi.smartReplies({ from: selectedEmail.from, subject: selectedEmail.subject, body: selectedEmailBody.text || stripHtml(selectedEmailBody.html || '') })
-        .then(({ replies }) => { if (!cancelled) { setSmartReplies(replies); localStorage.setItem(cacheKey, JSON.stringify(replies)) } }).catch(() => {})
+    const providerThread = (selectedEmail.gmailId || selectedEmail.outlookId) ? selectedEmail.threadId : null
+    const candidateIds = conversationCandidates ? conversationCandidates.split(',') : []
+    const candidates = candidateIds
+      .map(id => emails.find(e => e.id === id))
+      .filter((e): e is NonNullable<typeof e> => !!e)
+
+    const conversationRequest = providerThread
+      ? emailsApi.getThread(selectedEmail.accountId, providerThread)
+          .then(items => items.filter(x => x.summary.id !== selectedEmail.id).map(x => ({ email: x.summary, body: x.body })))
+      : Promise.all(candidates.map(async email => ({
+          email,
+          body: await emailsApi.getBody(email.accountId, email.id, email.folder),
+        })))
+
+    conversationRequest
+      .then(items => { if (!cancelled) setConversationBodies(items) })
+      .catch(() => { if (!cancelled) setConversationBodies([]) })
+
+    const cached = readSmartReplies(selectedEmail.id)
+    if (cached) {
+      setSmartReplies(cached)
+    } else {
+      aiApi.smartReplies({
+        from: selectedEmail.from,
+        subject: selectedEmail.subject,
+        body: selectedEmailBody.text || stripHtml(selectedEmailBody.html || ''),
+      })
+        .then(({ replies }) => {
+          if (cancelled) return
+          setSmartReplies(replies)
+          writeSmartReplies(selectedEmail.id, replies)
+        })
+        .catch(() => {})
     }
+
     return () => { cancelled = true }
-  }, [selectedEmail?.id, selectedEmailBody, emails])
+  }, [selectedEmail?.id, selectedEmailBody, conversationCandidates])
 
   if (!selectedEmail) {
     return (
@@ -303,11 +350,37 @@ export function EmailViewer() {
     }
   }
 
-  const handleForward = () => openCompose({
-    accountId: selectedEmail.accountId,
-    subject: `Fwd: ${selectedEmail.subject.replace(/^Fwd:\s*/i, '')}`,
-    body: body ? `\n\n-------- Forwarded Message --------\nFrom: ${body.from}\nDate: ${body.date}\nSubject: ${body.subject}\n\n${body.text || ''}` : ''
-  })
+  // Forward: build real HTML (the editor collapses "\n", so the old plain-text
+  // version arrived as one unreadable paragraph) and bring the attachments.
+  const handleForward = async () => {
+    const attachmentCount = body?.attachments?.length || 0
+    if (attachmentCount) showNotification('success', `Preparing ${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}…`)
+
+    const header = body
+      ? [
+          `<p></p><p>-------- Forwarded Message --------</p>`,
+          `<p>From: ${escapeHtml(body.from)}<br>`,
+          `Date: ${escapeHtml(body.date ? formatFullDate(body.date) : '')}<br>`,
+          `Subject: ${escapeHtml(body.subject || '')}<br>`,
+          `To: ${escapeHtml(body.to || '')}</p>`,
+        ].join('')
+      : ''
+    const quoted = body
+      ? (body.text || stripHtml(body.html || ''))
+          .split('\n')
+          .map(line => `<p>${escapeHtml(line)}</p>`)
+          .join('')
+      : ''
+
+    const forwardedAttachments = attachmentCount ? await collectAttachmentsForForward() : []
+
+    openCompose({
+      accountId: selectedEmail.accountId,
+      subject: `Fwd: ${selectedEmail.subject.replace(/^Fwd:\s*/i, '')}`,
+      body: `${header}<blockquote>${quoted}</blockquote>`,
+      attachments: forwardedAttachments,
+    })
+  }
 
   const handleStar = async () => {
     const newStarred = !selectedEmail.starred
@@ -447,20 +520,77 @@ export function EmailViewer() {
   const movableFolders = accountFolders.filter(f => f.path !== currentFolder && f.path !== '__starred__')
   const unsubscribeLink = extractUnsubscribeLink(body?.html, body?.text)
 
-  const isPreviewable = (att: { filename: string; contentType: string; content?: string | null }) => {
+  const isPreviewable = (att: Attachment) => {
     const type = (att.contentType || '').toLowerCase()
     const name = (att.filename || '').toLowerCase()
     return type.startsWith('image/') || type === 'application/pdf' || name.endsWith('.pdf')
   }
 
-  const getPreviewUrl = (att: { filename: string; contentType: string; content?: string | null }, i: number) => {
-    if (previewUrlRef.current[i]) return previewUrlRef.current[i]
-    if (!att.content) return ''
-    const bytes = Uint8Array.from(atob(att.content), c => c.charCodeAt(0))
-    const blob = new Blob([bytes], { type: att.contentType || 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    previewUrlRef.current[i] = url
-    return url
+  // Attachment bytes are no longer inlined in the message payload; each one is
+  // streamed from its own endpoint, so preview and download are plain URLs.
+  const attachmentSrc = (index: number, inline: boolean) =>
+    emailsApi.attachmentUrl(selectedEmail.accountId, selectedEmail.id, index, {
+      folder: selectedEmail.folder,
+      inline,
+    })
+
+  const downloadAttachment = (att: Attachment, index: number) => {
+    const link = document.createElement('a')
+    link.href = attachmentSrc(index, false)
+    link.download = att.filename || `attachment-${index}`
+    // The server sets Content-Disposition: attachment, so the browser saves it
+    // without ever holding the bytes in JS memory.
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  }
+
+  // "Summarize" still needs the bytes in hand — fetch just that one file.
+  const summarizeAttachment = async (att: Attachment, index: number) => {
+    setAttachmentSummaries(s => ({ ...s, [index]: 'Summarizing…' }))
+    try {
+      const buffer = await emailsApi.fetchAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder)
+      let binary = ''
+      const bytes = new Uint8Array(buffer)
+      // Chunked to stay under the argument limit of String.fromCharCode.
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+      }
+      const { summary } = await aiApi.summarizeAttachment({
+        filename: att.filename,
+        contentType: att.contentType,
+        content: btoa(binary),
+      })
+      setAttachmentSummaries(s => ({ ...s, [index]: summary }))
+    } catch {
+      setAttachmentSummaries(s => ({ ...s, [index]: 'Unable to summarize this attachment.' }))
+    }
+  }
+
+  // Forwarding has to carry the files with it, so they are pulled down once and
+  // handed to the compose window as inline data.
+  const collectAttachmentsForForward = async (): Promise<DraftAttachment[]> => {
+    const list = body?.attachments || []
+    const out: DraftAttachment[] = []
+    for (const [index, att] of list.entries()) {
+      try {
+        const buffer = await emailsApi.fetchAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder)
+        const bytes = new Uint8Array(buffer)
+        let binary = ''
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+        }
+        out.push({
+          filename: att.filename,
+          contentType: att.contentType || 'application/octet-stream',
+          content: btoa(binary),
+          size: bytes.length,
+        })
+      } catch {
+        // Skip a file we can't retrieve rather than blocking the forward.
+      }
+    }
+    return out
   }
 
   return (
@@ -597,9 +727,7 @@ export function EmailViewer() {
           {selectedEmail.subject || '(no subject)'}
         </h1>
         <div className="flex items-start gap-3">
-          <div className="w-9 h-9 rounded-full bg-[#f59e0b] text-[#0d1117] flex items-center justify-center text-xs font-bold flex-shrink-0">
-            {getInitials(selectedEmail.from)}
-          </div>
+          <Avatar from={selectedEmail.from} size={36} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-4">
               <span className="font-semibold text-[#1f2328] dark:text-[#e6edf3] text-sm">{selectedEmail.from}</span>
@@ -690,7 +818,7 @@ export function EmailViewer() {
                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
                     <span className="text-[#24292f] dark:text-[#c9d1d9]">{att.filename}</span>
                     <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(att.size / 1024)}KB)</span>
-                    {att.content && isPreviewable(att) && (
+                    {isPreviewable(att) && (
                       <button
                         title="Preview"
                         onClick={() => setPreviewOpen(s => ({ ...s, [i]: !s[i] }))}
@@ -699,37 +827,24 @@ export function EmailViewer() {
                         {previewOpen[i] ? 'Hide' : 'Preview'}
                       </button>
                     )}
-                    {att.content && (
-                      <button
-                        title="Download"
-                        onClick={() => {
-                          const bytes = Uint8Array.from(atob(att.content!), c => c.charCodeAt(0))
-                          const blob = new Blob([bytes], { type: att.contentType })
-                          const url = URL.createObjectURL(blob)
-                          const a = document.createElement('a')
-                          a.href = url; a.download = att.filename; a.click()
-                          URL.revokeObjectURL(url)
-                        }}
-                        className="text-[#f59e0b] hover:text-[#d97706] transition-colors"
-                      >
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                      </button>
-                    )}
-                    {att.content && (att.contentType === 'application/pdf' || att.contentType?.startsWith('text/')) && (
-                      <button onClick={async () => {
-                        setAttachmentSummaries(s => ({ ...s, [i]: 'Summarizing…' }))
-                        try { const r = await aiApi.summarizeAttachment(att); setAttachmentSummaries(s => ({ ...s, [i]: r.summary })) }
-                        catch { setAttachmentSummaries(s => ({ ...s, [i]: 'Unable to summarize this attachment.' })) }
-                      }} className="text-[#7c3aed] text-[11px]">Summarize</button>
+                    <button
+                      title="Download"
+                      onClick={() => downloadAttachment(att, i)}
+                      className="text-[#f59e0b] hover:text-[#d97706] transition-colors"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                    {(att.contentType === 'application/pdf' || att.contentType?.startsWith('text/')) && (
+                      <button onClick={() => summarizeAttachment(att, i)} className="text-[#7c3aed] text-[11px]">Summarize</button>
                     )}
                   </div>
                   {attachmentSummaries[i] && <div className="rounded-md bg-[#f6f8fa] dark:bg-[#161b22] p-3 text-xs whitespace-pre-wrap">{attachmentSummaries[i]}</div>}
-                  {att.content && previewOpen[i] && isPreviewable(att) && (
+                  {previewOpen[i] && isPreviewable(att) && (
                     <div className="border border-[#d0d7de] dark:border-[#30363d] rounded-md overflow-hidden bg-white dark:bg-[#0d1117] w-full">
                       {att.contentType?.toLowerCase().startsWith('image/') ? (
-                        <img src={getPreviewUrl(att, i)} alt={att.filename} className="w-full h-auto max-h-[80vh] object-contain" />
+                        <img src={attachmentSrc(i, true)} alt={att.filename} className="w-full h-auto max-h-[80vh] object-contain" />
                       ) : (
-                        <iframe title={att.filename} src={getPreviewUrl(att, i)} className="w-full h-[80vh]" />
+                        <iframe title={att.filename} src={attachmentSrc(i, true)} className="w-full h-[80vh]" />
                       )}
                     </div>
                   )}

@@ -1,11 +1,19 @@
 export type AccountType = 'gmail' | 'outlook' | 'imap';
 
+export interface Alias {
+  email: string;
+  name?: string;
+  isDefault?: boolean;
+}
+
 export interface Account {
   id: string;
   type: AccountType;
   email: string;
   name: string;
   createdAt: string;
+  aliases?: Alias[];
+  allowInsecureTLS?: boolean;
 }
 
 export interface EmailSummary {
@@ -26,6 +34,20 @@ export interface EmailSummary {
   threadId?: string | null;
   messageId?: string;
   inReplyTo?: string;
+  /** Set when the result came from the local search index rather than a provider. */
+  fromIndex?: boolean;
+}
+
+export interface Attachment {
+  filename: string;
+  contentType: string;
+  size: number;
+  /**
+   * Always null from the API — bytes are fetched on demand from
+   * `emailsApi.attachmentUrl(...)`. Kept optional so locally built drafts can
+   * carry inline content.
+   */
+  content?: string | null;
 }
 
 export interface EmailBody {
@@ -36,16 +58,42 @@ export interface EmailBody {
   date: string;
   html?: string;
   text?: string;
-  attachments?: { filename: string; contentType: string; size: number; content?: string | null }[];
+  attachments?: Attachment[];
   // Threading info (set by the backend) so replies keep the conversation.
   messageId?: string;
   references?: string;
   threadId?: string | null;
+  /** Set when served from the offline cache. */
+  offline?: boolean;
+  cachedAt?: string;
 }
 
 export interface Folder {
   name: string;
   path: string;
+  delimiter?: string;
+  userCreated?: boolean;
+}
+
+/** unreadCounts response: accountId -> folderPath -> counts */
+export type UnreadCounts = Record<string, Record<string, { unread: number; total: number }>>;
+
+// ─── Rules ───────────────────────────────────────────────────────────────────
+
+export type RuleField = 'from' | 'to' | 'subject' | 'snippet' | 'hasAttachment';
+export type RuleOp = 'contains' | 'notContains' | 'equals' | 'startsWith' | 'endsWith' | 'matches' | 'isTrue';
+export type RuleActionType = 'move' | 'archive' | 'markRead' | 'markUnread' | 'star' | 'spam' | 'delete';
+
+export interface RuleCondition {
+  field: RuleField;
+  op: RuleOp;
+  value: string;
+  caseSensitive?: boolean;
+}
+
+export interface RuleAction {
+  type: RuleActionType;
+  targetFolder?: string;
 }
 
 export interface MailRule {
@@ -53,18 +101,50 @@ export interface MailRule {
   name: string;
   enabled: boolean;
   accountId?: string;
-  from?: string;
-  subject?: string;
-  action: 'move' | 'archive' | 'markRead' | 'star' | 'spam';
-  targetFolder?: string;
+  /** Whether every condition must match, or just one. */
+  match: 'all' | 'any';
+  conditions: RuleCondition[];
+  actions: RuleAction[];
+  /** Stop evaluating later rules once this one matches. */
+  stopProcessing?: boolean;
 }
 
 export interface MailTemplate { id: string; name: string; subject: string; body: string }
+
+// ─── Outbox ──────────────────────────────────────────────────────────────────
+
+export type OutboxStatus = 'pending' | 'sending' | 'retrying' | 'sent' | 'failed' | 'cancelled';
+
+export interface OutboxItem {
+  id: string;
+  accountId: string;
+  to: string;
+  subject: string;
+  status: OutboxStatus;
+  sendAt: string;
+  nextAttemptAt?: string;
+  canUndoUntil?: string | null;
+  attempts?: number;
+  error?: string | null;
+  createdAt: string;
+  sentAt?: string;
+  failedAt?: string;
+  cancelledAt?: string;
+  hasAttachments?: boolean;
+}
 
 export type AiMode = 'improve' | 'concise' | 'complete' | 'grammar' | 'formal' | 'friendly' | 'subject' | 'reply' | 'custom';
 
 export type EmailCategory = 'All' | 'Primary' | 'Social' | 'Jobs' | 'Promotions' | 'Receipts';
 export const EMAIL_CATEGORIES: EmailCategory[] = ['All', 'Primary', 'Social', 'Jobs', 'Promotions', 'Receipts'];
+
+/** An attachment carried by a draft or a forward, with its bytes inline. */
+export interface DraftAttachment {
+  filename: string;
+  contentType: string;
+  content: string; // base64
+  size: number;
+}
 
 export interface ComposeData {
   to: string;
@@ -75,6 +155,9 @@ export interface ComposeData {
   accountId: string;
   replyTo?: EmailBody & { id: string; folder?: string };
   draftId?: string;
+  /** Attachments carried over from a forward or a restored draft. */
+  attachments?: DraftAttachment[];
+  sendAs?: string;
 }
 
 export interface SnoozeItem {
@@ -105,4 +188,5 @@ export interface Draft {
   body: string;   // HTML
   savedAt: string;
   serverRef?: ServerDraftRef | null;
+  attachments?: DraftAttachment[];
 }

@@ -49,7 +49,9 @@ export function AiChatPanel() {
     let assistantContent = ''
     setMessages(prev => [...prev, { role: 'assistant', content: '' }])
 
-    const controller = await streamAiChat(
+    // The handle comes back synchronously, so "Stop" reaches the request that
+    // is actually in flight.
+    controllerRef.current = streamAiChat(
       { messages: newMessages, emailContext },
       (chunk) => {
         assistantContent += chunk
@@ -67,7 +69,6 @@ export function AiChatPanel() {
         setIsStreaming(false)
       }
     )
-    controllerRef.current = controller
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

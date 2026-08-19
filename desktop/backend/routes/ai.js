@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { streamSuggestion, streamChat, listGeminiModels, rankEmailsWithAI, summarizeThreadWithAI, generateSmartReplies, extractActionsWithAI, summarizeAttachmentWithAI } = require('../services/aiService');
 const store = require('../store');
+const searchIndex = require('../services/searchIndexService');
 
 // An AI key is available if the user saved one, OR no explicit provider is set
 // (or it's Claude) and the ANTHROPIC_API_KEY env fallback exists. The env key
@@ -88,24 +89,19 @@ router.post('/chat', async (req, res) => {
     return res.status(400).json({ error: 'messages array is required' });
   }
 
-  // Retrieval step: search every connected mailbox with the user's question,
-  // then supply the most relevant message bodies to the model.
+  // Retrieval step. This used to fan out a provider search plus four full body
+  // fetches per account on every turn — seconds of latency, and IMAP substring
+  // search almost never matched a natural-language question. The local index
+  // answers from memory and already holds the message bodies.
   const query = String(messages[messages.length - 1]?.content || '').slice(0, 500);
-  const retrieved = [];
-  await Promise.all(store.getAccounts().map(async account => {
-    try {
-      const service = account.type === 'gmail' ? require('../services/gmailService') : account.type === 'outlook' ? require('../services/outlookService') : require('../services/imapService');
-      const hits = account.type === 'imap' ? await service.searchEmails(account, query, 'INBOX', 4) : await service.searchEmails(account, query, 4);
-      for (const hit of hits.slice(0, 4)) {
-        try {
-          const id = hit.gmailId || hit.outlookId || hit.uid;
-          const body = account.type === 'imap' ? await service.fetchEmailBody(account, id, hit.folder) : await service.fetchEmailBody(account, id);
-          retrieved.push({ from: hit.from, subject: hit.subject, date: hit.date, body: String(body?.text || body?.html || '').replace(/<[^>]+>/g, ' ').slice(0, 4000) });
-        } catch {}
-      }
-    } catch {}
+  const retrieved = searchIndex.search(query, { limit: 12 }).map(doc => ({
+    from: doc.from,
+    subject: doc.subject,
+    date: doc.date,
+    body: (doc.body || doc.snippet || '').slice(0, 4000),
   }));
-  await streamChat(res, { messages, emailContext: { ...emailContext, retrieved: retrieved.slice(0, 12) } });
+
+  await streamChat(res, { messages, emailContext: { ...emailContext, retrieved } });
 });
 
 router.post('/smart-replies', async (req, res) => {

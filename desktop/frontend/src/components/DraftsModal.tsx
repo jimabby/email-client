@@ -49,6 +49,8 @@ export function DraftsModal() {
       subject: draft.subject,
       body: draft.body,
       draftId: draft.id,
+      // Restore the files that were attached when the draft was saved.
+      attachments: draft.attachments,
     })
   }
 

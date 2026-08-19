@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity,
-  useWindowDimensions, Alert,
+  useWindowDimensions, Alert, Linking,
 } from 'react-native';
 import RenderHtml from 'react-native-render-html';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { api, errorMessage, resolveArchiveFolder } from '../api';
+import { api, attachmentUrl, errorMessage, resolveArchiveFolder } from '../api';
 import { theme, avatarColor } from '../theme';
 import { initials, senderName, formatFullDate, stripHtml } from '../utils';
 import type { EmailBody } from '../types';
@@ -187,10 +187,16 @@ export default function ViewerScreen({ navigation, route }: Props) {
         <View style={styles.attachments}>
           <Text style={styles.attachTitle}>Attachments ({body.attachments.length})</Text>
           {body.attachments.map((a, i) => (
-            <View key={i} style={styles.attachRow}>
+            <TouchableOpacity
+              key={i}
+              style={styles.attachRow}
+              // Attachment bytes stream from their own endpoint now, so opening
+              // one is a plain URL the OS viewer can handle.
+              onPress={() => Linking.openURL(attachmentUrl(email.accountId, email.id, i, { folder: email.folder, inline: true }))}
+            >
               <Text style={styles.attachName} numberOfLines={1}>📎 {a.filename}</Text>
               <Text style={styles.attachSize}>{Math.round((a.size || 0) / 1024)} KB</Text>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
       )}

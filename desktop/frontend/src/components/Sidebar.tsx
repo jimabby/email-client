@@ -9,6 +9,8 @@ const TrashIcon  = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="n
 const SpamIcon   = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
 const SnoozeIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M6 7h4l-4 3.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 1.5L2.5 3.5M11 1.5l2.5 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
 const FolderIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
+const OutboxIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 10h3l1.5 2h5L12 10h3v3a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M8 8V1M5.5 3.5L8 1l2.5 2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+const RulesIcon  = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="13" cy="11" r="2" stroke="currentColor" strokeWidth="1.2"/></svg>
 const StarIcon   = ({ filled }: { filled?: boolean }) => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? '#f59e0b' : 'none'}>
     <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
@@ -44,10 +46,43 @@ export function Sidebar() {
     emails, setEmails, setLoadingEmails, setNextToken,
     openCompose, setShowAccountModal,
     snoozes, drafts, setShowDraftsModal,
+    setUnreadCounts, getUnreadCount, outbox, setOutbox, setShowOutboxModal, setShowRulesModal,
   } = useEmailStore()
 
   useEffect(() => {
-    accountsApi.list().then(setAccounts).catch(console.error)
+    accountsApi.list()
+      .then(list => {
+        setAccounts(list)
+        // Select the first account automatically so the app isn't empty on launch.
+        if (list.length && !useEmailStore.getState().currentAccountId) {
+          handleFolderClick(list[0].id, 'INBOX')
+        }
+      })
+      .catch(console.error)
+  }, [])
+
+  // Real unread totals from the provider. Counting the loaded page could only
+  // ever describe the folder the user happened to be looking at.
+  useEffect(() => {
+    if (!accounts.length) return
+    const folderPaths = Array.from(new Set(
+      accounts.flatMap(a => (folders[a.id] || DEFAULT_FOLDERS).map(f => f.path)).concat('INBOX')
+    )).filter(p => !p.startsWith('__')).slice(0, 12)
+
+    const refresh = () => {
+      emailsApi.unreadCounts(folderPaths).then(setUnreadCounts).catch(() => {})
+    }
+    refresh()
+    const timer = setInterval(refresh, 60_000)
+    return () => clearInterval(timer)
+  }, [accounts, folders])
+
+  // Keep the outbox badge current so a stuck message is visible.
+  useEffect(() => {
+    const refresh = () => emailsApi.getOutbox().then(setOutbox).catch(() => {})
+    refresh()
+    const timer = setInterval(refresh, 20_000)
+    return () => clearInterval(timer)
   }, [])
 
   useEffect(() => {
@@ -86,11 +121,21 @@ export function Sidebar() {
     } catch (err) { console.error(err) }
   }
 
-  const unreadCount = (accountId: string, folderPath: string) =>
-    emails.filter(e => e.accountId === accountId && e.folder === folderPath && !e.read).length
+  // Provider-reported totals, with the loaded page as a fallback for folders
+  // the counts request hasn't covered yet.
+  const unreadCount = (accountId: string, folderPath: string) => {
+    const fromServer = getUnreadCount(accountId, folderPath)
+    if (fromServer) return fromServer
+    return emails.filter(e => e.accountId === accountId && e.folder === folderPath && !e.read).length
+  }
 
   const starredCount = (accountId: string) =>
     emails.filter(e => e.accountId === accountId && e.starred).length
+
+  const pendingOutbox = outbox.filter(i =>
+    i.status === 'pending' || i.status === 'retrying' || i.status === 'failed' || i.status === 'sending'
+  ).length
+  const failedOutbox = outbox.filter(i => i.status === 'failed').length
 
   const snoozedCount = (accountId: string) =>
     snoozes.filter(s => s.accountId === accountId).length
@@ -272,11 +317,38 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Add account */}
-      <div className="p-3 border-t border-[#d0d7de] dark:border-[#30363d]">
+      {/* Outbox, rules, add account */}
+      <div className="p-2 border-t border-[#d0d7de] dark:border-[#30363d] space-y-0.5">
+        <button
+          onClick={() => setShowOutboxModal(true)}
+          className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md transition-colors
+            ${failedOutbox
+              ? 'text-[#cf222e] dark:text-[#f85149] hover:bg-[#fff0ee] dark:hover:bg-[#f85149]/10'
+              : 'text-[#656d76] dark:text-[#8b949e] hover:text-[#f59e0b] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128]'
+            }`}
+        >
+          <OutboxIcon />
+          <span className="flex-1 text-left">Outbox</span>
+          {pendingOutbox > 0 && (
+            <span className={`text-[9px] font-bold rounded-full px-1.5 py-0.5 leading-none ${
+              failedOutbox ? 'bg-[#cf222e] text-white' : 'bg-[#f59e0b] text-[#0d1117]'
+            }`}>
+              {pendingOutbox}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setShowRulesModal(true)}
+          className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#f59e0b] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] rounded-md transition-colors"
+        >
+          <RulesIcon />
+          <span className="flex-1 text-left">Rules</span>
+        </button>
+
         <button
           onClick={() => setShowAccountModal(true)}
-          className="w-full flex items-center gap-2 px-2 py-2 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#f59e0b] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] rounded-md transition-colors"
+          className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#f59e0b] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] rounded-md transition-colors"
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
             <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.3"/>

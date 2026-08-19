@@ -41,7 +41,7 @@ async function handleCallback(code) {
   };
 }
 
-function getGmailClient(account) {
+function getAuthClient(account) {
   const store = require('../store');
   const oauth2Client = createOAuth2Client();
   oauth2Client.setCredentials({
@@ -65,7 +65,114 @@ function getGmailClient(account) {
     }
   });
 
-  return google.gmail({ version: 'v1', auth: oauth2Client });
+  return oauth2Client;
+}
+
+function getGmailClient(account) {
+  return google.gmail({ version: 'v1', auth: getAuthClient(account) });
+}
+
+// ─── Batched metadata fetches ───────────────────────────────────────────────
+// Listing a folder returns ids only, so every message needs a metadata read.
+// One HTTP request per message means 50 round-trips per page and trips Gmail's
+// per-user rate limit; the batch endpoint collapses them into one.
+
+const BATCH_SIZE = 50; // Google's recommended maximum per batch request
+const META_HEADERS = ['From', 'To', 'Subject', 'Date', 'Message-ID', 'In-Reply-To'];
+
+function parseBatchResponse(body, boundary) {
+  const parts = body.split(`--${boundary}`);
+  const results = [];
+  for (const part of parts) {
+    // Each part is: MIME headers, blank line, HTTP status line + headers,
+    // blank line, then the JSON payload.
+    const jsonStart = part.indexOf('{');
+    if (jsonStart === -1) continue;
+    const statusMatch = part.match(/HTTP\/[\d.]+\s+(\d{3})/);
+    const status = statusMatch ? Number(statusMatch[1]) : 0;
+    const contentId = part.match(/Content-ID:\s*response-([^\r\n]+)/i)?.[1]?.trim();
+    // Trim any trailing CRLF/boundary remnants after the JSON object.
+    const jsonEnd = part.lastIndexOf('}');
+    if (jsonEnd <= jsonStart) continue;
+    try {
+      results.push({ contentId, status, data: JSON.parse(part.slice(jsonStart, jsonEnd + 1)) });
+    } catch { /* skip an unparsable part rather than failing the page */ }
+  }
+  return results;
+}
+
+async function batchGetMessages(account, msgIds) {
+  if (!msgIds.length) return new Map();
+  const auth = getAuthClient(account);
+  const out = new Map();
+
+  for (let offset = 0; offset < msgIds.length; offset += BATCH_SIZE) {
+    const chunk = msgIds.slice(offset, offset + BATCH_SIZE);
+    const boundary = `hermes_batch_${Date.now()}_${offset}`;
+    const query = `format=metadata&${META_HEADERS.map(h => `metadataHeaders=${h}`).join('&')}`;
+
+    const body = chunk.map((id, i) => [
+      `--${boundary}`,
+      'Content-Type: application/http',
+      `Content-ID: <item-${i}>`,
+      '',
+      `GET /gmail/v1/users/me/messages/${encodeURIComponent(id)}?${query}`,
+      '',
+    ].join('\r\n')).join('\r\n') + `\r\n--${boundary}--\r\n`;
+
+    const res = await auth.request({
+      url: 'https://gmail.googleapis.com/batch/gmail/v1',
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/mixed; boundary=${boundary}` },
+      body,
+      responseType: 'text',
+    });
+
+    const responseBoundary = String(res.headers?.['content-type'] || '').match(/boundary=(?:"([^"]+)"|([^;]+))/);
+    const parsedBoundary = (responseBoundary?.[1] || responseBoundary?.[2] || '').trim();
+    for (const part of parseBatchResponse(String(res.data), parsedBoundary || boundary)) {
+      if (part.status >= 200 && part.status < 300 && part.data?.id) out.set(part.data.id, part.data);
+    }
+  }
+
+  return out;
+}
+
+function messageToSummary(account, detail, folder) {
+  const headers = detail.payload?.headers || [];
+  const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+  return {
+    id: `${account.id}-${detail.id}`,
+    gmailId: detail.id,
+    from: getHeader('From'),
+    to: [getHeader('To')],
+    subject: getHeader('Subject') || '(no subject)',
+    date: getHeader('Date') ? new Date(getHeader('Date')).toISOString() : new Date().toISOString(),
+    read: !detail.labelIds?.includes('UNREAD'),
+    starred: detail.labelIds?.includes('STARRED') ?? false,
+    folder,
+    accountId: account.id,
+    snippet: detail.snippet || '',
+    threadId: detail.threadId || null,
+    messageId: getHeader('Message-ID'),
+    inReplyTo: getHeader('In-Reply-To'),
+  };
+}
+
+// Batch first; fall back to individual reads if the batch endpoint is
+// unavailable (proxies occasionally reject multipart bodies).
+async function fetchSummaries(account, msgIds, folder) {
+  if (!msgIds.length) return [];
+  try {
+    const details = await batchGetMessages(account, msgIds);
+    if (details.size) {
+      return msgIds.map(id => details.get(id)).filter(Boolean).map(d => messageToSummary(account, d, folder));
+    }
+  } catch (err) {
+    console.warn('[gmail] Batch metadata fetch failed, falling back to per-message reads:', err.message);
+  }
+  const gmail = getGmailClient(account);
+  return Promise.all(msgIds.map(id => _fetchMessageMeta(gmail, account, id, folder)));
 }
 
 function decodeBase64(data) {
@@ -140,7 +247,7 @@ async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = nu
   if (pageToken) listParams.pageToken = pageToken;
   const listRes = await gmail.users.messages.list(listParams);
   const messages = listRes.data.messages || [];
-  const emails = await Promise.all(messages.map(msg => _fetchMessageMeta(gmail, account, msg.id, folder)));
+  const emails = await fetchSummaries(account, messages.map(m => m.id), folder);
   return { emails, nextToken: listRes.data.nextPageToken || null };
 }
 
@@ -148,7 +255,7 @@ async function searchEmails(account, query, limit = 50) {
   const gmail = getGmailClient(account);
   const listRes = await gmail.users.messages.list({ userId: 'me', q: query, maxResults: limit });
   const messages = listRes.data.messages || [];
-  return Promise.all(messages.map(msg => _fetchMessageMeta(gmail, account, msg.id, 'search')));
+  return fetchSummaries(account, messages.map(m => m.id), 'search');
 }
 
 async function searchAttachments(account, query, type, folder = 'INBOX', limit = 50) {
@@ -163,7 +270,7 @@ async function searchAttachments(account, query, type, folder = 'INBOX', limit =
   const q = parts.join(' ');
   const listRes = await gmail.users.messages.list({ userId: 'me', q, maxResults: limit });
   const messages = listRes.data.messages || [];
-  return Promise.all(messages.map(msg => _fetchMessageMeta(gmail, account, msg.id, folder || 'search')));
+  return fetchSummaries(account, messages.map(m => m.id), folder || 'search');
 }
 
 async function fetchEmailBody(account, gmailId) {
@@ -182,40 +289,26 @@ async function fetchEmailBody(account, gmailId) {
   const messageId = getHeader('Message-ID');
   const references = getHeader('References');
 
-  // Extract attachments from payload parts
+  // Attachment *metadata* only. Bytes are pulled on demand by
+  // GET /api/emails/:accountId/message/:emailId/attachment/:index so that
+  // opening a message with a 20 MB PDF doesn't buffer it through the API.
   const attachments = [];
   function collectAttachments(part) {
     if (!part) return;
     if (part.filename && part.body) {
-      const att = {
+      attachments.push({
         filename: part.filename,
         contentType: part.mimeType || 'application/octet-stream',
         size: part.body.size || 0,
         content: null,
+        // Kept internally for the download endpoint; stripped before responding.
         attachmentId: part.body.attachmentId || null,
-      };
-      // Small attachments: data is inline (base64url → base64)
-      if (part.body.data) {
-        att.content = part.body.data.replace(/-/g, '+').replace(/_/g, '/');
-      }
-      attachments.push(att);
+        inlineData: part.body.data || null,
+      });
     }
     if (part.parts) part.parts.forEach(collectAttachments);
   }
   collectAttachments(detail.data.payload);
-
-  // Fetch content for large attachments that only have an attachmentId
-  await Promise.all(attachments.map(async (att) => {
-    if (!att.content && att.attachmentId) {
-      try {
-        const res = await gmail.users.messages.attachments.get({
-          userId: 'me', messageId: gmailId, id: att.attachmentId
-        });
-        att.content = res.data.data.replace(/-/g, '+').replace(/_/g, '/');
-      } catch { /* skip if fetch fails */ }
-    }
-    delete att.attachmentId;
-  }));
 
   return {
     gmailId,
@@ -232,6 +325,33 @@ async function fetchEmailBody(account, gmailId) {
     messageId,
     references,
     threadId: detail.data.threadId || null,
+  };
+}
+
+// Pull one attachment's bytes on demand. `index` refers to the position in the
+// attachment array returned by fetchEmailBody.
+async function getAttachment(account, gmailId, index) {
+  const body = await fetchEmailBody(account, gmailId);
+  const att = body.attachments?.[index];
+  if (!att) throw new Error('Attachment not found');
+
+  if (att.inlineData) {
+    return {
+      filename: att.filename,
+      contentType: att.contentType,
+      content: Buffer.from(att.inlineData.replace(/-/g, '+').replace(/_/g, '/'), 'base64'),
+    };
+  }
+  if (!att.attachmentId) throw new Error('Attachment has no downloadable content');
+
+  const gmail = getGmailClient(account);
+  const res = await gmail.users.messages.attachments.get({
+    userId: 'me', messageId: gmailId, id: att.attachmentId,
+  });
+  return {
+    filename: att.filename,
+    contentType: att.contentType,
+    content: Buffer.from(String(res.data.data).replace(/-/g, '+').replace(/_/g, '/'), 'base64'),
   };
 }
 
@@ -252,22 +372,93 @@ async function deleteEmail(account, gmailId) {
   await gmail.users.messages.trash({ userId: 'me', id: gmailId });
 }
 
+// Labels Gmail exposes but that make no sense as a mail folder in the UI.
+const HIDDEN_LABEL_IDS = new Set(['CHAT', 'UNREAD', 'STARRED', 'IMPORTANT']);
+
 async function getFolders(account) {
   const gmail = getGmailClient(account);
   const res = await gmail.users.labels.list({ userId: 'me' });
 
+  // User-created labels have ids like "Label_12" — they are exactly what the
+  // move menu is for, so they must be kept. Only genuinely non-navigable
+  // system labels are filtered out.
   return (res.data.labels || [])
-    .filter(l => !l.id.startsWith('Label_'))
-    .map(l => ({ name: l.name, path: l.id }));
+    .filter(l => !HIDDEN_LABEL_IDS.has(l.id))
+    .map(l => ({
+      name: l.name,
+      path: l.id,
+      // Gmail nests labels with "/" in the display name.
+      delimiter: '/',
+      userCreated: l.type === 'user',
+    }))
+    .sort((a, b) => {
+      // System folders first, then user labels alphabetically.
+      if (a.userCreated !== b.userCreated) return a.userCreated ? 1 : -1;
+      return a.name.localeCompare(b.name);
+    });
 }
 
+// Unread counts come straight from the label metadata — one cheap call per
+// folder instead of counting a page of fetched messages.
+async function getUnreadCounts(account, folders = ['INBOX']) {
+  const gmail = getGmailClient(account);
+  const counts = {};
+  await Promise.all(folders.map(async (folder) => {
+    try {
+      const { data } = await gmail.users.labels.get({ userId: 'me', id: folderToLabelId(folder) });
+      counts[folder] = { unread: data.messagesUnread || 0, total: data.messagesTotal || 0 };
+    } catch {
+      counts[folder] = { unread: 0, total: 0 };
+    }
+  }));
+  return counts;
+}
+
+// One `threads.get` with format=full returns every message in the conversation
+// with its payload, so a thread costs a single request instead of two per
+// message.
 async function fetchThread(account, threadId) {
   const gmail = getGmailClient(account);
-  const thread = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'metadata', metadataHeaders: ['From', 'To', 'Subject', 'Date', 'Message-ID', 'In-Reply-To'] });
-  return Promise.all((thread.data.messages || []).map(async msg => ({
-    summary: await _fetchMessageMeta(gmail, account, msg.id, msg.labelIds?.includes('SENT') ? 'SENT' : 'INBOX'),
-    body: await fetchEmailBody(account, msg.id)
-  })));
+  const thread = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' });
+
+  return (thread.data.messages || []).map((msg) => {
+    const folder = msg.labelIds?.includes('SENT') ? 'SENT' : 'INBOX';
+    const headers = msg.payload?.headers || [];
+    const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+    const { html, text } = extractBody(msg.payload);
+
+    const attachments = [];
+    (function collect(part) {
+      if (!part) return;
+      if (part.filename && part.body) {
+        attachments.push({
+          filename: part.filename,
+          contentType: part.mimeType || 'application/octet-stream',
+          size: part.body.size || 0,
+          content: null,
+        });
+      }
+      if (part.parts) part.parts.forEach(collect);
+    })(msg.payload);
+
+    return {
+      summary: messageToSummary(account, msg, folder),
+      body: {
+        gmailId: msg.id,
+        from: getHeader('From'),
+        to: getHeader('To'),
+        cc: getHeader('Cc'),
+        subject: getHeader('Subject'),
+        date: getHeader('Date') ? new Date(getHeader('Date')).toISOString() : '',
+        html,
+        text,
+        attachments,
+        messageId: getHeader('Message-ID'),
+        references: getHeader('References'),
+        threadId: msg.threadId || null,
+      },
+    };
+  });
 }
 
 async function registerPushWatch(account, topicName) {
@@ -296,25 +487,52 @@ function wrapBase64(b64) {
   return b64.match(/.{1,76}/g)?.join('\r\n') || b64;
 }
 
+// Header values come from user input and from replied-to messages. A bare CR
+// or LF would end the header and let the rest of the value inject arbitrary
+// headers (extra Bcc, forged From). Fold whitespace away before use.
+function sanitizeHeaderValue(value) {
+  return String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
+}
+
 // RFC 2047-encode a header value when it contains non-ASCII characters.
 function encodeHeader(value) {
-  if (!value || /^[\x20-\x7e]*$/.test(value)) return value;
-  return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
+  const safe = sanitizeHeaderValue(value);
+  if (!safe || /^[\x20-\x7e]*$/.test(safe)) return safe;
+  return `=?UTF-8?B?${Buffer.from(safe, 'utf8').toString('base64')}?=`;
+}
+
+// Quote a filename for a Content-Disposition parameter without letting quotes
+// or newlines break out of it.
+function encodeFilename(name) {
+  return sanitizeHeaderValue(name).replace(/["\\]/g, '_');
+}
+
+// Resolve the identity to send as: an explicit alias if the account allows it,
+// otherwise the account's own address.
+function resolveFrom(account, sendAs) {
+  const wanted = sanitizeHeaderValue(sendAs?.email || '').toLowerCase();
+  if (wanted && wanted !== String(account.email).toLowerCase()) {
+    const alias = (account.aliases || []).find(a => String(a.email).toLowerCase() === wanted);
+    if (alias) return { name: alias.name || account.name || alias.email, email: alias.email };
+  }
+  return { name: account.name || account.email, email: account.email };
 }
 
 // Build a base64url-encoded RFC822 message for the Gmail send/draft endpoints.
-function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references }) {
+function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs }) {
   const hasAttachments = attachments && attachments.length > 0;
   // References for a reply = the original's References + its Message-ID.
-  const replyRefs = [references, inReplyTo].filter(Boolean).join(' ');
+  const replyRefs = [references, inReplyTo].filter(Boolean).map(sanitizeHeaderValue).join(' ');
+  const from = resolveFrom(account, sendAs);
+  const list = (value) => sanitizeHeaderValue(Array.isArray(value) ? value.join(', ') : value);
 
   const headers = [
-    `From: ${encodeHeader(account.name || account.email)} <${account.email}>`,
-    to  ? `To: ${Array.isArray(to) ? to.join(', ') : to}` : null,
-    cc  ? `Cc: ${cc}`   : null,
-    bcc ? `Bcc: ${bcc}` : null,
+    `From: ${encodeHeader(from.name)} <${sanitizeHeaderValue(from.email)}>`,
+    to  ? `To: ${list(to)}` : null,
+    cc  ? `Cc: ${list(cc)}` : null,
+    bcc ? `Bcc: ${list(bcc)}` : null,
     `Subject: ${encodeHeader(subject || '')}`,
-    inReplyTo ? `In-Reply-To: ${inReplyTo}` : null,
+    inReplyTo ? `In-Reply-To: ${sanitizeHeaderValue(inReplyTo)}` : null,
     replyRefs ? `References: ${replyRefs}` : null,
     'MIME-Version: 1.0',
   ].filter(Boolean);
@@ -335,9 +553,9 @@ function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachment
 
     const attachmentParts = attachments.map(a => [
       `--${boundary}`,
-      `Content-Type: ${a.contentType}; name="${a.filename}"`,
+      `Content-Type: ${sanitizeHeaderValue(a.contentType) || 'application/octet-stream'}; name="${encodeFilename(a.filename)}"`,
       'Content-Transfer-Encoding: base64',
-      `Content-Disposition: attachment; filename="${a.filename}"`,
+      `Content-Disposition: attachment; filename="${encodeFilename(a.filename)}"`,
       '',
       wrapBase64(a.content),
     ].join('\r\n'));
@@ -441,6 +659,8 @@ module.exports = {
   fetchThread,
   getThreadingInfo,
   getFolders,
+  getUnreadCounts,
+  getAttachment,
   createFolder,
   renameFolder,
   reportSpam,

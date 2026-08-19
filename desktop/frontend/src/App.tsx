@@ -11,6 +11,19 @@ const ComposeModal = lazy(() => import('./components/ComposeModal').then(m => ({
 const AccountModal = lazy(() => import('./components/AccountModal').then(m => ({ default: m.AccountModal })))
 const DailyReportModal = lazy(() => import('./components/DailyReportModal').then(m => ({ default: m.DailyReportModal })))
 const DraftsModal = lazy(() => import('./components/DraftsModal').then(m => ({ default: m.DraftsModal })))
+const OutboxModal = lazy(() => import('./components/OutboxModal').then(m => ({ default: m.OutboxModal })))
+const RulesModal = lazy(() => import('./components/RulesModal').then(m => ({ default: m.RulesModal })))
+
+// Bridge exposed by the Electron preload script. Absent when running in a
+// plain browser, so every use is optional.
+declare global {
+  interface Window {
+    hermes?: {
+      isDesktop: boolean
+      on: (channel: string, handler: (payload: unknown) => void) => () => void
+    }
+  }
+}
 
 function Notification() {
   const { notification, clearNotification } = useEmailStore()
@@ -322,7 +335,11 @@ function useKeyboardShortcuts() {
 }
 
 export default function App() {
-  const { isComposeOpen, composeNonce, showAccountModal, showDraftsModal, setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport, setSnoozes, isChatOpen } = useEmailStore()
+  const {
+    isComposeOpen, composeNonce, showAccountModal, showDraftsModal, showOutboxModal, showRulesModal,
+    setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport,
+    setSnoozes, isChatOpen,
+  } = useEmailStore()
   useKeyboardShortcuts()
   const [showShortcuts, setShowShortcuts] = useState(false)
   const appLayoutVars = { '--sidebar-width': '13rem' } as CSSProperties
@@ -406,6 +423,48 @@ export default function App() {
     return () => { clearInterval(reportPoll); clearInterval(snoozePoll) }
   }, [])
 
+  // Desktop shell events: a clicked notification should open that exact
+  // message, and the tray's Compose entry should open the composer.
+  useEffect(() => {
+    const bridge = window.hermes
+    if (!bridge) return
+
+    const unsubscribeOpen = bridge.on('hermes:open', async (payload) => {
+      const target = payload as { accountId?: string; emailId?: string; folder?: string; view?: string } | undefined
+      if (!target) return
+      if (target.view === 'outbox') { useEmailStore.getState().setShowOutboxModal(true); return }
+      if (!target.accountId) return
+
+      const store = useEmailStore.getState()
+      store.setCurrentAccount(target.accountId)
+      store.setCurrentFolder(target.folder || 'INBOX')
+
+      try {
+        const { emails } = await emailsApi.list(target.accountId, target.folder || 'INBOX')
+        store.setEmails(emails)
+        const match = target.emailId ? emails.find(e => e.id === target.emailId) : undefined
+        if (match) {
+          store.setSelectedEmail(match)
+          store.setLoadingBody(true)
+          try {
+            store.setSelectedEmailBody(await emailsApi.getBody(match.accountId, match.id, match.folder))
+          } finally {
+            store.setLoadingBody(false)
+          }
+        }
+      } catch {
+        showNotification('error', 'Could not open that message')
+      }
+    })
+
+    const unsubscribeCompose = bridge.on('hermes:compose', () => useEmailStore.getState().openCompose())
+    const unsubscribeDown = bridge.on('hermes:backend-down', () =>
+      showNotification('error', 'The Hermes background service stopped. Restart the app to reconnect.', { timeoutMs: 0 })
+    )
+
+    return () => { unsubscribeOpen(); unsubscribeCompose(); unsubscribeDown() }
+  }, [])
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const authType = params.get('auth')
@@ -471,6 +530,8 @@ export default function App() {
           {isComposeOpen && <ComposeModal key={composeNonce} />}
           {showAccountModal && <AccountModal />}
           {showDraftsModal && <DraftsModal />}
+          {showOutboxModal && <OutboxModal />}
+          {showRulesModal && <RulesModal />}
           <DailyReportModal />
         </Suspense>
         <Notification />

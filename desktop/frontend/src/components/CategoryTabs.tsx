@@ -3,10 +3,15 @@ import { EMAIL_CATEGORIES } from '../types/email'
 import type { EmailCategory } from '../types/email'
 
 export function CategoryTabs() {
-  const { emails, emailCategories, activeCategory, setActiveCategory } = useEmailStore()
+  const { emails, emailCategories, activeCategory, setActiveCategory, currentAccountId, getUnreadCount: serverUnread } = useEmailStore()
 
   function getUnreadCount(cat: EmailCategory) {
-    if (cat === 'All') return emails.filter(e => !e.read).length
+    // Categories only exist client-side, so per-category counts still come from
+    // the loaded page. "All" can use the provider's real inbox total.
+    if (cat === 'All') {
+      const total = currentAccountId ? serverUnread(currentAccountId, 'INBOX') : 0
+      return total || emails.filter(e => !e.read).length
+    }
     return emails.filter(e => !e.read && emailCategories[e.id] === cat).length
   }
 

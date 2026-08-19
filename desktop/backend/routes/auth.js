@@ -22,7 +22,10 @@ router.get('/accounts', (req, res) => {
 
 // Add IMAP account
 router.post('/accounts/imap', async (req, res) => {
-  const { email, name, password, imapHost, imapPort, imapSecure, smtpHost, smtpPort, smtpSecure } = req.body;
+  const {
+    email, name, password, imapHost, imapPort, imapSecure,
+    smtpHost, smtpPort, smtpSecure, allowInsecureTLS,
+  } = req.body;
 
   if (!email || !password || !imapHost || !smtpHost) {
     return res.status(400).json({ error: 'email, password, imapHost, and smtpHost are required' });
@@ -31,7 +34,7 @@ router.post('/accounts/imap', async (req, res) => {
   // Test connection
   try {
     const imapService = require('../services/imapService');
-    await imapService.testConnection({ email, password, imapHost, imapPort, imapSecure });
+    await imapService.testConnection({ email, password, imapHost, imapPort, imapSecure, allowInsecureTLS: allowInsecureTLS === true });
   } catch (err) {
     return res.status(400).json({ error: `Connection failed: ${err.message}` });
   }
@@ -46,8 +49,13 @@ router.post('/accounts/imap', async (req, res) => {
     imapSecure: imapSecure !== false,
     smtpHost,
     smtpPort: smtpPort || 587,
-    smtpSecure: smtpSecure || false
+    smtpSecure: smtpSecure || false,
+    // Opt-in only: skipping certificate validation exposes the password and
+    // every outgoing message to interception.
+    allowInsecureTLS: allowInsecureTLS === true,
   });
+
+  try { require('../services/mailWatchService').ensureWatch(account); } catch { /* watch is best-effort */ }
 
   const { password: _, ...safe } = account;
   res.json({ success: true, account: safe });
@@ -66,6 +74,9 @@ router.delete('/accounts/:id', async (req, res) => {
     const { stopWatch } = require('../services/mailWatchService');
     await stopWatch(req.params.id);
   } catch {}
+  // Removing an account must also remove its mail from the local search index,
+  // otherwise deleted mailboxes stay searchable.
+  try { require('../services/searchIndexService').removeAccount(req.params.id); } catch {}
   res.json({ success: true });
 });
 
@@ -117,6 +128,10 @@ router.get('/gmail/callback', async (req, res) => {
       });
     }
 
+    try {
+      const created = store.getAccounts().find(a => a.email === email && a.type === 'gmail');
+      require('../services/mailWatchService').ensureWatch(created);
+    } catch { /* watch is best-effort */ }
     redirectToFrontend(res, { auth: 'gmail', success: 'true' });
   } catch (err) {
     console.error('Gmail callback error:', err);
@@ -168,6 +183,10 @@ router.get('/outlook/callback', async (req, res) => {
       });
     }
 
+    try {
+      const created = store.getAccounts().find(a => a.email === email && a.type === 'outlook');
+      require('../services/mailWatchService').ensureWatch(created);
+    } catch { /* watch is best-effort */ }
     redirectToFrontend(res, { auth: 'outlook', success: 'true' });
   } catch (err) {
     console.error('Outlook callback error:', err);

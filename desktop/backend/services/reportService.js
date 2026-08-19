@@ -8,6 +8,14 @@ function getService(type) {
   return require('./imapService');
 }
 
+// The scheduler fires at 09:00 *local* time, so "which day has this report
+// already run for" has to be a local date too. toISOString() is UTC and would
+// mark the wrong day for anyone east or west of Greenwich.
+function localDateKey(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function isYesterday(dateStr) {
   try {
     const d = new Date(dateStr);
@@ -62,7 +70,11 @@ async function generateReport() {
       let pageToken = null;
       let done = false;
       let found = 0;
-      while (!done) {
+      let pages = 0;
+      // A very busy mailbox could otherwise page through the entire inbox
+      // looking for the yesterday/older boundary.
+      const MAX_PAGES = 20;
+      while (!done && pages++ < MAX_PAGES) {
         const { emails, nextToken } = await service.fetchEmails(account, 'INBOX', 100, pageToken);
         for (const email of emails) {
           if (isYesterday(email.date)) {
@@ -149,12 +161,12 @@ async function generateReport() {
     ...unreadPrimary.slice(0, 10).map(e => `  ${getSenderName(e.from)} — ${e.subject || '(no subject)'}`),
   ].filter(l => l !== undefined).join('\n');
 
-  return { subject, html, text, date: yesterday.toISOString().split('T')[0] };
+  return { subject, html, text, date: localDateKey(yesterday) };
 }
 
 async function runDailyReport() {
   // Mark as run for today before generating, to prevent duplicate runs on restart
-  store.saveLastReportDate(new Date().toISOString().split('T')[0]);
+  store.saveLastReportDate(localDateKey());
   console.log('[Report] Generating daily report...');
   try {
     const report = await generateReport();
@@ -202,7 +214,7 @@ function startScheduler() {
   // If app started after 9am and today's report hasn't run yet, send it now
   const now = new Date();
   if (now.getHours() >= 9) {
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = localDateKey(now);
     if (store.getLastReportDate() !== todayStr) {
       console.log('[Report] App started after 9am — running missed report now');
       runDailyReport();

@@ -72,6 +72,15 @@ async function refreshAccessToken(account) {
   }
 }
 
+const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
+
+// Graph hands back `@odata.nextLink` as an absolute URL. Prefixing it with the
+// API root again produces a nonsense URL and breaks every "load more", so pass
+// absolute values through untouched.
+function graphUrl(pathOrUrl) {
+  return /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : `${GRAPH_ROOT}${pathOrUrl}`;
+}
+
 async function graphRequest(accessToken, path, method = 'GET', body = null) {
   // Node 18+ ships a global fetch — no node-fetch dependency required.
   const headers = {
@@ -82,7 +91,7 @@ async function graphRequest(accessToken, path, method = 'GET', body = null) {
   const options = { method, headers };
   if (body) options.body = JSON.stringify(body);
 
-  const res = await fetch(`https://graph.microsoft.com/v1.0${path}`, options);
+  const res = await fetch(graphUrl(path), options);
   if (!res.ok) {
     const error = await res.text();
     throw new Error(`Graph API error: ${res.status} ${error}`);
@@ -141,12 +150,32 @@ async function graphRequestWithRefresh(account, path, method = 'GET', body = nul
   try {
     return await graphRequest(account.accessToken, path, method, body);
   } catch (err) {
-    if (err.message && err.message.includes('401')) {
+    // Match the status prefix this module emits, not any "401" appearing in an
+    // error body (a message id can contain those digits).
+    if (err.message && /^Graph API error: 401\b/.test(err.message)) {
       const freshToken = await refreshAccessToken(account);
       return await graphRequest(freshToken, path, method, body);
     }
     throw err;
   }
+}
+
+// Unread counts straight from the folder resource — one call, no message scan.
+async function getUnreadCounts(account, folders = ['INBOX']) {
+  const counts = {};
+  await Promise.all(folders.map(async (folder) => {
+    try {
+      const folderPath = FOLDER_MAP[folder] || folder;
+      const data = await graphRequestWithRefresh(
+        account,
+        `/me/mailFolders/${folderPath}?$select=unreadItemCount,totalItemCount`
+      );
+      counts[folder] = { unread: data?.unreadItemCount || 0, total: data?.totalItemCount || 0 };
+    } catch {
+      counts[folder] = { unread: 0, total: 0 };
+    }
+  }));
+  return counts;
 }
 
 async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = null) {
@@ -181,18 +210,21 @@ async function searchAttachments(account, query, type, folder = 'INBOX', limit =
 }
 
 async function fetchEmailBody(account, outlookId) {
+  // $select on the attachments collection keeps contentBytes out of the
+  // response — the bytes are fetched on demand by getAttachment instead.
   const [msg, attData] = await Promise.all([
     graphRequestWithRefresh(account, `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body,hasAttachments,internetMessageId`),
-    graphRequestWithRefresh(account, `/me/messages/${outlookId}/attachments`).catch(() => ({ value: [] })),
+    graphRequestWithRefresh(account, `/me/messages/${outlookId}/attachments?$select=id,name,contentType,size`).catch(() => ({ value: [] })),
   ]);
 
   const attachments = (attData?.value || [])
-    .filter(a => a['@odata.type'] === '#microsoft.graph.fileAttachment')
+    .filter(a => !a['@odata.type'] || a['@odata.type'] === '#microsoft.graph.fileAttachment')
     .map(a => ({
       filename: a.name,
       contentType: a.contentType,
       size: a.size,
-      content: a.contentBytes || null,
+      content: null,
+      graphAttachmentId: a.id,
     }));
 
   return {
@@ -212,6 +244,25 @@ async function fetchEmailBody(account, outlookId) {
     // RFC 822 Message-ID — used by other providers' reply headers. Outlook
     // replies themselves thread via the Graph createReply endpoint instead.
     messageId: msg.internetMessageId || '',
+  };
+}
+
+// Pull one attachment's bytes on demand, by position in the array returned
+// from fetchEmailBody.
+async function getAttachment(account, outlookId, index) {
+  const body = await fetchEmailBody(account, outlookId);
+  const att = body.attachments?.[index];
+  if (!att?.graphAttachmentId) throw new Error('Attachment not found');
+
+  const full = await graphRequestWithRefresh(
+    account,
+    `/me/messages/${outlookId}/attachments/${att.graphAttachmentId}`
+  );
+  if (!full?.contentBytes) throw new Error('Attachment has no downloadable content');
+  return {
+    filename: att.filename,
+    contentType: att.contentType,
+    content: Buffer.from(full.contentBytes, 'base64'),
   };
 }
 
@@ -254,7 +305,18 @@ async function reportSpam(account, outlookId) {
   await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId: 'junkemail' });
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, replyToProviderId }) {
+// Send-as alias, if the account is configured for one. Graph only honours a
+// custom `from` when the mailbox actually has SendAs rights; if it doesn't the
+// request fails, so this is applied only for addresses the user registered.
+function resolveFromRecipient(account, sendAs) {
+  const wanted = String(sendAs?.email || '').trim().toLowerCase();
+  if (!wanted || wanted === String(account.email).toLowerCase()) return null;
+  const alias = (account.aliases || []).find(a => String(a.email).toLowerCase() === wanted);
+  if (!alias) return null;
+  return { emailAddress: { address: alias.email, name: alias.name || undefined } };
+}
+
+async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, replyToProviderId, sendAs }) {
   const message = {
     subject,
     body: {
@@ -265,6 +327,8 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
     ccRecipients: toRecipients(cc),
     bccRecipients: toRecipients(bcc),
   };
+  const fromRecipient = resolveFromRecipient(account, sendAs);
+  if (fromRecipient) message.from = fromRecipient;
   const atts = (attachments || []).map(a => ({
     '@odata.type': '#microsoft.graph.fileAttachment',
     name: a.filename,
@@ -349,6 +413,8 @@ module.exports = {
   fetchEmailBody,
   fetchThread,
   getFolders,
+  getUnreadCounts,
+  getAttachment,
   createFolder,
   renameFolder,
   reportSpam,

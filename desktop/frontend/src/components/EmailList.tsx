@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { format, isToday, isYesterday, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
-import { aiApi, emailsApi } from '../api/client'
+import { aiApi, emailsApi, withToken } from '../api/client'
 import type { EmailSummary } from '../types/email'
 import { CategoryTabs } from './CategoryTabs'
+import { Avatar } from './Avatar'
+import { readJson, writeJson } from '../lib/storage'
 
 function formatDate(dateStr: string): string {
   try {
@@ -12,21 +14,6 @@ function formatDate(dateStr: string): string {
     if (isYesterday(date)) return 'Yesterday'
     return format(date, 'MMM d')
   } catch { return '' }
-}
-
-function getInitials(from: string): string {
-  const name = from.replace(/<.*>/, '').trim()
-  if (!name) return '?'
-  const parts = name.split(' ')
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
-  return name.slice(0, 2).toUpperCase()
-}
-
-function getAvatarColor(from: string): string {
-  const colors = ['#1d4ed8','#7c3aed','#059669','#d97706','#db2777','#0891b2','#dc2626','#4338ca']
-  let hash = 0
-  for (const c of from) hash = (hash * 31 + c.charCodeAt(0)) & 0xffff
-  return colors[hash % colors.length]
 }
 
 function getSenderName(from: string): string {
@@ -110,12 +97,11 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
       </div>
 
       {/* Avatar */}
-      <div
-        className={`${compact ? 'w-7 h-7 text-[9px]' : 'w-8 h-8 text-[10px]'} rounded-full flex items-center justify-center font-bold text-white flex-shrink-0 mt-0.5 ring-2 ring-white dark:ring-[#0d1117]`}
-        style={{ backgroundColor: getAvatarColor(email.from) }}
-      >
-        {getInitials(email.from)}
-      </div>
+      <Avatar
+        from={email.from}
+        size={compact ? 28 : 32}
+        className="mt-0.5 ring-2 ring-white dark:ring-[#0d1117]"
+      />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2 mb-0.5">
@@ -226,6 +212,10 @@ export function EmailList() {
       .catch(() => {})
   }, [emails, currentFolder])
 
+  // Rules run on the server as mail arrives, so the client no longer drives
+  // them on every list render. This pass only catches messages that were
+  // already in the mailbox before a rule existed; the server skips anything it
+  // has processed, so it can't re-fire a destructive action.
   const lastRulesKey = useRef('')
   useEffect(() => {
     if (!emails.length || currentFolder !== 'INBOX') return
@@ -234,8 +224,10 @@ export function EmailList() {
     lastRulesKey.current = key
     emailsApi.runRules(emails).then(({ applied }) => {
       if (!applied.length) return
-      const moved = new Set(applied.filter(a => a.action === 'move' || a.action === 'archive').map(a => a.emailId))
-      if (moved.size) setEmails(emails.filter(e => !moved.has(e.id)))
+      const removed = new Set(
+        applied.filter(a => ['move', 'archive', 'spam', 'delete'].includes(a.action)).map(a => a.emailId)
+      )
+      if (removed.size) setEmails(emails.filter(e => !removed.has(e.id)))
       for (const item of applied) if (item.action === 'markRead') markEmailRead(item.emailId)
     }).catch(() => {})
   }, [emails, currentFolder])
@@ -256,10 +248,7 @@ export function EmailList() {
 
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('hermes-saved-searches')
-      if (raw) setSavedSearches(JSON.parse(raw))
-    } catch {}
+    setSavedSearches(readJson<typeof savedSearches>('hermes-saved-searches', []))
   }, [])
 
   const handleSelectEmail = async (email: EmailSummary) => {
@@ -308,7 +297,9 @@ export function EmailList() {
   useEffect(() => {
     if (!currentAccountId) return
 
-    const es = new EventSource(`/api/emails/stream/${currentAccountId}`)
+    // EventSource can't send an Authorization header, so the token rides along
+    // as a query parameter (the backend accepts it for stream routes only).
+    const es = new EventSource(withToken(`/api/emails/stream/${currentAccountId}`))
     es.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data)
@@ -350,7 +341,30 @@ export function EmailList() {
     const type = opts?.attachmentType ?? attachmentType
     if (!useAll && !accountId) { setSearchResults(null); return }
     setIsSearching(true)
+
+    // Show local index hits immediately — they come from memory — then merge
+    // in the provider results when they land. Supports operators like
+    // from:alice, subject:"Q3 report", has:attachment, is:unread.
+    const merged = new Map<string, EmailSummary>()
+    const publish = () => {
+      const list = Array.from(merged.values())
+      list.sort((a, b) => emailDateValue(b) - emailDateValue(a))
+      setSearchResults(list)
+    }
+
     try {
+      if (mode !== 'attachment') {
+        try {
+          const { emails: local } = await emailsApi.searchIndex(qTrim, {
+            accountId: useAll ? null : accountId,
+            folder: folder === 'INBOX' ? null : folder,
+            limit: 100,
+          })
+          for (const hit of local) merged.set(hit.id, hit)
+          if (merged.size) publish()
+        } catch { /* index unavailable — provider results still arrive below */ }
+      }
+
       const results = useAll
         ? (mode === 'attachment'
             ? await emailsApi.searchAttachmentsAll(qTrim, type?.trim(), folder)
@@ -365,11 +379,8 @@ export function EmailList() {
                 emailsApi.searchAttachments(accountId!, qTrim, type?.trim(), folder),
               ]).then(([a, b]) => [...a, ...b]))
 
-      const deduped = new Map<string, EmailSummary>()
-      for (const r of results) deduped.set(r.id, r)
-      const merged = Array.from(deduped.values())
-      merged.sort((a, b) => emailDateValue(b) - emailDateValue(a))
-      setSearchResults(merged)
+      for (const r of results) merged.set(r.id, r)
+      publish()
       if (!opts) {
         const entry = {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -393,7 +404,10 @@ export function EmailList() {
         )
         persistSavedSearches([entry, ...deduped].slice(0, 50))
       }
-    } catch { setSearchResults([]) }
+    } catch {
+      // Keep whatever the local index already produced rather than blanking it.
+      if (!merged.size) setSearchResults([])
+    }
     finally { setIsSearching(false) }
   }
 
@@ -520,9 +534,23 @@ export function EmailList() {
     [snoozes, currentAccountId]
   )
 
+  // Starred, from the local index — not just whatever page is loaded.
+  const [starredEmails, setStarredEmails] = useState<EmailSummary[]>([])
+  useEffect(() => {
+    if (!isStarred || !currentAccountId) return
+    let cancelled = false
+    emailsApi.searchIndex('is:starred', { accountId: currentAccountId, limit: 200 })
+      .then(({ emails: found }) => { if (!cancelled) setStarredEmails(found) })
+      .catch(() => {
+        // Fall back to the loaded page if the index is unavailable.
+        if (!cancelled) setStarredEmails(emails.filter(e => e.starred && e.accountId === currentAccountId))
+      })
+    return () => { cancelled = true }
+  }, [isStarred, currentAccountId, emails])
+
   const persistSavedSearches = (next: typeof savedSearches) => {
     setSavedSearches(next)
-    try { localStorage.setItem('hermes-saved-searches', JSON.stringify(next)) } catch {}
+    writeJson('hermes-saved-searches', next)
   }
 
   const applySavedSearch = async (entry: typeof savedSearches[number]) => {
@@ -570,10 +598,13 @@ export function EmailList() {
   const showAccountLabel = searchAll && searchResults !== null
   const getPriorityLabel = (id: string) => (priorityMode ? priorityMap[id]?.label : undefined)
 
-  // Determine which list to show
+  // Determine which list to show.
+  // Starred used to filter whatever page happened to be loaded, ignoring the
+  // account entirely; it now asks the local index, which covers every message
+  // Hermes has seen for this account.
   const baseList = searchResults !== null ? searchResults
     : isSnoozed ? snoozedEmails
-    : isStarred ? emails.filter(e => e.starred)
+    : isStarred ? starredEmails
     : emails
 
   // Hide snoozed messages from every other view

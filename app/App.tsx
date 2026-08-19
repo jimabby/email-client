@@ -14,6 +14,7 @@ import AccountsScreen from './src/screens/AccountsScreen';
 import InboxScreen from './src/screens/InboxScreen';
 import ViewerScreen from './src/screens/ViewerScreen';
 import ComposeScreen from './src/screens/ComposeScreen';
+import OutboxScreen from './src/screens/OutboxScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -65,9 +66,14 @@ export default function App() {
             options={({ navigation }) => ({
               title: 'Hermes',
               headerRight: () => (
-                <TouchableOpacity onPress={() => navigation.navigate('Settings')}>
-                  <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 15 }}>Settings</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 16 }}>
+                  <TouchableOpacity onPress={() => navigation.navigate('Outbox')}>
+                    <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 15 }}>Outbox</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => navigation.navigate('Settings')}>
+                    <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 15 }}>Settings</Text>
+                  </TouchableOpacity>
+                </View>
               ),
             })}
           />
@@ -79,6 +85,7 @@ export default function App() {
           <Stack.Screen name="Viewer" component={ViewerScreen} options={{ title: '' }} />
           <Stack.Screen name="Compose" component={ComposeScreen} options={{ title: 'New message' }} />
           <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
+          <Stack.Screen name="Outbox" component={OutboxScreen} options={{ title: 'Outbox' }} />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>
