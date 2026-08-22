@@ -6,6 +6,8 @@ import {
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { api, errorMessage } from '../api';
 import { theme } from '../theme';
+import { radius, space } from '../theme';
+import { ui } from '../ui';
 import { senderName, stripHtml } from '../utils';
 import type { RootStackParamList } from '../navigation';
 
@@ -189,40 +191,41 @@ export default function ComposeScreen({ navigation, route }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.bg },
-  sendBtn: { color: theme.accent, fontWeight: '700', fontSize: 15 },
+  container: ui.screen,
+  sendBtn: ui.headerAction,
   fieldRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: space.lg,
+    paddingVertical: 13,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.border,
-    gap: 12,
+    gap: space.md,
   },
-  label: { color: theme.textFaint, fontSize: 13, width: 56 },
-  fromValue: { color: theme.textMuted, fontSize: 15, flex: 1 },
-  input: { color: theme.text, fontSize: 15, flex: 1 },
-  ccToggle: { color: theme.accent, fontSize: 13, fontWeight: '600' },
+  label: { color: theme.textFaint, fontSize: 13.5, width: 52 },
+  fromValue: { ...ui.body, color: theme.textMuted, flex: 1 },
+  input: { ...ui.body, flex: 1 },
+  ccToggle: { color: theme.accent, fontSize: 13.5, fontWeight: '600' },
   draftBtn: {
-    marginHorizontal: 16, marginTop: 8, marginBottom: 24,
-    backgroundColor: theme.bgElevated, borderColor: theme.border, borderWidth: 1,
-    borderRadius: 10, paddingVertical: 12, alignItems: 'center',
+    ...ui.btnSecondary,
+    marginHorizontal: space.lg,
+    marginTop: space.md,
+    marginBottom: space.xl,
   },
-  draftText: { color: theme.text, fontWeight: '600', fontSize: 15 },
+  draftText: ui.btnSecondaryText,
   bodyInput: {
     color: theme.text,
     fontSize: 15,
-    lineHeight: 22,
-    padding: 16,
-    minHeight: 220,
+    lineHeight: 23,
+    padding: space.lg,
+    minHeight: 240,
   },
   quote: {
-    marginHorizontal: 16,
-    paddingLeft: 12,
+    marginHorizontal: space.lg,
+    paddingLeft: space.md,
     borderLeftWidth: 2,
     borderLeftColor: theme.border,
   },
-  quoteHeader: { color: theme.textFaint, fontSize: 12, marginBottom: 6 },
-  quoteText: { color: theme.textMuted, fontSize: 13, lineHeight: 19 },
+  quoteHeader: { ...ui.caption, marginBottom: 6 },
+  quoteText: { color: theme.textMuted, fontSize: 13, lineHeight: 20 },
 });

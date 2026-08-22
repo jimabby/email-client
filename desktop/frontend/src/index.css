@@ -2,9 +2,97 @@
 @tailwind components;
 @tailwind utilities;
 
-* {
-  box-sizing: border-box;
+/* ═══════════════════════════════════════════════════════════════════════════
+   Hermes — Aurora glass design system
+
+   Every colour in the app resolves through one of the tokens below. They are
+   declared as space-separated RGB triplets so Tailwind's alpha modifiers work
+   (`bg-surface/70`), which is what makes the translucent panels possible
+   without maintaining a second hard-coded palette for dark mode.
+
+   The theme is switched by `data-theme` on <html>, not by a class on a nested
+   element — `body`, native form controls, and the page's own scrollbars all
+   need to see it.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Surfaces — bg sits furthest back, elevated floats above everything. */
+  --bg:          231 232 238;
+  --surface:     255 255 255;
+  --surface-2:   248 249 251;
+  --surface-3:   234 235 240;
+  --elevated:    255 255 255;
+
+  /* Lines. Kept as a solid triplet so `border-line/60` can thin them out. */
+  --line:        206 208 217;
+
+  /* Ink */
+  --ink:          23  23  27;
+  --ink-2:        94  95 105;
+  --ink-3:       142 144 156;
+
+  /* Accents */
+  --accent:      245 158  11;
+  --accent-ink:  180  83   9;
+  --info:          0 113 227;
+  --danger:      215  45  40;
+  --success:      22 150  85;
+  --ai:          124  58 237;
+
+  /* Glass — the blur backdrop and its rim light. */
+  --glass:       255 255 255;
+  --glass-alpha: 0.68;
+  --rim:         255 255 255;
+  --rim-alpha:   0.75;
+  --shadow:       16  18  32;
+
+  /* Ambient wash painted behind the whole app so the blur has something to
+     bend. Without it "frosted glass" is just a flat grey. */
+  --wash-1:      254 215 138;
+  --wash-2:      186 214 255;
+  --wash-3:      226 200 255;
+  --wash-alpha:  0.45;
+
+  --sidebar-width: 14rem;
+
+  color-scheme: light;
 }
+
+:root[data-theme='dark'] {
+  --bg:            6   6   9;
+  --surface:      27  27  33;
+  --surface-2:    20  20  25;
+  --surface-3:    41  41  49;
+  --elevated:     34  34  41;
+
+  --line:         64  64  74;
+
+  --ink:         242 242 247;
+  --ink-2:       159 160 172;
+  --ink-3:       111 112 125;
+
+  --accent:      251 191  36;
+  --accent-ink:  251 191  36;
+  --info:         10 132 255;
+  --danger:      255  99  92;
+  --success:      48 199  95;
+  --ai:          167 139 250;
+
+  --glass:        32  32  39;
+  --glass-alpha:  0.62;
+  --rim:         255 255 255;
+  --rim-alpha:   0.10;
+  --shadow:        0   0   0;
+
+  --wash-1:      146  92   8;
+  --wash-2:       26  62 122;
+  --wash-3:       72  40 122;
+  --wash-alpha:  0.30;
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
 
 html, body, #root {
   height: 100%;
@@ -14,100 +102,273 @@ html, body, #root {
 }
 
 body {
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  font-size: 14px;
-  color: #1f2328;
-  background: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+               "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  color: rgb(var(--ink));
+  background: rgb(var(--bg));
 }
 
-/* Dark mode body */
-.dark body {
-  color: #e6edf3;
-  background: #0d1117;
+/* ─── Ambient background ──────────────────────────────────────────────────
+   Three slow-drifting colour fields on a fixed layer behind the app, so every
+   glass pane has something real to blur. */
+#root::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--wash-alpha);
+  background:
+    radial-gradient(38rem 30rem at 12% 8%,  rgb(var(--wash-1)) 0%, transparent 62%),
+    radial-gradient(42rem 34rem at 88% 16%, rgb(var(--wash-2)) 0%, transparent 60%),
+    radial-gradient(36rem 32rem at 62% 92%, rgb(var(--wash-3)) 0%, transparent 62%);
+  animation: wash-drift 44s ease-in-out infinite alternate;
 }
 
-/* Scrollbar — light theme */
-::-webkit-scrollbar        { width: 5px; height: 5px; }
+@keyframes wash-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(2%, -2.5%, 0) scale(1.08); }
+}
+
+/* ─── Scrollbars ──────────────────────────────────────────────────────────
+   Overlay-style: no track, thumb only, fading in on hover the way the macOS
+   scroller does. */
+::-webkit-scrollbar        { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track  { background: transparent; }
-::-webkit-scrollbar-thumb  { background: #d0d7de; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #afb8c1; }
-
-/* Scrollbar — dark theme */
-.dark ::-webkit-scrollbar-thumb  { background: #30363d; }
-.dark ::-webkit-scrollbar-thumb:hover { background: #484f58; }
-
-/* Email body rendered inside EmailViewer — light */
-.email-body {
-  font-family: 'Calibri', 'Segoe UI', sans-serif;
-  font-size: 14px;
-  line-height: 1.6;
-  color: #24292f;
+::-webkit-scrollbar-thumb  {
+  background: rgb(var(--ink-3) / 0.28);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
 }
-.email-body img   { max-width: 100%; }
-.email-body a     { color: #b45309; }
-.email-body table { border-collapse: collapse; }
-.email-body ul, .email-body ol { padding-left: 1.4em; margin: 0.25em 0; }
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--ink-3) / 0.55);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ─── Selection & focus ───────────────────────────────────────────────────── */
+::selection { background: rgb(var(--accent) / 0.28); }
+
+:focus-visible {
+  outline: 2px solid rgb(var(--accent) / 0.65);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+@layer components {
+  /* ─── Glass primitives ─────────────────────────────────────────────────
+     `.glass` is the workhorse panel. The rim highlight along the top edge is
+     what sells the material — a flat translucent fill just reads as a scrim. */
+  .glass {
+    background: rgb(var(--glass) / var(--glass-alpha));
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    backdrop-filter: blur(28px) saturate(180%);
+    border: 1px solid rgb(var(--line) / 0.55);
+  }
+
+  .glass-chrome {
+    background: rgb(var(--glass) / calc(var(--glass-alpha) * 0.92));
+    -webkit-backdrop-filter: blur(36px) saturate(190%);
+    backdrop-filter: blur(36px) saturate(190%);
+  }
+
+  /* Popovers, menus, modals — denser and lifted. */
+  .glass-elevated {
+    background: rgb(var(--elevated) / 0.88);
+    -webkit-backdrop-filter: blur(40px) saturate(200%);
+    backdrop-filter: blur(40px) saturate(200%);
+    border: 1px solid rgb(var(--line) / 0.5);
+    box-shadow:
+      0 1px 0 rgb(var(--rim) / calc(var(--rim-alpha) * 0.6)) inset,
+      0 12px 40px -8px rgb(var(--shadow) / 0.28),
+      0 2px 8px -2px rgb(var(--shadow) / 0.16);
+  }
+
+  /* Top rim light — for panes whose top edge is visible. */
+  .rim-top { box-shadow: 0 1px 0 rgb(var(--rim) / calc(var(--rim-alpha) * 0.55)) inset; }
+
+  /* ─── Buttons ──────────────────────────────────────────────────────────── */
+  .btn-accent {
+    background: linear-gradient(180deg,
+      rgb(var(--accent)) 0%,
+      rgb(var(--accent) / 0.86) 100%);
+    color: #201500;
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 0.4) inset,
+      0 4px 14px -4px rgb(var(--accent) / 0.7);
+    transition: transform 160ms cubic-bezier(0.32, 0.72, 0, 1),
+                box-shadow 160ms ease, filter 160ms ease;
+  }
+  .btn-accent:hover {
+    filter: brightness(1.06);
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 0.45) inset,
+      0 6px 20px -4px rgb(var(--accent) / 0.85);
+  }
+  .btn-accent:active { transform: scale(0.97); }
+
+  /* Neutral pill used across every toolbar. */
+  .btn-ghost {
+    color: rgb(var(--ink-2));
+    border-radius: 9px;
+    transition: background-color 140ms ease, color 140ms ease,
+                transform 140ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .btn-ghost:hover  { background: rgb(var(--ink) / 0.06); color: rgb(var(--ink)); }
+  .btn-ghost:active { transform: scale(0.94); }
+
+  /* ─── Inputs ───────────────────────────────────────────────────────────── */
+  .field {
+    background: rgb(var(--ink) / 0.04);
+    border: 1px solid rgb(var(--line) / 0.55);
+    border-radius: 10px;
+    color: rgb(var(--ink));
+    transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+  }
+  .field::placeholder { color: rgb(var(--ink-3)); }
+  .field:focus, .field:focus-within {
+    outline: none;
+    border-color: rgb(var(--accent) / 0.6);
+    background: rgb(var(--surface) / 0.7);
+    box-shadow: 0 0 0 3.5px rgb(var(--accent) / 0.16);
+  }
+
+  /* ─── Motion ───────────────────────────────────────────────────────────── */
+  .animate-rise { animation: rise 260ms cubic-bezier(0.32, 0.72, 0, 1) both; }
+  .animate-pop  { animation: pop  180ms cubic-bezier(0.32, 0.72, 0, 1) both; }
+  .animate-fade { animation: fade 200ms ease both; }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ─── Rendered email body ────────────────────────────────────────────────── */
+.email-body {
+  font-size: 14px;
+  line-height: 1.65;
+  color: rgb(var(--ink));
+}
+.email-body p     { margin: 0 0 1em; }
+.email-body p:last-child { margin-bottom: 0; }
+.email-body h1, .email-body h2, .email-body h3 {
+  margin: 1.4em 0 0.5em;
+  line-height: 1.3;
+  font-weight: 600;
+}
+.email-body h1 { font-size: 1.4em; }
+.email-body h2 { font-size: 1.2em; }
+.email-body h3 { font-size: 1.05em; }
+.email-body img   { max-width: 100%; height: auto; border-radius: 8px; }
+.email-body a     { color: rgb(var(--info)); text-underline-offset: 2px; }
+.email-body table { border-collapse: collapse; max-width: 100%; }
+.email-body ul, .email-body ol { padding-left: 1.4em; margin: 0.35em 0; }
 .email-body ul { list-style-type: disc; }
 .email-body ol { list-style-type: decimal; }
+.email-body pre, .email-body code {
+  font-family: "SF Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.9em;
+}
+.email-body pre {
+  background: rgb(var(--ink) / 0.05);
+  padding: 12px 14px;
+  border-radius: 10px;
+  overflow-x: auto;
+}
 .email-body blockquote {
-  border-left: 3px solid #d0d7de;
+  border-left: 2px solid rgb(var(--line));
   margin-left: 0;
   padding-left: 1em;
-  color: #656d76;
+  color: rgb(var(--ink-2));
 }
 
-/* Email body — dark theme */
-.dark .email-body { color: #c9d1d9; }
-.dark .email-body a { color: #f59e0b; }
-.dark .email-body blockquote {
-  border-left-color: #30363d;
-  color: #8b949e;
-}
-
-/* TipTap rich text editor */
+/* ─── TipTap composer ────────────────────────────────────────────────────── */
 .ProseMirror {
   outline: none;
-  font-family: 'Segoe UI', system-ui, sans-serif;
   font-size: 14px;
-  line-height: 1.6;
-  color: #24292f;
-  padding: 12px 16px;
-  min-height: 120px;
+  line-height: 1.65;
+  color: rgb(var(--ink));
+  padding: 14px 18px;
+  min-height: 140px;
 }
-.dark .ProseMirror { color: #c9d1d9; }
-.ProseMirror p { margin: 0 0 0.5em; }
+.ProseMirror p { margin: 0 0 0.55em; }
 .ProseMirror p:last-child { margin-bottom: 0; }
-.ProseMirror ul, .ProseMirror ol { padding-left: 1.4em; margin: 0.25em 0; }
+.ProseMirror ul, .ProseMirror ol { padding-left: 1.4em; margin: 0.3em 0; }
 .ProseMirror ul { list-style-type: disc; }
 .ProseMirror ol { list-style-type: decimal; }
 .ProseMirror li { margin: 0.15em 0; }
-.ProseMirror a { color: #b45309; text-decoration: underline; }
-.dark .ProseMirror a { color: #f59e0b; }
-.ProseMirror strong { font-weight: 600; }
+.ProseMirror a { color: rgb(var(--info)); text-decoration: underline; text-underline-offset: 2px; }
+.ProseMirror strong { font-weight: 620; }
 .ProseMirror em { font-style: italic; }
 .ProseMirror u { text-decoration: underline; }
+.ProseMirror blockquote {
+  border-left: 2px solid rgb(var(--line));
+  margin-left: 0;
+  padding-left: 1em;
+  color: rgb(var(--ink-2));
+}
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
-  color: #818b98;
+  color: rgb(var(--ink-3));
   pointer-events: none;
   float: left;
   height: 0;
 }
 
-/* Notification slide-in */
+/* ─── Notification ───────────────────────────────────────────────────────── */
 @keyframes notification-in {
-  from { opacity: 0; transform: translateX(16px) scale(0.96); }
-  to   { opacity: 1; transform: translateX(0)    scale(1); }
+  from { opacity: 0; transform: translateY(-10px) scale(0.94); }
+  to   { opacity: 1; transform: none; }
 }
 .notification-slide-in {
-  animation: notification-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: notification-in 280ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
 /* AI loading dots */
 @keyframes pulse-ai {
   0%, 100% { opacity: 1; }
-  50%       { opacity: 0.3; }
+  50%      { opacity: 0.25; }
 }
 .ai-loading-dot { animation: pulse-ai 1.2s ease-in-out infinite; }
 .ai-loading-dot:nth-child(2) { animation-delay: 0.2s; }
 .ai-loading-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* Shimmer for the loading skeletons. */
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgb(var(--ink) / 0.07);
+  border-radius: 6px;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(var(--rim) / calc(var(--rim-alpha) * 0.5)), transparent);
+  animation: shimmer 1.6s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #root::before,
+  .animate-rise, .animate-pop, .animate-fade,
+  .notification-slide-in, .skeleton::after { animation: none; }
+}

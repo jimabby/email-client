@@ -148,6 +148,18 @@ interface EmailStore {
   isChatOpen: boolean
   toggleChat: () => void
 
+  // Undo send. Every send goes through the server queue, so a message with an
+  // undo window is genuinely recallable until `canUndoUntil` passes — this is
+  // what puts a visible countdown on that window.
+  pendingSend: { jobId: string; accountId: string; canUndoUntil: string; subject: string; windowSec: number } | null
+  setPendingSend: (send: EmailStore['pendingSend']) => void
+  clearPendingSend: () => void
+
+  // Privacy — contact avatars are fetched from Gravatar, which discloses a
+  // hash of every correspondent's address to a third party. Off by default.
+  gravatarEnabled: boolean
+  setGravatarEnabled: (enabled: boolean) => void
+
   // Theme
   theme: 'dark' | 'light'
   toggleTheme: () => void
@@ -414,6 +426,21 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   // AI Chat
   isChatOpen: false,
   toggleChat: () => set((s) => ({ isChatOpen: !s.isChatOpen })),
+
+  pendingSend: null,
+  setPendingSend: (send) => set({ pendingSend: send }),
+  clearPendingSend: () => set({ pendingSend: null }),
+
+  // Privacy — opt-in. Hermes blocks remote images in the reader for exactly
+  // this reason; asking Gravatar for an avatar would otherwise tell a third
+  // party who is in the user's inbox, one request per sender.
+  gravatarEnabled: (() => {
+    try { return localStorage.getItem('hermes-gravatar') === 'true' } catch { return false }
+  })(),
+  setGravatarEnabled: (enabled) => {
+    try { localStorage.setItem('hermes-gravatar', String(enabled)) } catch { /* ignore */ }
+    set({ gravatarEnabled: enabled })
+  },
 
   // Theme — persisted in localStorage, defaults to dark
   theme: (() => {

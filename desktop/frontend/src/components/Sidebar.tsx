@@ -2,19 +2,19 @@ import { useEffect } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { accountsApi, emailsApi } from '../api/client'
 
-const InboxIcon  = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 10h3l1.5 2h5L12 10h3V13a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M1 10V4a1 1 0 011-1h12a1 1 0 011 1v6" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
-const SentIcon   = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 2.5L7 9M13.5 2.5L9 14l-2-5-5-2 11.5-4.5z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+const InboxIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 10h3l1.5 2h5L12 10h3V13a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M1 10V4a1 1 0 011-1h12a1 1 0 011 1v6" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
+const SentIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 2.5L7 9M13.5 2.5L9 14l-2-5-5-2 11.5-4.5z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
 const DraftsIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6l-3-4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M10 2v4h4M6 9h4M6 11.5h2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-const TrashIcon  = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-const SpamIcon   = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+const TrashIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+const SpamIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
 const SnoozeIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M6 7h4l-4 3.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 1.5L2.5 3.5M11 1.5l2.5 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
 const FolderIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
 const OutboxIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 10h3l1.5 2h5L12 10h3v3a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M8 8V1M5.5 3.5L8 1l2.5 2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-const RulesIcon  = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="13" cy="11" r="2" stroke="currentColor" strokeWidth="1.2"/></svg>
-const StarIcon   = ({ filled }: { filled?: boolean }) => (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? '#f59e0b' : 'none'}>
+const RulesIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="13" cy="11" r="2" stroke="currentColor" strokeWidth="1.2"/></svg>
+const StarIcon = ({ filled }: { filled?: boolean }) => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? 'currentColor' : 'none'} className="text-accent">
     <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
-      stroke="#f59e0b" strokeWidth="1.3" strokeLinejoin="round"/>
+      stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
   </svg>
 )
 
@@ -30,11 +30,51 @@ const ACCOUNT_COLOR: Record<string, string> = {
   gmail: 'bg-red-500', outlook: 'bg-blue-500', imap: 'bg-amber-500',
 }
 
+/**
+ * One row in the folder list. Starred, Snoozed, Drafts, and every real folder
+ * were four hand-maintained copies of the same markup; they are one component
+ * now so the selected state can only ever look one way.
+ */
+function NavItem({ icon, label, active, badge = 0, badgeTone = 'accent', onClick, onDoubleClick }: {
+  icon: React.ReactNode
+  label: string
+  active?: boolean
+  badge?: number
+  badgeTone?: 'accent' | 'neutral'
+  onClick: () => void
+  onDoubleClick?: (e: React.MouseEvent) => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      aria-current={active ? 'page' : undefined}
+      className={`w-full flex items-center gap-2.5 px-2.5 py-[7px] text-left text-[12.5px] rounded-lg
+                  transition-colors duration-150 relative
+        ${active
+          ? 'bg-accent/14 text-accent-ink font-semibold'
+          : 'text-ink-2 hover:bg-ink/5 hover:text-ink'
+        }`}
+    >
+      <span className={`flex-shrink-0 ${active ? 'text-accent-ink' : 'text-ink-3'}`}>{icon}</span>
+      <span className="flex-1 truncate">{label}</span>
+      {badge > 0 && (
+        <span
+          className={`text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums flex-shrink-0
+            ${badgeTone === 'accent' ? 'bg-accent text-[#201500]' : 'bg-ink/12 text-ink-2'}`}
+        >
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
+    </button>
+  )
+}
+
 const DEFAULT_FOLDERS = [
-  { name: 'Inbox',  path: 'INBOX'  },
-  { name: 'Sent',   path: 'Sent'   },
+  { name: 'Inbox', path: 'INBOX' },
+  { name: 'Sent', path: 'Sent' },
   { name: 'Drafts', path: 'Drafts' },
-  { name: 'Trash',  path: 'Trash'  },
+  { name: 'Trash', path: 'Trash' },
 ]
 
 export function Sidebar() {
@@ -144,30 +184,34 @@ export function Sidebar() {
     drafts.filter(d => d.accountId === accountId).length
 
   return (
-    <aside className="flex flex-col h-full bg-[#f6f8fa] dark:bg-[#161b22] border-r border-[#d0d7de] dark:border-[#30363d] w-[var(--sidebar-width,13rem)] flex-shrink-0" role="navigation" aria-label="Email accounts and folders">
+    <aside
+      className="flex flex-col h-full glass rounded-2xl shadow-pane rim-top w-[var(--sidebar-width)] flex-shrink-0 overflow-hidden"
+      role="navigation"
+      aria-label="Email accounts and folders"
+    >
       {/* Compose */}
-      <div className="p-3">
+      <div className="p-2.5">
         <button
           onClick={() => openCompose()}
           aria-label="Compose new message"
-          className="w-full flex items-center justify-center gap-2 bg-[#f59e0b] text-[#0d1117] rounded-md px-3 py-2 text-xs font-bold hover:bg-[#fbbf24] transition-colors"
+          className="btn-accent w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-[13px] font-semibold tracking-[-0.005em]"
         >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <svg width="13" height="13" viewBox="0 0 12 12" fill="none">
             <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
           </svg>
-          New Message
+          New message
         </button>
       </div>
 
       {/* Account list */}
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {accounts.length === 0 ? (
-          <div className="px-3 py-8 text-center">
-            <div className="w-10 h-10 rounded-full bg-[#eaeef2] dark:bg-[#21262d] flex items-center justify-center mx-auto mb-3 text-[#818b98] dark:text-[#484f58]">
+          <div className="px-3 py-10 text-center">
+            <div className="w-11 h-11 rounded-2xl bg-ink/6 flex items-center justify-center mx-auto mb-3 text-ink-3">
               <InboxIcon />
             </div>
-            <p className="text-[#656d76] dark:text-[#8b949e] text-xs mb-2">No accounts yet</p>
-            <button onClick={() => setShowAccountModal(true)} className="text-[#f59e0b] text-xs hover:underline">
+            <p className="text-ink-2 text-[12.5px] mb-2">No accounts yet</p>
+            <button onClick={() => setShowAccountModal(true)} className="text-accent-ink text-[12.5px] font-medium hover:underline">
               Add an account
             </button>
           </div>
@@ -180,105 +224,71 @@ export function Sidebar() {
             const starred = starredCount(account.id)
 
             return (
-              <div key={account.id} className="mb-1">
+              <div key={account.id} className="mb-1.5">
                 <div
-                  className={`flex items-center gap-2 px-2 py-2 rounded-md cursor-pointer group transition-colors
-                    ${isActive ? 'bg-[#eaeef2] dark:bg-[#21262d]' : 'hover:bg-[#eaeef2] dark:hover:bg-[#1c2128]'}`}
+                  className={`flex items-center gap-2.5 px-2 py-2 rounded-xl cursor-pointer group transition-colors duration-150
+                    ${isActive ? 'bg-ink/6' : 'hover:bg-ink/4'}`}
                   onClick={() => handleFolderClick(account.id, 'INBOX')}
                 >
-                  <div className={`w-6 h-6 rounded-full ${dotColor} flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0`}>
+                  <div className={`w-7 h-7 rounded-full ${dotColor} flex items-center justify-center text-[10px] font-semibold text-white flex-shrink-0 shadow-sm`}>
                     {initials}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[11px] font-semibold text-[#1f2328] dark:text-[#e6edf3] truncate">{account.name || account.email}</div>
-                    <div className="text-[10px] text-[#656d76] dark:text-[#8b949e] truncate">{account.email}</div>
+                    <div className="text-[12.5px] font-semibold text-ink truncate leading-tight">{account.name || account.email}</div>
+                    <div className="text-[11px] text-ink-3 truncate leading-tight">{account.email}</div>
                   </div>
                   <button
                     onClick={(e) => handleDeleteAccount(account.id, e)}
-                    className="opacity-0 group-hover:opacity-100 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] p-0.5 rounded transition-all"
+                    className="opacity-0 group-hover:opacity-100 text-ink-3 hover:text-danger p-1 rounded-md transition-all"
                     title="Remove account"
                   >
                     <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                      <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
                     </svg>
                   </button>
                 </div>
 
                 {isActive && (
-                  <div className="mt-0.5 ml-1">
-                    {/* Starred virtual folder */}
-                    <button
+                  <div className="mt-1 space-y-px animate-fade">
+                    <NavItem
+                      icon={<StarIcon filled={currentFolder === '__starred__'} />}
+                      label="Starred"
+                      active={currentFolder === '__starred__'}
+                      badge={starred}
                       onClick={() => { setCurrentAccount(account.id); setCurrentFolder('__starred__') }}
-                      className={`w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors mb-0.5
-                        ${currentFolder === '__starred__'
-                          ? 'bg-[rgba(245,158,11,0.12)] text-[#b45309] dark:text-[#f59e0b] font-semibold'
-                          : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
-                        }`}
-                    >
-                      <span className={currentFolder === '__starred__' ? 'text-[#b45309] dark:text-[#f59e0b]' : 'text-[#818b98] dark:text-[#484f58]'}>
-                        <StarIcon filled={currentFolder === '__starred__'} />
-                      </span>
-                      <span className="flex-1">Starred</span>
-                      {starred > 0 && (
-                        <span className="text-[9px] font-bold bg-[#f59e0b] text-[#0d1117] rounded-full px-1.5 py-0.5 leading-none">
-                          {starred > 99 ? '99+' : starred}
-                        </span>
-                      )}
-                    </button>
+                    />
 
-                    {/* Snoozed virtual folder */}
-                    {(() => {
-                      const snoozed = snoozedCount(account.id)
-                      const active = currentFolder === '__snoozed__'
-                      return (
-                        <button
-                          onClick={() => { setCurrentAccount(account.id); setCurrentFolder('__snoozed__') }}
-                          className={`w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors mb-0.5
-                            ${active
-                              ? 'bg-[rgba(245,158,11,0.12)] text-[#b45309] dark:text-[#f59e0b] font-semibold'
-                              : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
-                            }`}
-                        >
-                          <span className={active ? 'text-[#b45309] dark:text-[#f59e0b]' : 'text-[#818b98] dark:text-[#484f58]'}>
-                            <SnoozeIcon />
-                          </span>
-                          <span className="flex-1">Snoozed</span>
-                          {snoozed > 0 && (
-                            <span className="text-[9px] font-bold bg-[#818b98] dark:bg-[#484f58] text-white rounded-full px-1.5 py-0.5 leading-none">
-                              {snoozed > 99 ? '99+' : snoozed}
-                            </span>
-                          )}
-                        </button>
-                      )
-                    })()}
+                    <NavItem
+                      icon={<SnoozeIcon />}
+                      label="Snoozed"
+                      active={currentFolder === '__snoozed__'}
+                      badge={snoozedCount(account.id)}
+                      badgeTone="neutral"
+                      onClick={() => { setCurrentAccount(account.id); setCurrentFolder('__snoozed__') }}
+                    />
 
-                    {/* Drafts (opens modal) */}
-                    {(() => {
-                      const draftN = draftsCount(account.id)
-                      return (
-                        <button
-                          onClick={() => { setCurrentAccount(account.id); setShowDraftsModal(true) }}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors mb-0.5 text-[#656d76] dark:text-[#8b949e] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] hover:text-[#1f2328] dark:hover:text-[#e6edf3]"
-                        >
-                          <span className="text-[#818b98] dark:text-[#484f58]"><DraftsIcon /></span>
-                          <span className="flex-1">Drafts</span>
-                          {draftN > 0 && (
-                            <span className="text-[9px] font-bold bg-[#818b98] dark:bg-[#484f58] text-white rounded-full px-1.5 py-0.5 leading-none">
-                              {draftN > 99 ? '99+' : draftN}
-                            </span>
-                          )}
-                        </button>
-                      )
-                    })()}
+                    {/* Distinct from the provider's own Drafts folder further
+                        down the list: these are unsent drafts held on this
+                        machine, which is why the label has to differ. */}
+                    <NavItem
+                      icon={<DraftsIcon />}
+                      label="Local drafts"
+                      badge={draftsCount(account.id)}
+                      badgeTone="neutral"
+                      onClick={() => { setCurrentAccount(account.id); setShowDraftsModal(true) }}
+                    />
 
                     {accountFolders.map(folder => {
                       const isActiveFolder = currentFolder === folder.path
-                      const unread = isActiveFolder ? 0 : unreadCount(account.id, folder.path)
                       const Icon = FOLDER_ICON_MAP[folder.name] || FOLDER_ICON_MAP[folder.path] || FolderIcon
 
                       return (
-                        <button
+                        <NavItem
                           key={folder.path}
+                          icon={<Icon />}
+                          label={folder.name}
+                          active={isActiveFolder}
+                          badge={isActiveFolder ? 0 : unreadCount(account.id, folder.path)}
                           onClick={() => handleFolderClick(account.id, folder.path)}
                           onDoubleClick={async (e) => {
                             e.preventDefault()
@@ -286,29 +296,22 @@ export function Sidebar() {
                             if (!name || name === folder.name) return
                             try { const updated = await emailsApi.renameFolder(account.id, folder.path, name); setFolders(account.id, accountFolders.map(f => f.path === folder.path ? updated : f)) } catch (err) { console.error(err) }
                           }}
-                          className={`w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors mb-0.5
-                            ${isActiveFolder
-                              ? 'bg-[rgba(245,158,11,0.12)] text-[#b45309] dark:text-[#f59e0b] font-semibold'
-                              : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
-                            }`}
-                        >
-                          <span className={isActiveFolder ? 'text-[#b45309] dark:text-[#f59e0b]' : 'text-[#818b98] dark:text-[#484f58]'}>
-                            <Icon />
-                          </span>
-                          <span className="flex-1 truncate">{folder.name}</span>
-                          {unread > 0 && (
-                            <span className="text-[9px] font-bold bg-[#f59e0b] text-[#0d1117] rounded-full px-1.5 py-0.5 leading-none">
-                              {unread > 99 ? '99+' : unread}
-                            </span>
-                          )}
-                        </button>
+                        />
                       )
                     })}
-                    <button onClick={async () => {
-                      const name = prompt('New folder name')
-                      if (!name) return
-                      try { const created = await emailsApi.createFolder(account.id, name); setFolders(account.id, [...accountFolders, created]) } catch (err) { console.error(err) }
-                    }} className="w-full px-2 py-1.5 text-left text-[11px] text-[#818b98] hover:text-[#f59e0b]">+ New folder <span className="opacity-60">· double-click to rename</span></button>
+
+                    <button
+                      onClick={async () => {
+                        const name = prompt('New folder name')
+                        if (!name) return
+                        try { const created = await emailsApi.createFolder(account.id, name); setFolders(account.id, [...accountFolders, created]) } catch (err) { console.error(err) }
+                      }}
+                      title="Double-click a folder to rename it"
+                      className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-ink-3 hover:text-accent-ink rounded-lg hover:bg-ink/4 transition-colors"
+                    >
+                      <span className="w-[14px] flex justify-center text-base leading-none">+</span>
+                      New folder
+                    </button>
                   </div>
                 )}
               </div>
@@ -318,20 +321,17 @@ export function Sidebar() {
       </div>
 
       {/* Outbox, rules, add account */}
-      <div className="p-2 border-t border-[#d0d7de] dark:border-[#30363d] space-y-0.5">
+      <div className="p-2 border-t border-line/40 space-y-px">
         <button
           onClick={() => setShowOutboxModal(true)}
-          className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md transition-colors
-            ${failedOutbox
-              ? 'text-[#cf222e] dark:text-[#f85149] hover:bg-[#fff0ee] dark:hover:bg-[#f85149]/10'
-              : 'text-[#656d76] dark:text-[#8b949e] hover:text-[#f59e0b] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128]'
-            }`}
+          className={`w-full flex items-center gap-2.5 px-2.5 py-[7px] text-[12.5px] rounded-lg transition-colors duration-150
+            ${failedOutbox ? 'text-danger hover:bg-danger/10' : 'text-ink-2 hover:bg-ink/5 hover:text-ink'}`}
         >
-          <OutboxIcon />
+          <span className={failedOutbox ? '' : 'text-ink-3'}><OutboxIcon /></span>
           <span className="flex-1 text-left">Outbox</span>
           {pendingOutbox > 0 && (
-            <span className={`text-[9px] font-bold rounded-full px-1.5 py-0.5 leading-none ${
-              failedOutbox ? 'bg-[#cf222e] text-white' : 'bg-[#f59e0b] text-[#0d1117]'
+            <span className={`text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums ${
+              failedOutbox ? 'bg-danger text-white' : 'bg-accent text-[#201500]'
             }`}>
               {pendingOutbox}
             </span>
@@ -340,21 +340,23 @@ export function Sidebar() {
 
         <button
           onClick={() => setShowRulesModal(true)}
-          className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#f59e0b] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] rounded-md transition-colors"
+          className="w-full flex items-center gap-2.5 px-2.5 py-[7px] text-[12.5px] text-ink-2 hover:text-ink hover:bg-ink/5 rounded-lg transition-colors duration-150"
         >
-          <RulesIcon />
+          <span className="text-ink-3"><RulesIcon /></span>
           <span className="flex-1 text-left">Rules</span>
         </button>
 
         <button
           onClick={() => setShowAccountModal(true)}
-          className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#f59e0b] hover:bg-[#eaeef2] dark:hover:bg-[#1c2128] rounded-md transition-colors"
+          className="w-full flex items-center gap-2.5 px-2.5 py-[7px] text-[12.5px] text-ink-2 hover:text-ink hover:bg-ink/5 rounded-lg transition-colors duration-150"
         >
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.3"/>
-            <path d="M7 4v6M4 7h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-          </svg>
-          Add Account
+          <span className="text-ink-3">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.3"/>
+              <path d="M7 4v6M4 7h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+          </span>
+          <span className="flex-1 text-left">Add account</span>
         </button>
       </div>
     </aside>

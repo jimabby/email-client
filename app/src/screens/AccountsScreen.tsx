@@ -5,7 +5,8 @@ import {
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { api, errorMessage } from '../api';
 import { useAppStore } from '../store';
-import { theme } from '../theme';
+import { theme, radius, space } from '../theme';
+import { ui } from '../ui';
 import { initials } from '../utils';
 import type { Account, UnreadCounts } from '../types';
 import type { RootStackParamList } from '../navigation';
@@ -116,29 +117,26 @@ export default function AccountsScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.bg },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, backgroundColor: theme.bg },
+  container: ui.screen,
+  center: ui.center,
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.border,
-    gap: 12,
+    gap: space.md,
   },
-  avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  name: { color: theme.text, fontWeight: '600', fontSize: 15 },
-  email: { color: theme.textMuted, fontSize: 13, marginTop: 2 },
-  badge: {
-    backgroundColor: theme.accent, borderRadius: 10, minWidth: 20,
-    paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center',
-  },
-  badgeText: { color: theme.accentText, fontSize: 11, fontWeight: '700' },
-  chevron: { color: theme.textFaint, fontSize: 26, fontWeight: '300' },
-  errorTitle: { color: theme.text, fontSize: 16, fontWeight: '600', marginBottom: 8, textAlign: 'center' },
-  errorMsg: { color: theme.textMuted, fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 16 },
-  btn: { backgroundColor: theme.accent, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 11 },
-  btnText: { color: theme.accentText, fontWeight: '700' },
+  avatar: { width: 42, height: 42, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: '#fff', fontWeight: '600', fontSize: 15 },
+  name: { ...ui.bodyStrong },
+  email: { ...ui.secondary, marginTop: 2 },
+  badge: ui.badge,
+  badgeText: ui.badgeText,
+  chevron: { color: theme.textFaint, fontSize: 24, fontWeight: '300' },
+  errorTitle: { ...ui.heading, marginBottom: space.sm, textAlign: 'center' },
+  errorMsg: { ...ui.secondary, textAlign: 'center', lineHeight: 20, marginBottom: space.lg },
+  btn: ui.btnPrimary,
+  btnText: ui.btnPrimaryText,
 });

@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hermes</title>
+    <script>
+      // Applied before the first paint so the app never flashes the wrong
+      // theme on launch. App.tsx keeps this attribute in sync afterwards.
+      try {
+        document.documentElement.dataset.theme =
+          localStorage.getItem('hermes-theme') === 'light' ? 'light' : 'dark';
+      } catch (e) {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

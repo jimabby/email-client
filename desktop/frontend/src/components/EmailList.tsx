@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { format, isToday, isYesterday, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
 import { aiApi, emailsApi, withToken } from '../api/client'
@@ -39,12 +40,14 @@ function StarBtn({ starred, onClick }: { starred?: boolean; onClick: (e: React.M
   return (
     <button
       onClick={onClick}
-      className={`flex-shrink-0 transition-all p-0.5 rounded ${starred ? 'opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100'}`}
+      className={`flex-shrink-0 p-0.5 rounded-md text-accent transition-all duration-150 active:scale-90
+        ${starred ? 'opacity-100' : 'opacity-0 group-hover:opacity-50 hover:!opacity-100'}`}
       title={starred ? 'Unstar' : 'Star'}
+      aria-label={starred ? 'Unstar' : 'Star'}
     >
-      <svg width="12" height="12" viewBox="0 0 16 16" fill={starred ? '#f59e0b' : 'none'}>
+      <svg width="13" height="13" viewBox="0 0 16 16" fill={starred ? 'currentColor' : 'none'}>
         <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
-          stroke="#f59e0b" strokeWidth="1.3" strokeLinejoin="round"/>
+          stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
       </svg>
     </button>
   )
@@ -71,47 +74,54 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
       role="option"
       aria-selected={isSelected}
       aria-label={`${!email.read ? 'Unread: ' : ''}${getSenderName(email.from)} — ${email.subject || '(no subject)'}`}
-      className={`group flex items-start gap-2 ${indent ? 'pl-8 pr-3' : 'px-3'} ${compact ? 'py-2' : 'py-2.5'} cursor-pointer border-b border-[#eaeef2] dark:border-[#21262d] transition-colors relative
+      className={`group relative flex items-start gap-2.5 mx-1.5 rounded-xl cursor-pointer
+                  ${indent ? 'pl-9 pr-3' : 'px-2.5'} ${compact ? 'py-2' : 'py-2.5'}
+                  transition-[background-color,box-shadow] duration-150
         ${isSelected
-          ? 'bg-[#fff8ec] dark:bg-[#1c2128] border-l-[3px] border-l-[#f59e0b]'
+          ? 'bg-accent/14 shadow-[inset_0_0_0_1px_rgb(var(--accent)/0.28)]'
           : isChecked
-          ? 'bg-[#ddf4ff] dark:bg-[#1c2128] border-l-[3px] border-l-[#0969da]'
-          : 'hover:bg-[#f6f8fa] dark:hover:bg-[#161b22] border-l-[3px] border-l-transparent'
+          ? 'bg-info/12 shadow-[inset_0_0_0_1px_rgb(var(--info)/0.30)]'
+          : 'hover:bg-ink/5'
         }`}
     >
+      {/* Unread marker — a soft bar on the leading edge, rather than a dot
+          competing with the avatar for attention. */}
+      {!email.read && !isChecked && (
+        <div className="absolute left-1 top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full bg-accent" aria-hidden />
+      )}
+
       {/* Checkbox */}
       <div
         onClick={onCheck}
-        className={`flex-shrink-0 mt-2 w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-all
+        role="checkbox"
+        aria-checked={isChecked}
+        aria-label={isChecked ? 'Deselect email' : 'Select email'}
+        className={`flex-shrink-0 mt-1.5 w-[17px] h-[17px] rounded-[6px] border flex items-center justify-center
+                    cursor-pointer transition-all duration-150
           ${isChecked
-            ? 'bg-[#0969da] border-[#0969da]'
-            : 'border-[#d0d7de] dark:border-[#30363d] opacity-0 group-hover:opacity-100'
+            ? 'bg-info border-info'
+            : 'border-line opacity-0 group-hover:opacity-100 hover:border-ink-3'
           }`}
-        title={isChecked ? 'Deselect' : 'Select'}
       >
         {isChecked && (
           <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-            <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         )}
       </div>
 
       {/* Avatar */}
-      <Avatar
-        from={email.from}
-        size={compact ? 28 : 32}
-        className="mt-0.5 ring-2 ring-white dark:ring-[#0d1117]"
-      />
+      <Avatar from={email.from} size={compact ? 28 : 34} className="mt-px" />
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between gap-2 mb-0.5">
-          <span className={`text-xs truncate ${!email.read ? 'font-bold text-[#1f2328] dark:text-[#e6edf3]' : 'font-medium text-[#656d76] dark:text-[#8b949e]'}`}>
+        <div className="flex items-baseline justify-between gap-2">
+          <span className={`text-[13px] truncate tracking-[-0.005em] ${!email.read ? 'font-semibold text-ink' : 'text-ink-2'}`}>
             {getSenderName(email.from)}
           </span>
-          <div className="flex items-center gap-1 flex-shrink-0">
+          <div className="flex items-center gap-1.5 flex-shrink-0">
             <StarBtn starred={email.starred} onClick={onStar} />
             {accountLabel && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#eaeef2] dark:bg-[#21262d] text-[#656d76] dark:text-[#8b949e]">
+              <span className="text-[10px] px-1.5 py-px rounded-full bg-ink/10 text-ink-2">
                 {accountLabel}
               </span>
             )}
@@ -119,37 +129,128 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
               <button
                 onClick={onToggleThread}
                 title={threadExpanded ? 'Collapse thread' : 'Expand thread'}
-                className="p-0.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] transition-colors"
+                className="p-0.5 text-ink-3 hover:text-ink transition-colors"
               >
-                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`${threadExpanded ? 'rotate-180' : ''} transition-transform`}>
-                  <path d="M2.5 4.5l3.5 3 3.5-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`${threadExpanded ? 'rotate-180' : ''} transition-transform duration-200`}>
+                  <path d="M2.5 4.5l3.5 3 3.5-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
             )}
-            <span className={`text-[10px] ${!email.read ? 'text-[#f59e0b] font-semibold' : 'text-[#818b98] dark:text-[#484f58]'}`}>{formatDate(email.date)}</span>
+            <span className={`text-[11px] tabular-nums ${!email.read ? 'text-accent-ink font-medium' : 'text-ink-3'}`}>
+              {formatDate(email.date)}
+            </span>
           </div>
         </div>
-        <div className={`text-[11.5px] truncate mb-0.5 ${!email.read ? 'font-semibold text-[#24292f] dark:text-[#c9d1d9]' : 'text-[#656d76] dark:text-[#8b949e]'}`}>
+
+        <div className={`text-[12.5px] truncate mt-px ${!email.read ? 'font-medium text-ink' : 'text-ink-2'}`}>
           {email.subject || '(no subject)'}
           {typeof threadCount === 'number' && threadCount > 1 && (
-            <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded-full bg-[#eaeef2] dark:bg-[#21262d] text-[#656d76] dark:text-[#8b949e]">
+            <span className="ml-1.5 text-[10px] px-1.5 py-px rounded-full bg-ink/10 text-ink-2 align-middle">
               {threadCount}
             </span>
           )}
           {priorityLabel && (
-            <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded-full bg-[#fff8ec] dark:bg-[#1c2128] text-[#b45309] dark:text-[#f59e0b]">
+            <span className="ml-1.5 text-[10px] px-1.5 py-px rounded-full bg-accent/20 text-accent-ink font-medium align-middle">
               {priorityLabel}
             </span>
           )}
         </div>
+
         {email.snippet && (
-          <div className="text-[11px] text-[#afb8c1] dark:text-[#484f58] truncate leading-tight">{email.snippet}</div>
+          <div className="text-[12px] text-ink-3 truncate leading-snug mt-0.5">{email.snippet}</div>
         )}
       </div>
+    </div>
+  )
+}
 
-      {!email.read && !isChecked && (
-        <div className="w-2 h-2 rounded-full bg-[#f59e0b] flex-shrink-0 mt-2 shadow-sm shadow-amber-200 dark:shadow-none" />
-      )}
+// A search, as remembered. The same shape backs both the recent list and the
+// saved list — what differs is how an entry gets there.
+interface SearchEntry {
+  id: string
+  name: string
+  query: string
+  mode: 'email' | 'attachment'
+  attachmentType: string
+  searchAll: boolean
+  accountId: string | null
+  folder: string
+  category: string
+}
+
+/** One line in the virtualised list, in either display mode. */
+type Thread = { key: string; items: EmailSummary[]; latest: EmailSummary; unreadCount: number }
+type RenderRow =
+  | { kind: 'thread'; key: string; thread: Thread }
+  | { kind: 'child'; key: string; email: EmailSummary }
+  | { kind: 'flat'; key: string; email: EmailSummary }
+
+const RECENT_KEY = 'hermes-recent-searches'
+const SAVED_KEY = 'hermes-saved-searches'
+const RECENT_LIMIT = 12
+
+/** Two entries are the same search if every input that shaped it matches. */
+function sameSearch(a: SearchEntry, b: SearchEntry): boolean {
+  return a.query === b.query
+    && a.mode === b.mode
+    && a.attachmentType === b.attachmentType
+    && a.searchAll === b.searchAll
+    && a.accountId === b.accountId
+    && a.folder === b.folder
+    && a.category === b.category
+}
+
+/** One titled group in the search dropdown — Saved or Recent. */
+function SearchSection({ title, entries, onApply, onRemove, removeTitle, onClearAll, clearLabel }: {
+  title: string
+  entries: SearchEntry[]
+  onApply: (entry: SearchEntry) => void
+  onRemove: (id: string) => void
+  removeTitle: string
+  onClearAll?: () => void
+  clearLabel?: string
+}) {
+  return (
+    <div className="pb-1">
+      <div className="flex items-center justify-between gap-2 px-3 pt-1 pb-1">
+        <span className="text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em]">{title}</span>
+        {onClearAll && (
+          <button
+            onMouseDown={e => e.preventDefault()}
+            onClick={onClearAll}
+            className="text-[11px] text-ink-3 hover:text-danger transition-colors"
+          >
+            {clearLabel}
+          </button>
+        )}
+      </div>
+      {entries.map(entry => (
+        <div key={entry.id} className="group flex items-center gap-2 px-3 py-1.5 hover:bg-ink/6 transition-colors">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" className="text-ink-3 flex-shrink-0">
+            <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.4"/>
+            <path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+          </svg>
+          <button
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => onApply(entry)}
+            className="text-left text-[12.5px] text-ink truncate flex-1"
+            title={entry.query}
+          >
+            {entry.name}
+            {entry.searchAll && <span className="ml-1.5 text-[10px] text-ink-3">all accounts</span>}
+            {entry.mode === 'attachment' && <span className="ml-1.5 text-[10px] text-ink-3">attachments</span>}
+          </button>
+          <button
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => onRemove(entry.id)}
+            className="opacity-0 group-hover:opacity-100 text-ink-3 hover:text-danger transition-all p-0.5 flex-shrink-0"
+            title={removeTitle}
+            aria-label={removeTitle}
+          >
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+          </button>
+        </div>
+      ))}
     </div>
   )
 }
@@ -180,23 +281,19 @@ export function EmailList() {
   const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({})
   const [showMoveMenu, setShowMoveMenu] = useState(false)
   const [searchAll, setSearchAll] = useState(false)
-  const [savedSearches, setSavedSearches] = useState<Array<{
-    id: string
-    name: string
-    query: string
-    mode: 'email' | 'attachment'
-    attachmentType: string
-    searchAll: boolean
-    accountId: string | null
-    folder: string
-    category: string
-  }>>([])
+  // Two distinct lists. Every search used to be filed as "saved", which meant
+  // the saved list was really an unlabelled history the user never asked for
+  // and could not curate. Recents accumulate on their own and roll over;
+  // saved searches only ever appear because the user pressed Save.
+  const [recentSearches, setRecentSearches] = useState<SearchEntry[]>([])
+  const [savedSearches, setSavedSearches] = useState<SearchEntry[]>([])
   const [showSavedMenu, setShowSavedMenu] = useState(false)
   const [priorityMode, setPriorityMode] = useState(false)
   const [priorityLoading, setPriorityLoading] = useState(false)
   const [priorityKey, setPriorityKey] = useState('')
   const [priorityMap, setPriorityMap] = useState<Record<string, { score: number; label: string; reason: string }>>({})
   const liveRefreshTimerRef = useRef<number | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   // Categorize newly loaded emails
   const lastCategorizedKey = useRef('')
@@ -248,7 +345,8 @@ export function EmailList() {
 
 
   useEffect(() => {
-    setSavedSearches(readJson<typeof savedSearches>('hermes-saved-searches', []))
+    setSavedSearches(readJson<SearchEntry[]>(SAVED_KEY, []))
+    setRecentSearches(readJson<SearchEntry[]>(RECENT_KEY, []))
   }, [])
 
   const handleSelectEmail = async (email: EmailSummary) => {
@@ -393,16 +491,11 @@ export function EmailList() {
           folder,
           category: activeCategory,
         }
-        const deduped = savedSearches.filter(s =>
-          !(s.query === entry.query &&
-            s.mode === entry.mode &&
-            s.attachmentType === entry.attachmentType &&
-            s.searchAll === entry.searchAll &&
-            s.accountId === entry.accountId &&
-            s.folder === entry.folder &&
-            s.category === entry.category)
-        )
-        persistSavedSearches([entry, ...deduped].slice(0, 50))
+        setRecentSearches(prev => {
+          const next = [entry, ...prev.filter(s => !sameSearch(s, entry))].slice(0, RECENT_LIMIT)
+          writeJson(RECENT_KEY, next)
+          return next
+        })
       }
     } catch {
       // Keep whatever the local index already produced rather than blanking it.
@@ -548,12 +641,46 @@ export function EmailList() {
     return () => { cancelled = true }
   }, [isStarred, currentAccountId, emails])
 
-  const persistSavedSearches = (next: typeof savedSearches) => {
+  const persistSavedSearches = (next: SearchEntry[]) => {
     setSavedSearches(next)
-    writeJson('hermes-saved-searches', next)
+    writeJson(SAVED_KEY, next)
   }
 
-  const applySavedSearch = async (entry: typeof savedSearches[number]) => {
+  const persistRecentSearches = (next: SearchEntry[]) => {
+    setRecentSearches(next)
+    writeJson(RECENT_KEY, next)
+  }
+
+  // Promote whatever is in the search bar right now into the saved list.
+  const saveCurrentSearch = () => {
+    const query = searchInput.trim()
+    if (!query) return
+    const entry: SearchEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: query,
+      query,
+      mode: searchMode,
+      attachmentType: attachmentType.trim(),
+      searchAll,
+      accountId: searchAll ? null : currentAccountId,
+      folder: currentFolder,
+      category: activeCategory,
+    }
+    if (savedSearches.some(s => sameSearch(s, entry))) {
+      showNotification('success', 'That search is already saved')
+      return
+    }
+    persistSavedSearches([entry, ...savedSearches].slice(0, 50))
+    showNotification('success', 'Search saved')
+  }
+
+  const isCurrentSearchSaved = savedSearches.some(s =>
+    s.query === searchInput.trim() &&
+    s.mode === searchMode &&
+    s.searchAll === searchAll
+  )
+
+  const applySavedSearch = async (entry: SearchEntry) => {
     setShowSearch(true)
     setSearchInput(entry.query)
     setSearchMode(entry.mode)
@@ -580,6 +707,10 @@ export function EmailList() {
 
   const deleteSavedSearch = (id: string) => {
     persistSavedSearches(savedSearches.filter(s => s.id !== id))
+  }
+
+  const deleteRecentSearch = (id: string) => {
+    persistRecentSearches(recentSearches.filter(s => s.id !== id))
   }
 
   const onRowClick = (email: EmailSummary) => {
@@ -666,6 +797,41 @@ export function EmailList() {
   }, [prioritySorted, threadView])
 
   const visibleCount = threadView ? threads.length : prioritySorted.length
+
+  // Virtualising needs a single flat list. Thread view renders a parent row
+  // plus, when expanded, one row per earlier message — so both shapes collapse
+  // into this array and the virtualizer never has to know the difference.
+  const renderRows = useMemo<RenderRow[]>(() => {
+    if (!threadView) {
+      return prioritySorted.map(email => ({ kind: 'flat' as const, key: email.id, email }))
+    }
+    const out: RenderRow[] = []
+    for (const thread of threads) {
+      out.push({ kind: 'thread', key: thread.key, thread })
+      if (expandedThreads[thread.key]) {
+        for (const email of thread.items.slice(1)) {
+          out.push({ kind: 'child', key: email.id, email })
+        }
+      }
+    }
+    return out
+  }, [threadView, prioritySorted, threads, expandedThreads])
+
+  const virtualizer = useVirtualizer({
+    count: renderRows.length,
+    getScrollElement: () => scrollRef.current,
+    // Close to a real row. A wrong guess only affects the scrollbar until the
+    // row is measured for real by measureElement.
+    estimateSize: () => 74,
+    overscan: 8,
+    getItemKey: (index) => renderRows[index]?.key ?? index,
+  })
+
+  // A changed folder, search, or sort should put the user back at the top —
+  // otherwise the list keeps a scroll offset that belongs to a different list.
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 })
+  }, [currentAccountId, currentFolder, searchResults, activeCategory, priorityMode])
   const accountLabelById = useMemo(() => {
     const map = new Map<string, string>()
     for (const a of accounts) map.set(a.id, a.name || a.email)
@@ -674,19 +840,21 @@ export function EmailList() {
 
   if (isLoadingEmails) {
     return (
-      <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
-        <div className="px-3 py-3 border-b border-[#d0d7de] dark:border-[#30363d]">
-          <div className="h-4 bg-[#eaeef2] dark:bg-[#21262d] rounded w-20 animate-pulse" />
+      <div className="flex flex-col h-full">
+        <div className="px-4 h-[52px] flex items-center border-b border-line/40">
+          <div className="skeleton h-3.5 w-24" />
         </div>
-        {[...Array(8)].map((_, i) => (
-          <div key={i} className="flex items-start gap-3 px-3 py-3 border-b border-[#eaeef2] dark:border-[#21262d]">
-            <div className="w-8 h-8 rounded-full bg-[#eaeef2] dark:bg-[#21262d] animate-pulse flex-shrink-0" />
-            <div className="flex-1">
-              <div className="h-2.5 bg-[#eaeef2] dark:bg-[#21262d] rounded w-3/4 animate-pulse mb-2" />
-              <div className="h-2.5 bg-[#eaeef2] dark:bg-[#21262d] rounded w-1/2 animate-pulse" />
+        <div className="p-1.5 space-y-1">
+          {[...Array(9)].map((_, i) => (
+            <div key={i} className="flex items-start gap-2.5 px-2.5 py-2.5" style={{ opacity: 1 - i * 0.08 }}>
+              <div className="skeleton w-[34px] h-[34px] !rounded-full flex-shrink-0" />
+              <div className="flex-1 space-y-2 pt-1">
+                <div className="skeleton h-2.5 w-1/2" />
+                <div className="skeleton h-2.5 w-3/4" />
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     )
   }
@@ -698,9 +866,9 @@ export function EmailList() {
     : currentFolder
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
+    <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="px-3 py-2.5 border-b border-[#d0d7de] dark:border-[#30363d] flex items-center gap-2 flex-shrink-0 bg-[#f6f8fa] dark:bg-[#161b22]">
+      <div className="px-2.5 min-h-[52px] py-2 border-b border-line/40 flex items-center gap-1.5 flex-shrink-0">
         {selectedEmailIds.length > 0 ? (
           /* Selection toolbar */
           <div className="flex-1 flex items-center gap-1">
@@ -708,8 +876,8 @@ export function EmailList() {
               onClick={handleSelectAll}
               className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-all mr-1
                 ${prioritySorted.length > 0 && prioritySorted.every(e => selectedEmailIds.includes(e.id))
-                  ? 'bg-[#0969da] border-[#0969da]'
-                  : 'border-[#d0d7de] dark:border-[#30363d]'
+                  ? 'bg-info border-info'
+                  : 'border-line '
                 }`}
               title={prioritySorted.every(e => selectedEmailIds.includes(e.id)) ? 'Deselect all' : 'Select all'}
             >
@@ -718,31 +886,31 @@ export function EmailList() {
                   <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               ) : selectedEmailIds.length > 0 ? (
-                <div className="w-2 h-0.5 bg-[#0969da] rounded" />
+                <div className="w-2 h-0.5 bg-info rounded" />
               ) : null}
             </div>
-            <span className="text-xs font-semibold text-[#1f2328] dark:text-[#e6edf3] mr-1">{selectedEmailIds.length} selected</span>
+            <span className="text-xs font-semibold text-ink mr-1">{selectedEmailIds.length} selected</span>
             <button onClick={handleBulkMarkRead} title="Mark as read"
-              className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              className="btn-ghost w-8 h-8 flex items-center justify-center">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 4l7 5 7-5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3"/></svg>
             </button>
             <button onClick={handleBulkMarkUnread} title="Mark as unread"
-              className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              className="btn-ghost w-8 h-8 flex items-center justify-center">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 4l7 5 7-5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><circle cx="13" cy="4" r="3" fill="#f59e0b"/></svg>
             </button>
             <div className="relative">
               <button onClick={() => setShowMoveMenu(m => !m)} title="Move to folder"
-                className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+                className="btn-ghost w-8 h-8 flex items-center justify-center">
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.44a1 1 0 01.7.29L8 4h5.5A1.5 1.5 0 0115 5.5v7A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5v-9z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
               </button>
               {showMoveMenu && currentAccountId && (
-                <div className="absolute left-0 top-full mt-1 z-50 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-lg shadow-lg py-1 min-w-[140px]">
+                <div className="absolute left-0 top-full mt-1.5 z-50 glass-elevated rounded-xl py-1.5 min-w-[160px] animate-pop">
                   {(folders[currentAccountId] || [
                     { name: 'Inbox', path: 'INBOX' }, { name: 'Trash', path: 'Trash' },
                     { name: 'Spam', path: 'Spam' }, { name: 'Archive', path: 'Archive' },
                   ]).filter(f => f.path !== currentFolder).map(f => (
                     <button key={f.path} onClick={() => handleBulkMove(f.path)}
-                      className="w-full text-left px-3 py-1.5 text-xs text-[#1f2328] dark:text-[#e6edf3] hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors">
+                      className="w-full text-left px-3 py-1.5 text-[13px] text-ink hover:bg-ink/6 transition-colors">
                       {f.name}
                     </button>
                   ))}
@@ -750,25 +918,25 @@ export function EmailList() {
               )}
             </div>
             <button onClick={handleBulkArchive} title="Archive"
-              className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              className="btn-ghost w-8 h-8 flex items-center justify-center">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
                 <path d="M2 4h12v1H2zM3 5v7a1 1 0 001 1h8a1 1 0 001-1V5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
                 <path d="M6 8h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
               </svg>
             </button>
             <button onClick={handleBulkDelete} title="Delete"
-              className="p-1.5 text-[#656d76] dark:text-[#8b949e] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              className="btn-ghost w-8 h-8 flex items-center justify-center hover:!text-danger hover:!bg-danger/10">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3M2 4h12M5 4v9a1 1 0 001 1h4a1 1 0 001-1V4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
             </button>
             <button onClick={clearEmailSelection} title="Deselect all"
-              className="ml-auto p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
+              className="btn-ghost ml-auto w-8 h-8 flex items-center justify-center">
               <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
             </button>
           </div>
         ) : showSearch ? (
           <div className="flex-1 flex flex-col gap-1.5 relative">
             <div className="flex items-center gap-2">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="text-[#818b98] dark:text-[#484f58] flex-shrink-0"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="text-ink-3 flex-shrink-0"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
               <input
                 autoFocus
                 type="text"
@@ -778,120 +946,115 @@ export function EmailList() {
                 onBlur={() => setTimeout(() => setShowSavedMenu(false), 120)}
                 onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType(''); setSearchAll(false); setShowSavedMenu(false) } }}
                 placeholder={searchMode === 'attachment' ? 'Attachment name…' : 'Search emails…'}
-                className="flex-1 text-xs bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#818b98] dark:placeholder-[#484f58] focus:outline-none"
+                className="flex-1 text-[13px] bg-transparent text-ink placeholder-ink-3 focus:outline-none"
               />
               <button
                 onClick={() => { setSearchMode(searchMode === 'attachment' ? 'email' : 'attachment'); setAttachmentType('') }}
                 title="Search attachments"
                 className={`px-2 py-1 text-[10px] rounded-full border transition-colors ${searchMode === 'attachment'
-                  ? 'text-[#1f2328] dark:text-[#e6edf3] bg-[#fff8ec] dark:bg-[#1c2128] border-[#f59e0b]/40'
-                  : 'text-[#818b98] dark:text-[#484f58] border-[#d0d7de] dark:border-[#30363d] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+                  ? 'text-ink bg-accent/10 border-accent/40'
+                  : 'text-ink-3 border-line hover:text-ink '
                 }`}
               >
                 Attachments
               </button>
               <button
+                onMouseDown={e => e.preventDefault()}
+                onClick={saveCurrentSearch}
+                disabled={!searchInput.trim() || isCurrentSearchSaved}
+                title={isCurrentSearchSaved ? 'Already saved' : 'Save this search'}
+                aria-label="Save this search"
+                className={`px-2 py-1 text-[10px] rounded-full border transition-colors disabled:opacity-40
+                  ${isCurrentSearchSaved
+                    ? 'text-accent-ink bg-accent/14 border-accent/40'
+                    : 'text-ink-3 border-line/60 hover:text-ink hover:bg-ink/5'
+                  }`}
+              >
+                {isCurrentSearchSaved ? 'Saved' : 'Save'}
+              </button>
+              <button
                 onClick={() => setSearchAll(v => !v)}
                 title="Search all accounts"
                 className={`px-2 py-1 text-[10px] rounded-full border transition-colors ${searchAll
-                  ? 'text-[#1f2328] dark:text-[#e6edf3] bg-[#ddf4ff] dark:bg-[#1c2128] border-[#0969da]/40'
-                  : 'text-[#818b98] dark:text-[#484f58] border-[#d0d7de] dark:border-[#30363d] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+                  ? 'text-ink bg-info/10 border-info/40'
+                  : 'text-ink-3 border-line hover:text-ink '
                 }`}
               >
                 All accounts
               </button>
               <button onClick={() => { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType(''); setSearchAll(false) }}
-                className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5 flex-shrink-0">
+                className="text-ink-3 hover:text-danger transition-colors p-0.5 flex-shrink-0">
                 <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
               </button>
             </div>
             {searchMode === 'attachment' && (
               <div className="flex items-center gap-2">
-                <div className="text-[10px] text-[#818b98] dark:text-[#484f58]">Type</div>
+                <div className="text-[10px] text-ink-3 ">Type</div>
                 <input
                   type="text"
                   value={attachmentType}
                   onChange={e => setAttachmentType(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput) }}
                   placeholder="pdf, png, image/*"
-                  className="flex-1 text-[10.5px] bg-transparent text-[#1f2328] dark:text-[#e6edf3] placeholder-[#afb8c1] dark:placeholder-[#484f58] focus:outline-none"
+                  className="flex-1 text-[10.5px] bg-transparent text-ink placeholder-ink-3 focus:outline-none"
                 />
               </div>
             )}
-            {showSavedMenu && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-lg shadow-lg py-1">
-                {savedSearches.length === 0 ? (
-                  <div className="px-3 py-2 text-[11px] text-[#818b98] dark:text-[#484f58]">No saved searches</div>
-                ) : (
-                  <>
-                    {savedSearches.map(s => (
-                      <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]">
-                        <button
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => applySavedSearch(s)}
-                          className="text-left text-[11px] text-[#1f2328] dark:text-[#e6edf3] truncate flex-1"
-                          title={s.query}
-                        >
-                          {s.name}
-                        </button>
-                        <button
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => deleteSavedSearch(s.id)}
-                          className="text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] transition-colors p-0.5"
-                          title="Remove saved search"
-                        >
-                          <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                        </button>
-                      </div>
-                    ))}
-                    <div className="border-t border-[#eaeef2] dark:border-[#21262d] mt-1 pt-1 px-3 pb-1">
-                      <button
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => persistSavedSearches([])}
-                        className="w-full text-[11px] text-[#cf222e] dark:text-[#f85149] hover:underline text-left"
-                      >
-                        Delete all
-                      </button>
-                    </div>
-                  </>
+            {showSavedMenu && (savedSearches.length > 0 || recentSearches.length > 0) && (
+              <div className="absolute left-0 right-0 top-full mt-1.5 z-50 glass-elevated rounded-xl py-1.5 animate-pop max-h-80 overflow-y-auto">
+                {savedSearches.length > 0 && (
+                  <SearchSection
+                    title="Saved"
+                    entries={savedSearches}
+                    onApply={applySavedSearch}
+                    onRemove={deleteSavedSearch}
+                    removeTitle="Remove saved search"
+                  />
+                )}
+
+                {recentSearches.length > 0 && (
+                  <SearchSection
+                    title="Recent"
+                    entries={recentSearches}
+                    onApply={applySavedSearch}
+                    onRemove={deleteRecentSearch}
+                    removeTitle="Remove from recents"
+                    onClearAll={() => persistRecentSearches([])}
+                    clearLabel="Clear recent searches"
+                  />
                 )}
               </div>
             )}
           </div>
         ) : (
           <>
-            <h2 className="font-semibold text-[#1f2328] dark:text-[#e6edf3] text-sm flex-1">{folderLabel}</h2>
-            {searchResults !== null ? (
-              <span className="text-[10px] bg-[#eaeef2] dark:bg-[#21262d] text-[#656d76] dark:text-[#8b949e] px-1.5 py-0.5 rounded-full font-medium">
-                {visibleCount} results
+            <div className="flex-1 min-w-0 flex items-baseline gap-2 pl-1.5">
+              <h2 className="font-semibold text-ink text-[15px] tracking-[-0.015em] truncate">{folderLabel}</h2>
+              <span className="text-[11.5px] text-ink-3 tabular-nums flex-shrink-0">
+                {searchResults !== null ? `${visibleCount} result${visibleCount === 1 ? '' : 's'}` : visibleCount || ''}
               </span>
-            ) : (
-              <span className="text-[10px] text-[#afb8c1] dark:text-[#484f58] tabular-nums">{visibleCount}</span>
-            )}
+            </div>
             {currentAccountId && !isStarred && !isSnoozed && (
-              <button onClick={() => setShowSearch(true)} title="Search"
-                className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+              <button onClick={() => setShowSearch(true)} title="Search" aria-label="Search emails"
+                className="btn-ghost w-8 h-8 flex items-center justify-center">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.4"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
               </button>
             )}
             {currentAccountId && !isStarred && !isSnoozed && (
               <button onClick={handleRefresh} title="Refresh" aria-label="Refresh emails"
-                className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className={isLoadingEmails ? 'animate-spin' : ''}><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                className="btn-ghost w-8 h-8 flex items-center justify-center">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" className={isLoadingEmails ? 'animate-spin' : ''}><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
             )}
             {currentAccountId && (
               <button
                 onClick={toggleThreadView}
                 title={threadView ? 'Thread view on' : 'Thread view off'}
-                className={`p-1.5 rounded-md transition-colors ${
-                  threadView
-                    ? 'text-[#1f2328] dark:text-[#e6edf3] bg-[#eaeef2] dark:bg-[#21262d]'
-                    : 'text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
-                }`}
+                aria-pressed={threadView}
+                className={`btn-ghost w-8 h-8 flex items-center justify-center ${threadView ? '!text-ink !bg-ink/10' : ''}`}
               >
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                  <path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                  <path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
                 </svg>
               </button>
             )}
@@ -899,19 +1062,16 @@ export function EmailList() {
               <button
                 onClick={() => { setPriorityMode(v => !v); setPriorityKey('') }}
                 title={priorityMode ? 'Priority inbox on' : 'Priority inbox off'}
-                className={`p-1.5 rounded-md transition-colors ${
-                  priorityMode
-                    ? 'text-[#1f2328] dark:text-[#e6edf3] bg-[#fff8ec] dark:bg-[#1c2128]'
-                    : 'text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
-                }`}
+                aria-pressed={priorityMode}
+                className={`btn-ghost w-8 h-8 flex items-center justify-center ${priorityMode ? '!text-accent-ink !bg-accent/15' : ''}`}
               >
                 {priorityLoading ? (
-                  <svg className="animate-spin" width="13" height="13" viewBox="0 0 14 14" fill="none">
+                  <svg className="animate-spin" width="15" height="15" viewBox="0 0 14 14" fill="none">
                     <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/>
                   </svg>
                 ) : (
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                    <path d="M2 13l3-8 3 5 2-3 4 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <path d="M2 13l3-8 3 5 2-3 4 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
                 )}
               </button>
@@ -922,29 +1082,29 @@ export function EmailList() {
 
       {isInbox && !searchResults && <CategoryTabs />}
 
-      <div className="flex-1 overflow-y-auto" role="listbox" aria-label="Email list" tabIndex={0} onKeyDown={e => { if (e.key === 'Escape' && selectedEmailIds.length > 0) clearEmailSelection() }}>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto" role="listbox" aria-label="Email list" tabIndex={0} onKeyDown={e => { if (e.key === 'Escape' && selectedEmailIds.length > 0) clearEmailSelection() }}>
         {isSearching ? (
-          <div className="flex items-center justify-center h-24 text-[#818b98] dark:text-[#484f58] text-xs gap-2">
+          <div className="flex items-center justify-center h-24 text-ink-3 text-[12.5px] gap-2">
             <svg className="animate-spin" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/></svg>
             Searching…
           </div>
-        ) : prioritySorted.length === 0 ? (
+        ) : renderRows.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
-            <div className="w-12 h-12 rounded-full bg-[#eaeef2] dark:bg-[#21262d] flex items-center justify-center mb-3 text-[#818b98] dark:text-[#484f58]">
+            <div className="w-14 h-14 rounded-2xl bg-ink/6 flex items-center justify-center mb-4 text-ink-3">
               {searchResults !== null ? (
-                <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                <svg width="24" height="24" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
               ) : isStarred ? (
-                <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
+                <svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
               ) : activeCategory !== 'All' ? (
-                <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M1 3h14M1 8h10M1 13h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                <svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M1 3h14M1 8h10M1 13h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
               ) : (
-                <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+                <svg width="24" height="24" viewBox="0 0 16 16" fill="none">
                   <path d="M1 10h3l1.5 2h5L12 10h3V13a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
                   <path d="M1 10V4a1 1 0 011-1h12a1 1 0 011 1v6" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
                 </svg>
               )}
             </div>
-            <p className="text-[#656d76] dark:text-[#8b949e] text-xs font-medium mb-1">
+            <p className="text-ink text-[14px] font-medium mb-1.5 tracking-[-0.01em]">
               {searchResults !== null
                 ? 'No results found'
                 : !currentAccountId
@@ -958,7 +1118,7 @@ export function EmailList() {
                 : 'This folder is empty'
               }
             </p>
-            <p className="text-[#afb8c1] dark:text-[#484f58] text-[11px] max-w-[200px]">
+            <p className="text-ink-3 text-[12.5px] max-w-[220px] leading-relaxed">
               {searchResults !== null
                 ? 'Try a different search term or check another folder'
                 : !currentAccountId
@@ -975,60 +1135,60 @@ export function EmailList() {
           </div>
         ) : (
           <>
-            {threadView ? (
-              threads.map(thread => {
-                const isExpanded = !!expandedThreads[thread.key]
+            {/* Only the rows on screen (plus a small overscan) are mounted.
+                A 5,000-message folder used to put 5,000 rows in the DOM, each
+                with its own avatar and star button. */}
+            <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+              {virtualizer.getVirtualItems().map(virtualRow => {
+                const row = renderRows[virtualRow.index]
                 return (
-                  <div key={thread.key}>
-                    <EmailRow
-                      email={thread.latest}
-                      isSelected={selectedEmail?.id === thread.latest.id}
-                      isChecked={selectedEmailIds.includes(thread.latest.id)}
-                      onCheck={(e) => onRowCheck(thread.latest, e)}
-                      onClick={() => onRowClick(thread.latest)}
-                      onStar={(e) => handleStar(thread.latest, e)}
-                      threadCount={thread.items.length}
-                      threadExpanded={isExpanded}
-                      onToggleThread={(e) => {
-                        e.stopPropagation()
-                        setExpandedThreads(s => ({ ...s, [thread.key]: !s[thread.key] }))
-                      }}
-                      accountLabel={showAccountLabel ? accountLabelById.get(thread.latest.accountId) : undefined}
-                      priorityLabel={getPriorityLabel(thread.latest.id)}
-                    />
-                    {isExpanded && thread.items.slice(1).map(email => (
+                  <div
+                    key={row.key}
+                    data-index={virtualRow.index}
+                    ref={virtualizer.measureElement}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    {row.kind === 'thread' ? (
                       <EmailRow
-                        key={email.id}
-                        email={email}
-                        isSelected={selectedEmail?.id === email.id}
-                        isChecked={selectedEmailIds.includes(email.id)}
-                        onCheck={(e) => onRowCheck(email, e)}
-                        onClick={() => onRowClick(email)}
-                        onStar={(e) => handleStar(email, e)}
-                        compact
-                        indent
-                        accountLabel={showAccountLabel ? accountLabelById.get(email.accountId) : undefined}
-                        priorityLabel={getPriorityLabel(email.id)}
+                        email={row.thread.latest}
+                        isSelected={selectedEmail?.id === row.thread.latest.id}
+                        isChecked={selectedEmailIds.includes(row.thread.latest.id)}
+                        onCheck={(e) => onRowCheck(row.thread.latest, e)}
+                        onClick={() => onRowClick(row.thread.latest)}
+                        onStar={(e) => handleStar(row.thread.latest, e)}
+                        threadCount={row.thread.items.length}
+                        threadExpanded={!!expandedThreads[row.thread.key]}
+                        onToggleThread={(e) => {
+                          e.stopPropagation()
+                          setExpandedThreads(s => ({ ...s, [row.thread.key]: !s[row.thread.key] }))
+                        }}
+                        accountLabel={showAccountLabel ? accountLabelById.get(row.thread.latest.accountId) : undefined}
+                        priorityLabel={getPriorityLabel(row.thread.latest.id)}
                       />
-                    ))}
+                    ) : (
+                      <EmailRow
+                        email={row.email}
+                        isSelected={selectedEmail?.id === row.email.id}
+                        isChecked={selectedEmailIds.includes(row.email.id)}
+                        onCheck={(e) => onRowCheck(row.email, e)}
+                        onClick={() => onRowClick(row.email)}
+                        onStar={(e) => handleStar(row.email, e)}
+                        compact={row.kind === 'child'}
+                        indent={row.kind === 'child'}
+                        accountLabel={showAccountLabel ? accountLabelById.get(row.email.accountId) : undefined}
+                        priorityLabel={getPriorityLabel(row.email.id)}
+                      />
+                    )}
                   </div>
                 )
-              })
-            ) : (
-              prioritySorted.map(email => (
-                <EmailRow
-                  key={email.id}
-                  email={email}
-                  isSelected={selectedEmail?.id === email.id}
-                  isChecked={selectedEmailIds.includes(email.id)}
-                  onCheck={(e) => onRowCheck(email, e)}
-                  onClick={() => onRowClick(email)}
-                  onStar={(e) => handleStar(email, e)}
-                  accountLabel={showAccountLabel ? accountLabelById.get(email.accountId) : undefined}
-                  priorityLabel={getPriorityLabel(email.id)}
-                />
-              ))
-            )}
+              })}
+            </div>
 
             {/* Load more */}
             {nextToken && !searchResults && !isStarred && !isSnoozed && (
@@ -1036,7 +1196,7 @@ export function EmailList() {
                 <button
                   onClick={handleLoadMore}
                   disabled={isLoadingMore}
-                  className="flex items-center gap-1.5 px-5 py-2 text-xs font-medium text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] bg-[#f6f8fa] dark:bg-[#161b22] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] rounded-full transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-5 py-2 text-[12.5px] font-medium text-ink-2 hover:text-ink bg-ink/5 hover:bg-ink/10 rounded-full transition-colors disabled:opacity-50"
                 >
                   {isLoadingMore
                     ? <><svg className="animate-spin" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/></svg> Loading…</>

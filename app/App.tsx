@@ -7,6 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { useAppStore } from './src/store';
 import { theme } from './src/theme';
+import { ui } from './src/ui';
 import type { RootStackParamList } from './src/navigation';
 
 import SettingsScreen from './src/screens/SettingsScreen';
@@ -31,8 +32,11 @@ const navTheme = {
 };
 
 const screenOptions = {
-  headerStyle: { backgroundColor: theme.bgElevated },
-  headerTitleStyle: { color: theme.text },
+  // The header sits on the same ground as the content rather than being a
+  // separate slab — the same move the desktop chrome makes.
+  headerStyle: { backgroundColor: theme.bg },
+  headerShadowVisible: false,
+  headerTitleStyle: { color: theme.text, fontSize: 17, fontWeight: '600' as const, letterSpacing: -0.2 },
   headerTintColor: theme.accent,
   contentStyle: { backgroundColor: theme.bg },
 };
@@ -68,10 +72,10 @@ export default function App() {
               headerRight: () => (
                 <View style={{ flexDirection: 'row', gap: 16 }}>
                   <TouchableOpacity onPress={() => navigation.navigate('Outbox')}>
-                    <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 15 }}>Outbox</Text>
+                    <Text style={ui.headerAction}>Outbox</Text>
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => navigation.navigate('Settings')}>
-                    <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 15 }}>Settings</Text>
+                    <Text style={ui.headerAction}>Settings</Text>
                   </TouchableOpacity>
                 </View>
               ),

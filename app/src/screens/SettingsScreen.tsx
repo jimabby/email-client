@@ -6,6 +6,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useAppStore } from '../store';
 import { api, errorMessage } from '../api';
 import { theme } from '../theme';
+import { radius, space } from '../theme';
+import { ui } from '../ui';
 import type { RootStackParamList } from '../navigation';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
@@ -106,25 +108,16 @@ export default function SettingsScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.bg },
-  label: { color: theme.text, fontWeight: '600', fontSize: 15, marginBottom: 6 },
-  help: { color: theme.textMuted, fontSize: 13, marginBottom: 12, lineHeight: 18 },
-  input: {
-    backgroundColor: theme.bgInput,
-    borderColor: theme.border,
-    borderWidth: 1,
-    borderRadius: 10,
-    color: theme.text,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-  },
-  row: { flexDirection: 'row', gap: 12, marginTop: 16 },
-  btn: { flex: 1, borderRadius: 10, paddingVertical: 13, alignItems: 'center', justifyContent: 'center' },
+  container: ui.screen,
+  label: { ...ui.bodyStrong, marginBottom: 6 },
+  help: { ...ui.secondary, marginBottom: space.md, lineHeight: 19 },
+  input: ui.field,
+  row: { flexDirection: 'row', gap: space.md, marginTop: space.lg },
+  btn: { flex: 1, borderRadius: radius.md, paddingVertical: 13, alignItems: 'center', justifyContent: 'center' },
   btnPrimary: { backgroundColor: theme.accent },
-  btnPrimaryText: { color: theme.accentText, fontWeight: '700', fontSize: 15 },
-  btnGhost: { backgroundColor: theme.bgInput, borderColor: theme.border, borderWidth: 1 },
+  btnPrimaryText: ui.btnPrimaryText,
+  btnGhost: { backgroundColor: theme.bgInput, borderColor: theme.border, borderWidth: StyleSheet.hairlineWidth },
   btnGhostText: { color: theme.text, fontWeight: '600', fontSize: 15 },
-  status: { marginTop: 16, fontSize: 14 },
-  note: { color: theme.textFaint, fontSize: 12, marginTop: 32, lineHeight: 17 },
+  status: { marginTop: space.lg, fontSize: 14 },
+  note: { ...ui.caption, marginTop: space.xxl, lineHeight: 18 },
 });

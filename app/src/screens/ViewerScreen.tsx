@@ -7,6 +7,8 @@ import RenderHtml from 'react-native-render-html';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { api, attachmentUrl, errorMessage, resolveArchiveFolder } from '../api';
 import { theme, avatarColor } from '../theme';
+import { radius, space } from '../theme';
+import { ui } from '../ui';
 import { initials, senderName, formatFullDate, stripHtml } from '../utils';
 import type { EmailBody } from '../types';
 import type { RootStackParamList } from '../navigation';
@@ -223,37 +225,54 @@ export default function ViewerScreen({ navigation, route }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.bg },
+  container: ui.screen,
   headerActions: { flexDirection: 'row', gap: 18, alignItems: 'center' },
   star: { color: theme.textMuted, fontSize: 22 },
   starOn: { color: theme.accent },
   headerIcon: { color: theme.textMuted, fontSize: 18 },
   trash: { fontSize: 18 },
-  header: { padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
-  subject: { color: theme.text, fontSize: 19, fontWeight: '700', marginBottom: 14, lineHeight: 25 },
-  fromRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  fromName: { color: theme.text, fontSize: 15, fontWeight: '600' },
-  date: { color: theme.textMuted, fontSize: 13, marginTop: 2 },
-  bodyWrap: { paddingHorizontal: 16, paddingTop: 16 },
-  plainBody: { color: theme.text, fontSize: 15, lineHeight: 22, padding: 16 },
-  error: { color: theme.textMuted, textAlign: 'center', marginTop: 40, fontSize: 14 },
-  attachments: { marginHorizontal: 16, marginTop: 20, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.border, paddingTop: 14 },
-  attachTitle: { color: theme.textMuted, fontSize: 13, fontWeight: '600', marginBottom: 10 },
+
+  header: {
+    paddingHorizontal: space.lg,
+    paddingTop: space.lg,
+    paddingBottom: space.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
+  },
+  subject: { color: theme.text, fontSize: 21, fontWeight: '700', letterSpacing: -0.4, marginBottom: space.lg, lineHeight: 27 },
+  fromRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  avatar: { width: 40, height: 40, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: '#fff', fontWeight: '600', fontSize: 14 },
+  fromName: { ...ui.bodyStrong },
+  date: { ...ui.caption, marginTop: 2 },
+
+  bodyWrap: { paddingHorizontal: space.lg, paddingTop: space.lg },
+  plainBody: { color: theme.text, fontSize: 15, lineHeight: 23, padding: space.lg },
+  error: { ...ui.secondary, textAlign: 'center', marginTop: 40 },
+
+  attachments: {
+    marginHorizontal: space.lg,
+    marginTop: space.xl,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.border,
+    paddingTop: space.lg,
+  },
+  attachTitle: { ...ui.overline, marginBottom: space.md },
   attachRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: theme.bgElevated, borderColor: theme.border, borderWidth: 1,
-    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8, gap: 10,
+    backgroundColor: theme.bgInput,
+    borderColor: theme.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md, paddingVertical: 11,
+    marginBottom: space.sm, gap: space.sm,
   },
-  attachName: { color: theme.text, fontSize: 13, flex: 1 },
-  attachSize: { color: theme.textFaint, fontSize: 12 },
-  actionBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingTop: 16 },
-  replyBtn: { backgroundColor: theme.accent, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 22, alignItems: 'center' },
-  replyText: { color: theme.accentText, fontWeight: '700', fontSize: 15 },
-  secondaryBtn: {
-    backgroundColor: theme.bgElevated, borderColor: theme.border, borderWidth: 1,
-    borderRadius: 10, paddingVertical: 12, paddingHorizontal: 16, alignItems: 'center',
-  },
-  secondaryText: { color: theme.text, fontWeight: '600', fontSize: 14 },
+  attachName: { color: theme.text, fontSize: 13.5, flex: 1 },
+  attachSize: { ...ui.caption },
+
+  actionBar: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, paddingHorizontal: space.lg, paddingTop: space.lg },
+  replyBtn: ui.btnPrimary,
+  replyText: ui.btnPrimaryText,
+  secondaryBtn: ui.btnSecondary,
+  secondaryText: ui.btnSecondaryText,
 });

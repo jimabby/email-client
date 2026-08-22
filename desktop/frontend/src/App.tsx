@@ -4,6 +4,7 @@ import { EmailList } from './components/EmailList'
 import { EmailViewer } from './components/EmailViewer'
 import { AiChatPanel } from './components/AiChatPanel'
 import { HermesLogo } from './components/HermesLogo'
+import { UndoSendBar } from './components/UndoSendBar'
 import { useEmailStore } from './store/emailStore'
 import { accountsApi, aiApi, emailsApi } from './api/client'
 
@@ -29,32 +30,39 @@ function Notification() {
   const { notification, clearNotification } = useEmailStore()
   if (!notification) return null
 
+  const success = notification.type === 'success'
+
   return (
     <div
-      className={`fixed top-4 right-4 z-[100] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl text-sm font-medium border notification-slide-in
-        ${notification.type === 'success'
-          ? 'bg-white dark:bg-[#1c2128] border-[#2da44e] dark:border-[#3fb950] shadow-green-100 dark:shadow-none'
-          : 'bg-white dark:bg-[#1c2128] border-[#cf222e] dark:border-[#f85149] shadow-red-100 dark:shadow-none'
-        }`}
+      role="status"
+      aria-live="polite"
+      className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 pl-3 pr-2.5 py-2.5
+                 rounded-2xl glass-elevated shadow-pop text-[13px] font-medium notification-slide-in max-w-[min(90vw,26rem)]"
     >
-      <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold
-        ${notification.type === 'success' ? 'bg-[#dafbe1] dark:bg-[#238636]/30 text-[#116329] dark:text-[#3fb950]' : 'bg-[#ffeef0] dark:bg-[#f85149]/20 text-[#cf222e] dark:text-[#f85149]'}`}>
-        {notification.type === 'success' ? '✓' : '✕'}
+      <div
+        className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-white
+          ${success ? 'bg-success' : 'bg-danger'}`}
+      >
+        {success ? '✓' : '✕'}
       </div>
-      <span className="text-[#1f2328] dark:text-[#e6edf3]">{notification.message}</span>
+      <span className="text-ink flex-1 min-w-0 truncate">{notification.message}</span>
       {notification.action && (
         <button
           onClick={() => {
             notification.action?.onClick()
             clearNotification()
           }}
-          className="px-2 py-1 rounded-md text-xs font-semibold bg-[#f59e0b] text-[#0d1117] hover:bg-[#fbbf24] transition-colors"
+          className="btn-accent px-2.5 py-1 rounded-lg text-xs font-semibold flex-shrink-0"
         >
           {notification.action.label}
         </button>
       )}
-      <button onClick={clearNotification} aria-label="Dismiss notification" className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] ml-1 transition-colors">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+      <button
+        onClick={clearNotification}
+        aria-label="Dismiss notification"
+        className="btn-ghost p-1.5 flex-shrink-0"
+      >
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
       </button>
     </div>
   )
@@ -102,11 +110,13 @@ function SettingsIcon() {
 function TopBar() {
   const { theme, toggleTheme, setShowAccountModal, isChatOpen, toggleChat, aiConfigured } = useEmailStore()
 
+  const chip = 'w-8 h-8 rounded-[10px] flex items-center justify-center btn-ghost'
+
   return (
-    <header className="h-11 bg-[#f6f8fa] dark:bg-[#161b22] border-b border-[#d0d7de] dark:border-[#30363d] flex items-center px-4 gap-3 flex-shrink-0">
-      <div className="flex items-center gap-2.5">
-        <HermesLogo size={28} />
-        <span className="text-[#1f2328] dark:text-[#e6edf3] font-bold text-[15px] tracking-tight">Hermes</span>
+    <header className="h-12 glass-chrome flex items-center px-3 gap-1.5 flex-shrink-0 relative z-20 border-b border-line/40">
+      <div className="flex items-center gap-2 pl-1 pr-2">
+        <HermesLogo size={26} />
+        <span className="text-ink font-semibold text-[14.5px] tracking-[-0.01em]">Hermes</span>
       </div>
 
       <div className="flex-1" />
@@ -115,12 +125,9 @@ function TopBar() {
         onClick={toggleChat}
         title="AI Assistant"
         aria-label={isChatOpen ? 'Close AI Assistant' : 'Open AI Assistant'}
-        className={`p-1.5 rounded-md transition-colors ${isChatOpen
-          ? 'text-[#7c3aed] bg-[#f3f0ff] dark:bg-[#7c3aed]/20'
-          : 'text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d]'
-        } ${!aiConfigured ? 'opacity-50' : ''}`}
+        className={`${chip} ${isChatOpen ? '!text-ai !bg-ai/12' : ''} ${!aiConfigured ? 'opacity-50' : ''}`}
       >
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
           <path d="M8 1a7 7 0 100 14A7 7 0 008 1z" stroke="currentColor" strokeWidth="1.4"/>
           <path d="M5.5 6.5C5.5 5.12 6.62 4 8 4s2.5 1.12 2.5 2.5c0 1.5-1.5 2-2 2.5v.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
           <circle cx="8" cy="11.5" r=".75" fill="currentColor"/>
@@ -131,7 +138,7 @@ function TopBar() {
         onClick={toggleTheme}
         title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
         aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-        className="text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] p-1.5 rounded-md hover:bg-[#eaeef2] dark:hover:bg-[#21262d] transition-colors"
+        className={chip}
       >
         {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
       </button>
@@ -140,7 +147,7 @@ function TopBar() {
         onClick={() => setShowAccountModal(true)}
         title="Settings"
         aria-label="Open settings"
-        className="text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] p-1.5 rounded-md hover:bg-[#eaeef2] dark:hover:bg-[#21262d] transition-colors"
+        className={chip}
       >
         <SettingsIcon />
       </button>
@@ -149,14 +156,30 @@ function TopBar() {
         onClick={() => window.dispatchEvent(new CustomEvent('hermes:toggle-shortcuts'))}
         title="Keyboard shortcuts (?)"
         aria-label="Show keyboard shortcuts"
-        className="text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] p-1.5 rounded-md hover:bg-[#eaeef2] dark:hover:bg-[#21262d] transition-colors"
+        className={chip}
       >
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-          <rect x="1" y="4" width="14" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <rect x="1" y="4" width="14" height="9" rx="2" stroke="currentColor" strokeWidth="1.3"/>
           <path d="M4 7h1M7 7h2M11 7h1M4 10h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
         </svg>
       </button>
     </header>
+  )
+}
+
+// A wide, invisible grab strip with a thin visible pill. The hit area has to
+// be larger than the line you can see, or the drag is fiddly.
+function Handle({ onMouseDown, title }: { onMouseDown: (e: React.MouseEvent) => void; title: string }) {
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      title={title}
+      role="separator"
+      aria-orientation="vertical"
+      className="group relative w-1.5 flex-shrink-0 cursor-col-resize flex items-center justify-center"
+    >
+      <div className="w-[3px] h-10 rounded-full bg-ink-3/0 group-hover:bg-ink-3/40 transition-colors duration-200" />
+    </div>
   )
 }
 
@@ -172,18 +195,18 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-col items-center justify-center h-screen bg-white dark:bg-[#0d1117] text-center p-8">
-          <div className="w-16 h-16 rounded-2xl bg-[#fff0ee] dark:bg-[#f85149]/10 flex items-center justify-center mb-4">
-            <svg width="32" height="32" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="6" stroke="#cf222e" strokeWidth="1.5"/>
-              <path d="M8 5v4M8 11v.5" stroke="#cf222e" strokeWidth="1.5" strokeLinecap="round"/>
+        <div className="flex flex-col items-center justify-center h-screen bg-bg text-center p-8">
+          <div className="w-16 h-16 rounded-2xl bg-danger/10 flex items-center justify-center mb-5 text-danger">
+            <svg width="30" height="30" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
             </svg>
           </div>
-          <h2 className="text-lg font-semibold text-[#1f2328] dark:text-[#e6edf3] mb-2">Something went wrong</h2>
-          <p className="text-sm text-[#656d76] dark:text-[#8b949e] mb-4 max-w-md">{this.state.error?.message}</p>
+          <h2 className="text-[17px] font-semibold text-ink mb-2 tracking-[-0.01em]">Something went wrong</h2>
+          <p className="text-[13px] text-ink-2 mb-6 max-w-md leading-relaxed">{this.state.error?.message}</p>
           <button
             onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload() }}
-            className="px-4 py-2 text-sm font-medium bg-[#f59e0b] text-[#0d1117] rounded-lg hover:bg-[#fbbf24] transition-colors"
+            className="btn-accent px-5 py-2.5 text-[13px] font-semibold rounded-xl"
           >
             Reload Hermes
           </button>
@@ -209,19 +232,22 @@ function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
     { key: '?', desc: 'Show shortcuts' },
   ]
   return (
-    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center" onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} className="bg-white dark:bg-[#161b22] rounded-xl border border-[#d0d7de] dark:border-[#30363d] shadow-2xl w-[340px] overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-[#d0d7de] dark:border-[#30363d]">
-          <h2 className="font-semibold text-sm text-[#1f2328] dark:text-[#e6edf3]">Keyboard Shortcuts</h2>
-          <button onClick={onClose} className="text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] p-1 rounded transition-colors">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[100] flex items-center justify-center animate-fade" onClick={onClose}>
+      <div
+        onClick={e => e.stopPropagation()}
+        className="glass-elevated rounded-3xl w-[360px] overflow-hidden animate-rise"
+      >
+        <div className="flex items-center justify-between px-5 pt-4 pb-3">
+          <h2 className="font-semibold text-[15px] text-ink tracking-[-0.01em]">Keyboard shortcuts</h2>
+          <button onClick={onClose} aria-label="Close" className="btn-ghost p-1.5">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
           </button>
         </div>
-        <div className="px-5 py-3">
+        <div className="px-3 pb-3">
           {shortcuts.map(s => (
-            <div key={s.key} className="flex items-center justify-between py-1.5">
-              <span className="text-xs text-[#656d76] dark:text-[#8b949e]">{s.desc}</span>
-              <kbd className="px-2 py-0.5 text-[10px] font-mono bg-[#f6f8fa] dark:bg-[#21262d] border border-[#d0d7de] dark:border-[#30363d] rounded text-[#1f2328] dark:text-[#e6edf3]">{s.key}</kbd>
+            <div key={s.key} className="flex items-center justify-between py-2 px-2 rounded-lg hover:bg-ink/5 transition-colors">
+              <span className="text-[13px] text-ink-2">{s.desc}</span>
+              <kbd className="px-2 py-0.5 text-[11px] font-medium bg-ink/6 border border-line/50 rounded-md text-ink tabular-nums">{s.key}</kbd>
             </div>
           ))}
         </div>
@@ -342,7 +368,14 @@ export default function App() {
   } = useEmailStore()
   useKeyboardShortcuts()
   const [showShortcuts, setShowShortcuts] = useState(false)
-  const appLayoutVars = { '--sidebar-width': '13rem' } as CSSProperties
+  const appLayoutVars = { '--sidebar-width': '14rem' } as CSSProperties
+
+  // The theme lives on <html>, not on a wrapper div: `body`, the page's own
+  // scrollbars, and native form controls (via color-scheme) all sit outside
+  // any element the React tree can put a class on.
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+  }, [theme])
 
   useEffect(() => {
     const handler = () => setShowShortcuts(v => !v)
@@ -468,8 +501,8 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const authType = params.get('auth')
-    const success  = params.get('success')
-    const error    = params.get('error')
+    const success = params.get('success')
+    const error = params.get('error')
 
     if (success && authType) {
       showNotification('success', `${authType === 'gmail' ? 'Gmail' : 'Outlook'} account connected!`)
@@ -488,41 +521,40 @@ export default function App() {
     <ErrorBoundary>
       <div
         style={appLayoutVars}
-        className={`flex flex-col h-screen overflow-hidden transition-colors duration-200 bg-white dark:bg-[#0d1117] ${theme === 'dark' ? 'dark' : ''}`}
+        className="flex flex-col h-screen overflow-hidden relative z-10"
       >
         <TopBar />
 
-        <div className="flex flex-1 min-h-0">
+        {/* The three panes float on the ambient wash as separate glass slabs,
+            separated by gaps rather than borders. */}
+        <div className="flex flex-1 min-h-0 gap-1.5 p-1.5 pt-0">
           <Sidebar />
 
-          <div ref={splitRef} className="flex flex-1 min-w-0">
-            <div style={{ width: `${listPaneWidth}px` }} className="min-w-0 border-r border-[#d0d7de] dark:border-[#30363d] flex flex-col overflow-hidden flex-shrink-0">
+          <div ref={splitRef} className="flex flex-1 min-w-0 gap-1.5">
+            <div
+              style={{ width: `${listPaneWidth}px` }}
+              className="min-w-0 flex flex-col overflow-hidden flex-shrink-0 glass rounded-2xl shadow-pane rim-top"
+            >
               <EmailList />
             </div>
 
-            <div
-              onMouseDown={startDrag('list', listPaneWidth)}
-              className="w-1 flex-shrink-0 cursor-col-resize bg-transparent hover:bg-[#d0d7de] dark:hover:bg-[#30363d] transition-colors"
-              title="Resize inbox and email content"
-            />
+            <Handle onMouseDown={startDrag('list', listPaneWidth)} title="Resize inbox and email content" />
 
-            <div id="email-content-host" className="relative flex-1 min-w-0 overflow-hidden">
+            <div id="email-content-host" className="relative flex-1 min-w-0 overflow-hidden glass rounded-2xl shadow-pane rim-top">
               <EmailViewer />
             </div>
           </div>
 
           {isChatOpen && (
-            <div
-              onMouseDown={startDrag('chat', chatPaneWidth)}
-              className="w-1 flex-shrink-0 cursor-col-resize bg-transparent hover:bg-[#d0d7de] dark:hover:bg-[#30363d] transition-colors"
-              title="Resize AI assistant"
-            />
-          )}
-
-          {isChatOpen && (
-            <div style={{ width: `${chatPaneWidth}px` }} className="flex-shrink-0 overflow-hidden">
-              <AiChatPanel />
-            </div>
+            <>
+              <Handle onMouseDown={startDrag('chat', chatPaneWidth)} title="Resize AI assistant" />
+              <div
+                style={{ width: `${chatPaneWidth}px` }}
+                className="flex-shrink-0 overflow-hidden glass rounded-2xl shadow-pane rim-top animate-rise"
+              >
+                <AiChatPanel />
+              </div>
+            </>
           )}
         </div>
 
@@ -535,6 +567,7 @@ export default function App() {
           <DailyReportModal />
         </Suspense>
         <Notification />
+        <UndoSendBar />
         {showShortcuts && <KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} />}
       </div>
     </ErrorBoundary>

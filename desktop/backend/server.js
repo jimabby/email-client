@@ -4,6 +4,7 @@ const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const apiAuth = require('./middleware/apiAuth');
+const { apiLimiter, webhookLimiter, aiLimiter, sendLimiter, isLoopback } = require('./middleware/rateLimit');
 const store = require('./store');
 
 const app = express();
@@ -51,7 +52,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// A 30 MB body is only ever a compose with attachments. Webhook payloads are
+// tiny, and they are the unauthenticated surface, so they get their own tight
+// cap rather than inheriting the composer's.
+app.use('/api/webhooks', webhookLimiter, express.json({ limit: '64kb' }));
 app.use(express.json({ limit: '30mb' }));
+
+// Applied before auth so an unauthenticated flood is also bounded.
+app.use('/api', apiLimiter);
+app.use('/api/ai', aiLimiter);
+app.use('/api/emails/:accountId/send', sendLimiter);
 
 // Provider callbacks and signed webhook endpoints cannot send the Hermes token.
 // Everything else under /api is private, including account metadata and AI APIs.
@@ -95,7 +105,11 @@ if (fs.existsSync(frontendDist)) {
       return res.status(404).json({ error: 'Not found' });
     }
     let html = fs.readFileSync(indexPath, 'utf8');
-    if (process.env.API_TOKEN) {
+    // This page is NOT behind apiAuth — it cannot be, since it is what
+    // bootstraps the credential. So the token only ever goes to a caller on
+    // this machine (the Electron window). Handing it to a remote visitor would
+    // give anyone who can reach the port full access to every mailbox.
+    if (process.env.API_TOKEN && isLoopback(req)) {
       const bootstrap = `<script>window.__HERMES_TOKEN__=${JSON.stringify(process.env.API_TOKEN)}</script>`;
       html = html.replace('</head>', `${bootstrap}</head>`);
     }

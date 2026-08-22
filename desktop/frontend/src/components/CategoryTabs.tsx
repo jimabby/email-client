@@ -16,27 +16,29 @@ export function CategoryTabs() {
   }
 
   return (
-    <div className="flex border-b border-[#d0d7de] dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
+    // A segmented control rather than underlined tabs: the selected pill reads
+    // at a glance in a pane this narrow, and it keeps the list's soft geometry.
+    <div className="flex gap-0.5 p-1.5 pb-1 mx-1 rounded-xl" role="tablist" aria-label="Inbox categories">
       {EMAIL_CATEGORIES.map(cat => {
         const unread = getUnreadCount(cat)
         const isActive = activeCategory === cat
         return (
           <button
             key={cat}
+            role="tab"
+            aria-selected={isActive}
             onClick={() => setActiveCategory(cat)}
-            className={`flex items-center gap-1 px-2 py-2 text-[10px] font-medium whitespace-nowrap border-b-2 transition-colors flex-1 justify-center
+            className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11.5px] whitespace-nowrap
+                        flex-1 min-w-0 transition-all duration-200
               ${isActive
-                ? 'border-[#f59e0b] text-[#f59e0b]'
-                : 'border-transparent text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:border-[#d0d7de] dark:hover:border-[#30363d]'
+                ? 'bg-accent/16 text-accent-ink font-semibold shadow-[inset_0_0_0_1px_rgb(var(--accent)/0.22)]'
+                : 'text-ink-2 hover:text-ink hover:bg-ink/5'
               }`}
           >
-            <span>{cat}</span>
+            <span className="truncate">{cat}</span>
             {unread > 0 && (
-              <span className={`px-1 py-0.5 rounded-full text-[9px] font-bold leading-none
-                ${isActive
-                  ? 'bg-[#f59e0b] text-white'
-                  : 'bg-[#eaeef2] dark:bg-[#21262d] text-[#656d76] dark:text-[#8b949e]'
-                }`}>
+              <span className={`px-1 rounded-full text-[10px] font-semibold leading-[1.5] tabular-nums flex-shrink-0
+                ${isActive ? 'bg-accent text-[#201500]' : 'bg-ink/12 text-ink-2'}`}>
                 {unread > 99 ? '99+' : unread}
               </span>
             )}

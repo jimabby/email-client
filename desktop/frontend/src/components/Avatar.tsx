@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
+import { useEmailStore } from '../store/emailStore'
 
 // Contact avatars.
 //
-// Gravatar needs an MD5 of the address, and the browser's SubtleCrypto has no
-// MD5. Rather than pull in a hashing dependency for this, Hermes asks Gravatar
-// for the *SHA-256* form it also accepts (supported since 2024), and falls back
-// to coloured initials whenever the address has no avatar or the request fails.
+// Coloured initials by default: asking Gravatar for a picture discloses a hash
+// of the correspondent's address to a third party, once per sender in the list.
+// That is the same disclosure the reader blocks remote images to prevent, so it
+// is opt-in under Settings › Privacy.
+//
+// When it is enabled: Gravatar needs an MD5 of the address and the browser's
+// SubtleCrypto has no MD5, so Hermes asks for the *SHA-256* form Gravatar also
+// accepts (supported since 2024), falling back to initials whenever the address
+// has no avatar or the request fails.
 
 const PALETTE = ['#1d4ed8', '#7c3aed', '#059669', '#d97706', '#db2777', '#0891b2', '#dc2626', '#4338ca']
 
@@ -45,6 +51,7 @@ async function sha256Hex(value: string): Promise<string | null> {
 }
 
 export function Avatar({ from, size = 32, className = '' }: { from: string; size?: number; className?: string }) {
+  const gravatarEnabled = useEmailStore(s => s.gravatarEnabled)
   const [src, setSrc] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const address = bareAddress(from)
@@ -53,26 +60,28 @@ export function Avatar({ from, size = 32, className = '' }: { from: string; size
     let cancelled = false
     setSrc(null)
     setFailed(false)
-    if (!address.includes('@')) return
+    if (!gravatarEnabled || !address.includes('@')) return
     sha256Hex(address).then(hash => {
       // d=404 makes Gravatar 404 rather than serve a placeholder, so the
       // initials fallback shows for addresses with no avatar.
       if (!cancelled && hash) setSrc(`https://www.gravatar.com/avatar/${hash}?s=${size * 2}&d=404`)
     })
     return () => { cancelled = true }
-  }, [address, size])
+  }, [address, size, gravatarEnabled])
 
   const initials = getInitials(from)
   const showImage = src && !failed
 
   return (
     <div
-      className={`rounded-full flex items-center justify-center font-bold text-white flex-shrink-0 overflow-hidden ${className}`}
+      className={`rounded-full flex items-center justify-center font-semibold text-white flex-shrink-0 overflow-hidden
+                  shadow-[inset_0_1px_0_rgb(255_255_255/0.25),0_1px_2px_rgb(0_0_0/0.12)] ${className}`}
       style={{
         width: size,
         height: size,
-        fontSize: Math.max(9, Math.round(size * 0.34)),
-        backgroundColor: getAvatarColor(from),
+        fontSize: Math.max(9, Math.round(size * 0.36)),
+        letterSpacing: '-0.02em',
+        background: `linear-gradient(145deg, ${getAvatarColor(from)}, ${getAvatarColor(from)}cc)`,
       }}
       title={address || from}
     >

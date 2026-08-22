@@ -4,6 +4,8 @@ import {
 } from 'react-native';
 import { api, errorMessage } from '../api';
 import { theme } from '../theme';
+import { radius, space } from '../theme';
+import { ui } from '../ui';
 import type { OutboxItem, OutboxStatus } from '../types';
 
 // Sends are queued on the server, so a message composed on a flaky connection
@@ -123,19 +125,21 @@ export default function OutboxScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.bg },
-  empty: { color: theme.textMuted, textAlign: 'center', marginTop: 48, fontSize: 14, paddingHorizontal: 24 },
+  container: ui.screen,
+  empty: { ...ui.secondary, textAlign: 'center', marginTop: 48, paddingHorizontal: space.xl },
   row: {
-    paddingHorizontal: 16, paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
   },
-  rowHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  status: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-  subject: { color: theme.text, fontSize: 15, fontWeight: '600', flex: 1 },
-  to: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
+  rowHeader: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  status: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  subject: { ...ui.bodyStrong, flex: 1 },
+  to: { ...ui.caption, marginTop: 2 },
   detail: { color: theme.accent, fontSize: 12, marginTop: 4 },
   errorText: { color: theme.danger, fontSize: 12, marginTop: 4 },
-  actions: { flexDirection: 'row', gap: 18, marginTop: 8 },
-  action: { color: theme.accent, fontSize: 13, fontWeight: '600' },
+  actions: { flexDirection: 'row', gap: 18, marginTop: space.sm },
+  action: { color: theme.accent, fontSize: 13.5, fontWeight: '600' },
   danger: { color: theme.danger },
 });

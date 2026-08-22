@@ -98,11 +98,34 @@ function writeSmartReplies(emailId: string, replies: string[]) {
 }
 
 const StarIcon = ({ filled }: { filled?: boolean }) => (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? '#f59e0b' : 'none'}>
+  <svg width="15" height="15" viewBox="0 0 16 16" fill={filled ? 'currentColor' : 'none'} className="text-accent">
     <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
-      stroke="#f59e0b" strokeWidth="1.3" strokeLinejoin="round"/>
+      stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
   </svg>
 )
+
+/** One row of the reader's overflow menu. */
+function MenuItem({ onClick, label, icon, danger, disabled }: {
+  onClick: () => void
+  label: string
+  icon: React.ReactNode
+  danger?: boolean
+  disabled?: boolean
+}) {
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      disabled={disabled}
+      className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-left transition-colors
+                  disabled:opacity-50 disabled:cursor-default
+        ${danger ? 'text-danger hover:bg-danger/10' : 'text-ink hover:bg-ink/6'}`}
+    >
+      <span className={`flex-shrink-0 ${danger ? '' : 'text-ink-3'}`}>{icon}</span>
+      <span className="flex-1 truncate">{label}</span>
+    </button>
+  )
+}
 
 export function EmailViewer() {
   const {
@@ -114,6 +137,7 @@ export function EmailViewer() {
   } = useEmailStore()
 
   const [showMoveMenu, setShowMoveMenu] = useState(false)
+  const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showSnoozeMenu, setShowSnoozeMenu] = useState(false)
   const [previewOpen, setPreviewOpen] = useState<Record<number, boolean>>({})
   const previewUrlRef = useRef<Record<number, string>>({})
@@ -147,6 +171,9 @@ export function EmailViewer() {
   }, [selectedEmail?.id])
 
   useEffect(() => {
+    setShowMoreMenu(false)
+    setShowMoveMenu(false)
+    setShowSnoozeMenu(false)
     setThreadSummary(null)
     setSummaryError(null)
     setSummaryLoading(false)
@@ -214,42 +241,45 @@ export function EmailViewer() {
 
   if (!selectedEmail) {
     return (
-      <div className="flex flex-col items-center justify-center h-full bg-white dark:bg-[#0d1117] text-center p-8 select-none">
-        <div className="relative mb-5">
-          <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[#fef3c7] to-[#fde68a] dark:from-[#1c2128] dark:to-[#21262d] border border-[#f59e0b]/20 dark:border-[#30363d] flex items-center justify-center shadow-sm">
-            <svg width="40" height="27" viewBox="0 0 60 40" fill="none">
-              <path d="M16,13 C11,8 4,9 2,15"  stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round"/>
-              <path d="M16,19 C11,14 4,15 2,20" stroke="#f59e0b" strokeWidth="1.8" strokeLinecap="round" strokeOpacity="0.6"/>
-              <path d="M44,13 C49,8 56,9 58,15"  stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round"/>
-              <path d="M44,19 C49,14 56,15 58,20" stroke="#f59e0b" strokeWidth="1.8" strokeLinecap="round" strokeOpacity="0.6"/>
-              <rect x="15" y="8" width="30" height="24" rx="3" fill="url(#emptyGold)"/>
-              <path d="M15,8 L30,22 L45,8" fill="none" stroke="#92400e" strokeWidth="1.3" strokeLinejoin="round" strokeOpacity="0.5"/>
-              <defs>
-                <linearGradient id="emptyGold" x1="15" y1="8" x2="45" y2="32" gradientUnits="userSpaceOnUse">
-                  <stop offset="0%" stopColor="#fbbf24"/>
-                  <stop offset="100%" stopColor="#d97706"/>
-                </linearGradient>
-              </defs>
-            </svg>
-          </div>
+      <div className="flex flex-col items-center justify-center h-full text-center p-8 select-none">
+        <div className="w-24 h-24 rounded-[26px] bg-accent/12 border border-accent/20 flex items-center justify-center mb-6 shadow-[0_8px_32px_-12px_rgb(var(--accent)/0.5)]">
+          <svg width="46" height="31" viewBox="0 0 60 40" fill="none">
+            <path d="M16,13 C11,8 4,9 2,15" stroke="currentColor" className="text-accent" strokeWidth="2.5" strokeLinecap="round"/>
+            <path d="M16,19 C11,14 4,15 2,20" stroke="currentColor" className="text-accent" strokeWidth="1.8" strokeLinecap="round" strokeOpacity="0.6"/>
+            <path d="M44,13 C49,8 56,9 58,15" stroke="currentColor" className="text-accent" strokeWidth="2.5" strokeLinecap="round"/>
+            <path d="M44,19 C49,14 56,15 58,20" stroke="currentColor" className="text-accent" strokeWidth="1.8" strokeLinecap="round" strokeOpacity="0.6"/>
+            <rect x="15" y="8" width="30" height="24" rx="4" fill="url(#emptyGold)"/>
+            <path d="M15,8 L30,22 L45,8" fill="none" stroke="#7c4a06" strokeWidth="1.3" strokeLinejoin="round" strokeOpacity="0.5"/>
+            <defs>
+              <linearGradient id="emptyGold" x1="15" y1="8" x2="45" y2="32" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#fbbf24"/>
+                <stop offset="100%" stopColor="#d97706"/>
+              </linearGradient>
+            </defs>
+          </svg>
         </div>
-        <h3 className="text-[15px] font-semibold text-[#1f2328] dark:text-[#e6edf3] mb-1.5">No message selected</h3>
-        <p className="text-[#818b98] dark:text-[#8b949e] text-xs leading-relaxed max-w-[180px]">Choose an email from the list to read it here</p>
+        <h3 className="text-[17px] font-semibold text-ink mb-2 tracking-[-0.015em]">No message selected</h3>
+        <p className="text-ink-3 text-[13px] leading-relaxed max-w-[220px]">Pick an email from the list, or press <kbd className="px-1.5 py-0.5 mx-0.5 rounded-md bg-ink/8 text-ink-2 text-[11px]">Ctrl&nbsp;N</kbd> to write one</p>
       </div>
     )
   }
 
   if (isLoadingBody) {
     return (
-      <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
-        <div className="p-6 border-b border-[#d0d7de] dark:border-[#30363d]">
-          <div className="h-5 bg-[#eaeef2] dark:bg-[#21262d] rounded w-3/4 animate-pulse mb-4" />
-          <div className="h-3.5 bg-[#eaeef2] dark:bg-[#21262d] rounded w-1/2 animate-pulse mb-2" />
-          <div className="h-3.5 bg-[#eaeef2] dark:bg-[#21262d] rounded w-1/3 animate-pulse" />
+      <div className="flex flex-col h-full">
+        <div className="px-7 py-6 border-b border-line/40">
+          <div className="skeleton h-5 w-3/4 mb-5" />
+          <div className="flex items-center gap-3">
+            <div className="skeleton w-9 h-9 !rounded-full flex-shrink-0" />
+            <div className="flex-1 space-y-2">
+              <div className="skeleton h-3 w-1/2" />
+              <div className="skeleton h-3 w-1/3" />
+            </div>
+          </div>
         </div>
-        <div className="p-6 space-y-3">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-3 bg-[#eaeef2] dark:bg-[#21262d] rounded animate-pulse" style={{ width: `${90 - i * 10}%` }} />
+        <div className="px-7 py-6 space-y-3">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="skeleton h-3" style={{ width: `${92 - (i % 3) * 14}%`, opacity: 1 - i * 0.1 }} />
           ))}
         </div>
       </div>
@@ -512,9 +542,9 @@ export function EmailViewer() {
   const sanitized = body?.html ? sanitizeEmailHtml(body.html, showRemoteImages) : null
   const sanitizedHtml = sanitized?.html || null
 
-  const toolBtn = 'flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-[#656d76] dark:text-[#8b949e] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors'
-  const iconBtn = 'p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#1f2328] dark:hover:text-[#e6edf3] hover:bg-[#eaeef2] dark:hover:bg-[#21262d] rounded-md transition-colors'
-  const divider = <div className="w-px h-4 bg-[#d0d7de] dark:bg-[#30363d] mx-0.5 flex-shrink-0" />
+  const toolBtn = 'btn-ghost flex items-center gap-1.5 px-2.5 h-8 text-[12.5px] font-medium disabled:opacity-50'
+  const iconBtn = 'btn-ghost w-8 h-8 flex items-center justify-center !text-ink-3 hover:!text-ink'
+  const divider = <div className="w-px h-4 bg-line/70 mx-1 flex-shrink-0" />
 
   const accountFolders = (currentAccountId ? folders[currentAccountId] : null) || []
   const movableFolders = accountFolders.filter(f => f.path !== currentFolder && f.path !== '__starred__')
@@ -594,19 +624,17 @@ export function EmailViewer() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-[#0d1117]">
-      {/* Toolbar */}
-      <div className="flex items-center gap-0.5 px-3 py-2 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
-        {/* Reply group */}
+    <div className="flex flex-col h-full">
+      {/* Toolbar
+          Reply / Reply All / Forward earn their labels — they are what this
+          pane is for. Everything rare or destructive lives behind "More", so a
+          narrow window never has to wrap thirteen controls onto two rows. */}
+      <div className="flex items-center gap-0.5 px-2.5 min-h-[52px] py-2 border-b border-line/40">
         <button onClick={handleReply} className={toolBtn} aria-label="Reply to email" title="Reply (r)">
           <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M5 3L1 6.5M1 6.5L5 10M1 6.5h8a3 3 0 010 6h-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Reply
         </button>
-        <button
-          onClick={handleReplyAll}
-          className={toolBtn}
-          aria-label="Reply to all recipients"
-        >
+        <button onClick={handleReplyAll} className={toolBtn} aria-label="Reply to all recipients" title="Reply all">
           <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M4 3L0 6.5M0 6.5L4 10M0 6.5h7M8 3L12 6.5M12 6.5L8 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Reply All
         </button>
@@ -614,40 +642,16 @@ export function EmailViewer() {
           <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M8 3l4 3.5M12 6.5L8 10M12 6.5H4a3 3 0 000 6h1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Forward
         </button>
-        <button onClick={handleSummarizeThread} className={toolBtn} disabled={summaryLoading} aria-label="Summarize email thread">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3h10M3 7h7M3 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-          {summaryLoading ? 'Summarizing…' : 'Summarize'}
-        </button>
-        <button onClick={handleExtractActions} className={toolBtn} disabled={actionsLoading} title="Find tasks and dates">{actionsLoading ? 'Finding…' : 'Actions'}</button>
-
-        {unsubscribeLink && (
-          <button
-            onClick={() => window.open(unsubscribeLink, '_blank')}
-            className={toolBtn}
-            title="Unsubscribe"
-          >
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M8 3l5 5-5 5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            Unsubscribe
-          </button>
-        )}
 
         {divider}
 
-        {/* Actions group */}
         <button
           onClick={handleStar}
-          title={selectedEmail.starred ? 'Unstar' : 'Star'}
-          className={`${iconBtn} ${selectedEmail.starred ? '!text-[#f59e0b]' : ''}`}
+          title={selectedEmail.starred ? 'Unstar' : 'Star (s)'}
+          aria-label={selectedEmail.starred ? 'Unstar email' : 'Star email'}
+          className={`${iconBtn} ${selectedEmail.starred ? '!text-accent' : ''}`}
         >
           <StarIcon filled={selectedEmail.starred} />
-        </button>
-
-        <button onClick={handleMarkUnread} title="Mark as unread (u)" aria-label="Mark as unread" className={iconBtn}>
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-            <path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/>
-            <path d="M2 4l6 5 6-5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-            <circle cx="13" cy="4" r="2.5" fill="#f59e0b"/>
-          </svg>
         </button>
 
         {currentFolder === '__snoozed__' ? (
@@ -656,20 +660,20 @@ export function EmailViewer() {
           </button>
         ) : (
           <div className="relative">
-            <button onClick={() => { setShowSnoozeMenu(v => !v); setShowMoveMenu(false) }} title="Snooze" aria-label="Snooze email" className={iconBtn}>
+            <button onClick={() => { setShowSnoozeMenu(v => !v); setShowMoveMenu(false); setShowMoreMenu(false) }} title="Snooze" aria-label="Snooze email" className={iconBtn}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M6 7h4l-4 3.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 1.5L2.5 3.5M11 1.5l2.5 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
             </button>
             {showSnoozeMenu && (
-              <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl z-20 py-1.5 overflow-hidden">
-                <div className="px-3 py-1 text-[9px] font-bold text-[#818b98] dark:text-[#484f58] uppercase tracking-widest">Snooze until</div>
+              <div className="absolute right-0 top-full mt-1.5 w-48 glass-elevated rounded-xl z-20 py-1.5 overflow-hidden animate-pop">
+                <div className="px-3 py-1 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em]">Snooze until</div>
                 {snoozeOptions().map(opt => (
                   <button
                     key={opt.label}
                     onClick={() => handleSnooze(opt.until)}
-                    className="w-full text-left px-3 py-2 text-xs text-[#24292f] dark:text-[#c9d1d9] hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors flex items-center justify-between gap-2"
+                    className="w-full text-left px-3 py-2 text-[13px] text-ink hover:bg-ink/6 transition-colors flex items-center justify-between gap-2"
                   >
                     <span>{opt.label}</span>
-                    <span className="text-[10px] text-[#818b98] dark:text-[#484f58]">{opt.until.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>
+                    <span className="text-[11px] text-ink-3 tabular-nums">{opt.until.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>
                   </button>
                 ))}
               </div>
@@ -679,20 +683,20 @@ export function EmailViewer() {
 
         {movableFolders.length > 0 && (
           <div className="relative">
-            <button onClick={() => { setShowMoveMenu(v => !v); setShowSnoozeMenu(false) }} title="Move to folder" className={iconBtn}>
+            <button onClick={() => { setShowMoveMenu(v => !v); setShowSnoozeMenu(false); setShowMoreMenu(false) }} title="Move to folder" aria-label="Move to folder" className={iconBtn}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
                 <path d="M8 8v4M6 10l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
             {showMoveMenu && (
-              <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-xl shadow-2xl z-20 py-1.5 overflow-hidden">
-                <div className="px-3 py-1 text-[9px] font-bold text-[#818b98] dark:text-[#484f58] uppercase tracking-widest">Move to</div>
+              <div className="absolute right-0 top-full mt-1.5 w-48 glass-elevated rounded-xl z-20 py-1.5 overflow-hidden animate-pop max-h-72 overflow-y-auto">
+                <div className="px-3 py-1 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em]">Move to</div>
                 {movableFolders.map(f => (
                   <button
                     key={f.path}
                     onClick={() => handleMove(f.path)}
-                    className="w-full text-left px-3 py-2 text-xs text-[#24292f] dark:text-[#c9d1d9] hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors"
+                    className="w-full text-left px-3 py-2 text-[13px] text-ink hover:bg-ink/6 transition-colors"
                   >
                     {f.name}
                   </button>
@@ -704,7 +708,6 @@ export function EmailViewer() {
 
         {divider}
 
-        {/* Archive */}
         <button onClick={handleArchive} className={toolBtn} title="Archive (e)" aria-label="Archive email">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path d="M2 4h12v1H2zM3 5v7a1 1 0 001 1h8a1 1 0 001-1V5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
@@ -713,56 +716,120 @@ export function EmailViewer() {
           Archive
         </button>
 
-        {/* Delete */}
-        <button onClick={handleDelete} className="p-1.5 text-[#818b98] dark:text-[#484f58] hover:text-[#cf222e] dark:hover:text-[#f85149] hover:bg-[#fff0ee] dark:hover:bg-[#f85149]/10 rounded-md transition-colors" title="Delete (d)" aria-label="Delete email">
+        <button
+          onClick={handleDelete}
+          className={`${iconBtn} hover:!text-danger hover:!bg-danger/10`}
+          title="Delete (d)"
+          aria-label="Delete email"
+        >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
-        <button onClick={handleSpam} className="p-1.5 text-[#818b98] hover:text-[#cf222e] rounded-md" title="Report spam">Spam</button>
-        <button onClick={handleBlock} className="p-1.5 text-[#818b98] hover:text-[#cf222e] rounded-md" title="Block sender">Block</button>
-      </div>
 
+        <div className="flex-1" />
+
+        {/* Overflow */}
+        <div className="relative">
+          <button
+            onClick={() => { setShowMoreMenu(v => !v); setShowMoveMenu(false); setShowSnoozeMenu(false) }}
+            title="More actions"
+            aria-label="More actions"
+            aria-haspopup="menu"
+            aria-expanded={showMoreMenu}
+            className={`${iconBtn} ${showMoreMenu ? '!bg-ink/10 !text-ink' : ''}`}
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+              <circle cx="3" cy="8" r="1.35" fill="currentColor"/>
+              <circle cx="8" cy="8" r="1.35" fill="currentColor"/>
+              <circle cx="13" cy="8" r="1.35" fill="currentColor"/>
+            </svg>
+          </button>
+          {showMoreMenu && (
+            <div role="menu" className="absolute right-0 top-full mt-1.5 w-56 glass-elevated rounded-xl z-30 py-1.5 overflow-hidden animate-pop">
+              <MenuItem
+                onClick={() => { setShowMoreMenu(false); handleSummarizeThread() }}
+                disabled={summaryLoading}
+                label={summaryLoading ? 'Summarising…' : 'Summarise thread'}
+                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3h10M3 7h7M3 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
+              />
+              <MenuItem
+                onClick={() => { setShowMoreMenu(false); handleExtractActions() }}
+                disabled={actionsLoading}
+                label={actionsLoading ? 'Finding…' : 'Find tasks & dates'}
+                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+              />
+              <MenuItem
+                onClick={() => { setShowMoreMenu(false); handleMarkUnread() }}
+                label="Mark as unread"
+                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/><path d="M2 4l6 5 6-5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+              />
+              {unsubscribeLink && (
+                <MenuItem
+                  onClick={() => { setShowMoreMenu(false); window.open(unsubscribeLink, '_blank', 'noopener,noreferrer') }}
+                  label="Unsubscribe"
+                  icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M8 3l5 5-5 5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                />
+              )}
+
+              <div className="my-1.5 h-px bg-line/50" role="separator" />
+
+              <MenuItem
+                onClick={() => { setShowMoreMenu(false); handleSpam() }}
+                label="Report spam"
+                danger
+                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>}
+              />
+              <MenuItem
+                onClick={() => { setShowMoreMenu(false); handleBlock() }}
+                label="Block sender"
+                danger
+                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M3.8 3.8l8.4 8.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
+              />
+            </div>
+          )}
+        </div>
+      </div>
       {/* Header */}
-      <div className="px-6 py-5 border-b border-[#d0d7de] dark:border-[#30363d]">
-        <h1 className="text-lg font-semibold text-[#1f2328] dark:text-[#e6edf3] mb-4 leading-snug">
+      <div className="px-7 pt-6 pb-5 border-b border-line/40">
+        <h1 className="text-[21px] font-semibold text-ink mb-5 leading-[1.25] tracking-[-0.02em]">
           {selectedEmail.subject || '(no subject)'}
         </h1>
         <div className="flex items-start gap-3">
           <Avatar from={selectedEmail.from} size={36} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-4">
-              <span className="font-semibold text-[#1f2328] dark:text-[#e6edf3] text-sm">{selectedEmail.from}</span>
-              <span className="text-xs text-[#818b98] dark:text-[#484f58] flex-shrink-0">
+              <span className="font-semibold text-ink text-[14px] truncate tracking-[-0.01em]">{selectedEmail.from}</span>
+              <span className="text-[12px] text-ink-3 flex-shrink-0 tabular-nums">
                 {body?.date ? formatFullDate(body.date) : formatFullDate(selectedEmail.date)}
               </span>
             </div>
-            {body?.to && <div className="text-xs text-[#656d76] dark:text-[#8b949e] mt-0.5"><span className="text-[#818b98] dark:text-[#484f58]">To: </span>{body.to}</div>}
-            {body?.cc && <div className="text-xs text-[#656d76] dark:text-[#8b949e]"><span className="text-[#818b98] dark:text-[#484f58]">Cc: </span>{body.cc}</div>}
+            {body?.to && <div className="text-xs text-ink-2 mt-0.5"><span className="text-ink-3 ">To: </span>{body.to}</div>}
+            {body?.cc && <div className="text-xs text-ink-2 "><span className="text-ink-3 ">Cc: </span>{body.cc}</div>}
           </div>
         </div>
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto px-6 py-5" onClick={() => { setShowMoveMenu(false); setShowSnoozeMenu(false) }}>
+      <div className="flex-1 overflow-y-auto px-7 py-6" onClick={() => { setShowMoveMenu(false); setShowSnoozeMenu(false); setShowMoreMenu(false) }}>
         {sanitized?.blocked ? (
-          <div className="mb-4 flex items-center justify-between rounded-md bg-[#fff8ec] dark:bg-[#1c2128] px-3 py-2 text-xs text-[#656d76] dark:text-[#8b949e]">
+          <div className="mb-5 flex items-center justify-between gap-3 rounded-xl bg-accent/12 px-3.5 py-2.5 text-[12.5px] text-ink-2">
             <span>{sanitized.blocked} remote image{sanitized.blocked === 1 ? '' : 's'} blocked for privacy.</span>
-            <button onClick={() => setShowRemoteImages(true)} className="font-semibold text-[#0969da]">Show images</button>
+            <button onClick={() => setShowRemoteImages(true)} className="font-semibold text-info hover:underline flex-shrink-0">Show images</button>
           </div>
         ) : null}
         {conversationBodies.length > 0 && (
           <div className="mb-5 space-y-2">
-            <div className="text-[10px] font-bold uppercase tracking-wide text-[#818b98]">Earlier in this conversation</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3">Earlier in this conversation</div>
             {conversationBodies.map(({ email, body: prior }) => (
-              <details key={email!.id} className="rounded-lg border border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
-                <summary className="cursor-pointer px-3 py-2 text-xs"><strong>{prior.from}</strong><span className="float-right text-[#818b98]">{formatFullDate(prior.date)}</span></summary>
-                <div className="border-t border-[#d0d7de] dark:border-[#30363d] px-3 py-3 text-xs whitespace-pre-wrap">{prior.text || stripHtml(prior.html || '')}</div>
+              <details key={email!.id} className="rounded-xl border border-line/50 bg-ink/4 overflow-hidden">
+                <summary className="cursor-pointer px-3.5 py-2.5 text-[12.5px] hover:bg-ink/4 transition-colors"><strong>{prior.from}</strong><span className="float-right text-ink-3">{formatFullDate(prior.date)}</span></summary>
+                <div className="border-t border-line/50 px-3.5 py-3 text-[12.5px] whitespace-pre-wrap leading-relaxed text-ink-2">{prior.text || stripHtml(prior.html || '')}</div>
               </details>
             ))}
           </div>
         )}
         {actions.length > 0 && (
-          <div className="mb-5 rounded-lg border border-[#d0d7de] dark:border-[#30363d] p-3">
-            <div className="text-xs font-semibold mb-2">Suggested actions</div>
+          <div className="mb-5 rounded-xl border border-line/50 bg-ink/4 p-3.5">
+            <div className="text-[12.5px] font-semibold mb-2">Suggested actions</div>
             {actions.map((a, i) => <div key={i} className="flex items-center gap-2 text-xs py-1"><span className="flex-1">{a.kind === 'calendar' ? '📅' : '✓'} {a.title}{a.date ? ` — ${a.date}` : ''}</span><button onClick={() => {
               if (a.kind === 'calendar') {
                 const start = new Date(a.date || Date.now()).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
@@ -771,25 +838,25 @@ export function EmailViewer() {
               } else {
                 handleReminder(a.date)
               }
-            }} className="text-[#0969da]">{a.kind === 'calendar' ? 'Add to calendar' : 'Create reminder'}</button></div>)}
+            }} className="text-info">{a.kind === 'calendar' ? 'Add to calendar' : 'Create reminder'}</button></div>)}
           </div>
         )}
         {threadSummary && (
-          <div className="mb-5 border border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22] rounded-lg p-4">
-            <div className="text-xs font-semibold text-[#656d76] dark:text-[#8b949e] mb-2">AI Thread Summary</div>
-            <div className="text-sm text-[#24292f] dark:text-[#c9d1d9] mb-3 leading-relaxed">{threadSummary.summary}</div>
+          <div className="mb-5 rounded-xl border border-ai/25 bg-ai/8 p-4">
+            <div className="text-[11px] font-semibold text-ai uppercase tracking-[0.07em] mb-2">AI thread summary</div>
+            <div className="text-sm text-ink mb-3 leading-relaxed">{threadSummary.summary}</div>
             {threadSummary.keyPoints?.length > 0 && (
               <div className="mb-2">
-                <div className="text-[11px] font-semibold text-[#656d76] dark:text-[#8b949e] mb-1">Key points</div>
-                <ul className="list-disc pl-4 text-[11.5px] text-[#24292f] dark:text-[#c9d1d9]">
+                <div className="text-[11px] font-semibold text-ink-2 mb-1">Key points</div>
+                <ul className="list-disc pl-4 text-[11.5px] text-ink ">
                   {threadSummary.keyPoints.map((p, i) => <li key={i}>{p}</li>)}
                 </ul>
               </div>
             )}
             {threadSummary.actionItems?.length > 0 && (
               <div>
-                <div className="text-[11px] font-semibold text-[#656d76] dark:text-[#8b949e] mb-1">Action items</div>
-                <ul className="list-disc pl-4 text-[11.5px] text-[#24292f] dark:text-[#c9d1d9]">
+                <div className="text-[11px] font-semibold text-ink-2 mb-1">Action items</div>
+                <ul className="list-disc pl-4 text-[11.5px] text-ink ">
                   {threadSummary.actionItems.map((p, i) => <li key={i}>{p}</li>)}
                 </ul>
               </div>
@@ -797,32 +864,32 @@ export function EmailViewer() {
           </div>
         )}
         {summaryError && (
-          <div className="mb-5 text-xs text-[#cf222e] dark:text-[#f85149]">{summaryError}</div>
+          <div className="mb-5 text-xs text-danger ">{summaryError}</div>
         )}
 
         {sanitizedHtml ? (
           <div className="email-body" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
         ) : body?.text ? (
-          <pre className="whitespace-pre-wrap font-sans text-sm text-[#24292f] dark:text-[#c9d1d9] leading-relaxed">{body.text}</pre>
+          <pre className="whitespace-pre-wrap font-sans text-[14px] text-ink leading-[1.65]">{body.text}</pre>
         ) : (
-          <p className="text-[#818b98] dark:text-[#484f58] italic text-sm">No content</p>
+          <p className="text-ink-3 italic text-sm">No content</p>
         )}
 
         {body?.attachments && body.attachments.length > 0 && (
-          <div className="mt-6 border-t border-[#d0d7de] dark:border-[#30363d] pt-4">
-            <div className="text-xs font-semibold text-[#656d76] dark:text-[#8b949e] mb-2">Attachments ({body.attachments.length})</div>
+          <div className="mt-6 border-t border-line pt-4">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3 mb-2.5">Attachments ({body.attachments.length})</div>
             <div className="flex flex-wrap gap-2">
               {body.attachments.map((att, i) => (
                 <div key={i} className="flex flex-col gap-2 w-full">
-                  <div className="flex items-center gap-2 bg-[#f6f8fa] dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] rounded-md px-3 py-2 text-xs">
+                  <div className="flex items-center gap-2.5 bg-ink/4 border border-line/50 rounded-xl px-3.5 py-2.5 text-[12.5px]">
                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
-                    <span className="text-[#24292f] dark:text-[#c9d1d9]">{att.filename}</span>
-                    <span className="text-[#818b98] dark:text-[#484f58]">({Math.round(att.size / 1024)}KB)</span>
+                    <span className="text-ink ">{att.filename}</span>
+                    <span className="text-ink-3 ">({Math.round(att.size / 1024)}KB)</span>
                     {isPreviewable(att) && (
                       <button
                         title="Preview"
                         onClick={() => setPreviewOpen(s => ({ ...s, [i]: !s[i] }))}
-                        className="text-[#0969da] hover:text-[#1f6feb] transition-colors text-[11px]"
+                        className="text-info hover:opacity-70 transition-opacity text-[11px]"
                       >
                         {previewOpen[i] ? 'Hide' : 'Preview'}
                       </button>
@@ -830,17 +897,17 @@ export function EmailViewer() {
                     <button
                       title="Download"
                       onClick={() => downloadAttachment(att, i)}
-                      className="text-[#f59e0b] hover:text-[#d97706] transition-colors"
+                      className="text-accent hover:text-accent-ink transition-colors"
                     >
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
                     </button>
                     {(att.contentType === 'application/pdf' || att.contentType?.startsWith('text/')) && (
-                      <button onClick={() => summarizeAttachment(att, i)} className="text-[#7c3aed] text-[11px]">Summarize</button>
+                      <button onClick={() => summarizeAttachment(att, i)} className="text-ai text-[11px]">Summarize</button>
                     )}
                   </div>
-                  {attachmentSummaries[i] && <div className="rounded-md bg-[#f6f8fa] dark:bg-[#161b22] p-3 text-xs whitespace-pre-wrap">{attachmentSummaries[i]}</div>}
+                  {attachmentSummaries[i] && <div className="rounded-md bg-surface-2 p-3 text-xs whitespace-pre-wrap">{attachmentSummaries[i]}</div>}
                   {previewOpen[i] && isPreviewable(att) && (
-                    <div className="border border-[#d0d7de] dark:border-[#30363d] rounded-md overflow-hidden bg-white dark:bg-[#0d1117] w-full">
+                    <div className="border border-line rounded-md overflow-hidden bg-white w-full">
                       {att.contentType?.toLowerCase().startsWith('image/') ? (
                         <img src={attachmentSrc(i, true)} alt={att.filename} className="w-full h-auto max-h-[80vh] object-contain" />
                       ) : (
@@ -854,9 +921,9 @@ export function EmailViewer() {
           </div>
         )}
         {smartReplies.length > 0 && (
-          <div className="mt-6 border-t border-[#d0d7de] dark:border-[#30363d] pt-4">
-            <div className="text-[10px] font-bold uppercase tracking-wide text-[#818b98] mb-2">Smart reply</div>
-            <div className="flex flex-wrap gap-2">{smartReplies.map(reply => <button key={reply} onClick={() => handleSmartReply(reply)} className="rounded-full border border-[#7c3aed]/50 px-3 py-1.5 text-xs text-[#7c3aed] hover:bg-[#7c3aed]/10">{reply}</button>)}</div>
+          <div className="mt-6 border-t border-line pt-4">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3 mb-2.5">Smart reply</div>
+            <div className="flex flex-wrap gap-2">{smartReplies.map(reply => <button key={reply} onClick={() => handleSmartReply(reply)} className="rounded-full border border-ai/40 px-3.5 py-1.5 text-[12.5px] text-ai hover:bg-ai/12 transition-colors active:scale-95">{reply}</button>)}</div>
           </div>
         )}
       </div>
