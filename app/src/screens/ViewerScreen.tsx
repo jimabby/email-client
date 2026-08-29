@@ -1,11 +1,12 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity,
   useWindowDimensions, Alert, Linking,
 } from 'react-native';
 import RenderHtml from 'react-native-render-html';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { api, attachmentUrl, errorMessage, resolveArchiveFolder } from '../api';
+import { api, errorMessage, openAttachment, resolveArchiveFolder } from '../api';
+import { sanitizeEmailHtml, totalBlocked } from '../emailHtml';
 import { theme, avatarColor } from '../theme';
 import { radius, space } from '../theme';
 import { ui } from '../ui';
@@ -35,6 +36,15 @@ export default function ViewerScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [starred, setStarred] = useState(!!email.starred);
+  // Remote images stay blocked until the reader asks for them — loading one
+  // confirms the address is live and hands the sender an IP and a timestamp.
+  const [showRemoteImages, setShowRemoteImages] = useState(false);
+  const [openingAttachment, setOpeningAttachment] = useState<number | null>(null);
+
+  const sanitized = useMemo(
+    () => (body?.html ? sanitizeEmailHtml(body.html, showRemoteImages) : null),
+    [body?.html, showRemoteImages],
+  );
 
   useEffect(() => {
     let active = true;
@@ -166,11 +176,30 @@ export default function ViewerScreen({ navigation, route }: Props) {
         <ActivityIndicator color={theme.accent} style={{ marginTop: 40 }} size="large" />
       ) : error ? (
         <Text style={styles.error}>{error}</Text>
-      ) : body?.html ? (
+      ) : sanitized ? (
         <View style={styles.bodyWrap}>
+          {totalBlocked(sanitized.blocked) > 0 && (
+            <View style={styles.privacyNotice}>
+              <Text style={styles.privacyText}>
+                {[
+                  sanitized.blocked.pixels
+                    ? `${sanitized.blocked.pixels} tracking pixel${sanitized.blocked.pixels === 1 ? '' : 's'} removed`
+                    : null,
+                  sanitized.blocked.images
+                    ? `${sanitized.blocked.images} remote image${sanitized.blocked.images === 1 ? '' : 's'} blocked`
+                    : null,
+                ].filter(Boolean).join(' · ')}
+              </Text>
+              {sanitized.blocked.images > 0 && (
+                <TouchableOpacity onPress={() => setShowRemoteImages(true)} hitSlop={8}>
+                  <Text style={styles.privacyAction}>Show images</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
           <RenderHtml
             contentWidth={width - 32}
-            source={{ html: body.html }}
+            source={{ html: sanitized.html }}
             baseStyle={{ color: theme.text, fontSize: 15, lineHeight: 22 }}
             tagsStyles={{
               a: { color: theme.accent },
@@ -192,12 +221,26 @@ export default function ViewerScreen({ navigation, route }: Props) {
             <TouchableOpacity
               key={i}
               style={styles.attachRow}
-              // Attachment bytes stream from their own endpoint now, so opening
-              // one is a plain URL the OS viewer can handle.
-              onPress={() => Linking.openURL(attachmentUrl(email.accountId, email.id, i, { folder: email.folder, inline: true }))}
+              disabled={openingAttachment === i}
+              // Downloaded with the token in an Authorization header and saved
+              // to a cache file, then handed to the OS viewer. Passing the URL
+              // to the system browser instead put the API token in that
+              // browser's history, where it is often synced across devices.
+              onPress={async () => {
+                setOpeningAttachment(i);
+                try {
+                  await openAttachment(email.accountId, email.id, i, a.filename, email.folder);
+                } catch (err) {
+                  Alert.alert('Could not open attachment', errorMessage(err));
+                } finally {
+                  setOpeningAttachment(null);
+                }
+              }}
             >
               <Text style={styles.attachName} numberOfLines={1}>📎 {a.filename}</Text>
-              <Text style={styles.attachSize}>{Math.round((a.size || 0) / 1024)} KB</Text>
+              <Text style={styles.attachSize}>
+                {openingAttachment === i ? 'Opening…' : `${Math.round((a.size || 0) / 1024)} KB`}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -247,6 +290,14 @@ const styles = StyleSheet.create({
   date: { ...ui.caption, marginTop: 2 },
 
   bodyWrap: { paddingHorizontal: space.lg, paddingTop: space.lg },
+  privacyNotice: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: space.sm, marginBottom: space.md,
+    backgroundColor: theme.bgInput, borderRadius: radius.md,
+    paddingHorizontal: space.md, paddingVertical: 9,
+  },
+  privacyText: { color: theme.textMuted, fontSize: 12, flexShrink: 1 },
+  privacyAction: { color: theme.accent, fontSize: 12, fontWeight: '600' },
   plainBody: { color: theme.text, fontSize: 15, lineHeight: 23, padding: space.lg },
   error: { ...ui.secondary, textAlign: 'center', marginTop: 40 },
 

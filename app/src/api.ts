@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { Linking } from 'react-native';
 import { useAppStore } from './store';
 import type { Account, EmailSummary, EmailBody, Folder, OutboxItem, UnreadCounts } from './types';
 
@@ -95,8 +96,18 @@ export const api = {
       // Reply threading — the backend resolves In-Reply-To/References (or the
       // Outlook reply draft) from the original email's composite id.
       replyToEmailId?: string; replyToFolder?: string;
+      /** ISO timestamp to hold the message until. */
+      sendAt?: string;
+      /** Seconds to wait before sending, during which it can be recalled. */
+      undoWindowSec?: number;
     }
-  ) => client().post(`/emails/${accountId}/send`, data).then((r) => r.data),
+  ) => client()
+    .post<{ jobId: string; sendAt: string; canUndoUntil: string | null }>(`/emails/${accountId}/send`, data)
+    .then((r) => r.data),
+
+  /** Recall a queued message before its window closes. */
+  cancelSend: (accountId: string, jobId: string) =>
+    client().post(`/emails/${accountId}/send-queue/${jobId}/cancel`).then((r) => r.data),
 
   saveDraft: (
     accountId: string,
@@ -127,24 +138,35 @@ export const api = {
 };
 
 /**
- * Absolute URL for one attachment, with the bearer token as a query parameter
- * so the OS browser/viewer can fetch it. Attachment bytes are no longer inlined
- * in the message payload.
+ * Open one attachment in the OS viewer.
+ *
+ * The URL leaves the app the moment it is handed to `Linking`, so it must not
+ * carry the API token: that token unlocks every mailbox, and the system browser
+ * keeps a history that is frequently synced across a user's devices. Instead
+ * the app asks the server, over an authenticated request, for a single-use
+ * ticket that is bound to this one attachment and expires in two minutes. If
+ * that URL is ever recovered from a history file it opens nothing.
  */
-export function attachmentUrl(
+export async function openAttachment(
   accountId: string,
   emailId: string,
   index: number,
-  opts: { folder?: string; inline?: boolean } = {}
-): string {
-  const { serverUrl, apiToken } = useAppStore.getState();
-  const params = new URLSearchParams();
-  if (opts.folder) params.set('folder', opts.folder);
-  if (opts.inline) params.set('inline', 'true');
-  if (apiToken) params.set('access_token', apiToken);
-  const query = params.toString();
-  const base = `${serverUrl}/api/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}`;
-  return query ? `${base}?${query}` : base;
+  filename?: string,
+  folder?: string
+): Promise<void> {
+  const { serverUrl } = useAppStore.getState();
+  const { data } = await client().post<{ url: string; expiresIn: number }>(
+    `/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}/ticket`,
+    {},
+    { params: folder ? { folder } : {} }
+  );
+
+  const url = `${serverUrl.replace(/\/$/, '')}${data.url}`;
+  const supported = await Linking.canOpenURL(url);
+  if (!supported) {
+    throw new Error(`Nothing on this device can open ${filename || 'that file'}`);
+  }
+  await Linking.openURL(url);
 }
 
 // Pick the best archive destination from an account's real folder list

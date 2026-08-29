@@ -72,6 +72,15 @@ docker compose restart backend
 Keep a protected backup of this file. The `hermes-data` volume also persists
 snoozes, send queues, settings, and cached metadata across container upgrades.
 
+## Use it from a browser
+
+Open `https://mail.example.com` and paste the same `API_TOKEN` when prompted.
+The token is held for that tab only and is cleared when the tab closes.
+
+The server injects the token into the page automatically for a browser running
+on the server itself, which is how the desktop app authenticates; a remote
+visitor is deliberately never handed it and has to enter it.
+
 ## Connect the phone
 
 In Hermes mobile Settings, enter `https://mail.example.com` and the exact

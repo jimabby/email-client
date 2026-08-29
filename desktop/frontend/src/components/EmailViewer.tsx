@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { format, parseISO } from 'date-fns'
-import DOMPurify from 'dompurify'
 import { useEmailStore } from '../store/emailStore'
 import { aiApi, emailsApi } from '../api/client'
 import { Avatar, bareAddress } from './Avatar'
 import { readJson, writeJson } from '../lib/storage'
+import {
+  sanitizeEmailHtml, findUnsubscribeUrl, htmlToText, escapeHtml, totalBlocked,
+} from '../lib/emailHtml'
+import { ReaderFrame } from './ReaderFrame'
+import { InviteCard } from './InviteCard'
+import { SenderBadge } from './SenderBadge'
 import type { Attachment, DraftAttachment } from '../types/email'
 
 function formatFullDate(dateStr: string): string {
@@ -18,62 +23,7 @@ function normalizeSubject(subject: string): string {
   return raw.replace(/^(re|fw|fwd)\s*:\s*/gi, '').trim() || '(no subject)'
 }
 
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-function sanitizeEmailHtml(html: string, allowRemoteImages: boolean): { html: string; blocked: number } {
-  const clean = DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: ['p','div','span','a','b','i','em','strong','br','ul','ol','li','h1','h2','h3','h4','h5','h6','table','tr','td','th','tbody','thead','img','blockquote','pre','code','hr','font'],
-    ALLOWED_ATTR: ['href','src','alt','class','style','target','rel','colspan','rowspan','width','height','color','size']
-  })
-  const doc = new DOMParser().parseFromString(clean, 'text/html')
-  let blocked = 0
-  for (const img of Array.from(doc.querySelectorAll('img'))) {
-    const src = img.getAttribute('src') || ''
-    const isRemote = /^https?:\/\//i.test(src) || src.startsWith('//')
-    // Only treat an image as a tracking pixel when it explicitly declares a
-    // 1px (or smaller) dimension. Most legitimate images omit width/height, so
-    // a missing attribute must NOT be read as 0 — otherwise everything gets
-    // permanently removed and "Show images" can't bring it back.
-    const w = img.getAttribute('width')
-    const h = img.getAttribute('height')
-    const tiny = w !== null && h !== null && Number(w) <= 1 && Number(h) <= 1
-    if (tiny) { img.remove(); blocked++; continue }
-    if (isRemote && !allowRemoteImages) { img.removeAttribute('src'); img.setAttribute('alt', img.getAttribute('alt') || '[remote image blocked]'); blocked++ }
-  }
-  for (const el of Array.from(doc.querySelectorAll<HTMLElement>('[style]'))) {
-    if (/url\s*\(\s*['"]?(?:https?:)?\/\//i.test(el.getAttribute('style') || '')) { el.removeAttribute('style'); blocked++ }
-  }
-  for (const a of Array.from(doc.querySelectorAll('a'))) { a.setAttribute('rel', 'noopener noreferrer'); a.setAttribute('target', '_blank') }
-  return { html: doc.body.innerHTML, blocked }
-}
-
-function extractUnsubscribeLink(html?: string, text?: string): string | null {
-  const isUnsub = (s: string) => /unsubscribe|optout|opt-out|manage\s+preferences/i.test(s)
-  if (html && typeof window !== 'undefined') {
-    try {
-      const doc = new DOMParser().parseFromString(html, 'text/html')
-      const links = Array.from(doc.querySelectorAll('a[href]'))
-      for (const a of links) {
-        const href = a.getAttribute('href') || ''
-        const label = (a.textContent || '') + ' ' + href
-        if (isUnsub(label)) return href
-      }
-    } catch {}
-  }
-  const raw = text || html || ''
-  const match = raw.match(/https?:\/\/\S+/gi)
-  if (match) {
-    const url = match.find(u => isUnsub(u))
-    if (url) return url.replace(/[)>.,]*$/, '')
-  }
-  return null
-}
+const stripHtml = htmlToText
 
 // Smart replies were cached one localStorage key per message, which grew
 // without bound and could never be pruned. One bounded LRU map instead.
@@ -347,13 +297,41 @@ export function EmailViewer() {
     })
   }
 
+  // Gmail and Outlook keep a message's id stable through the bin, so a delete
+  // there can be taken back. IMAP assigns a new UID on the way to Trash, which
+  // leaves nothing to address — so those accounts keep the confirmation
+  // prompt instead of being offered an undo that could not work.
+  const canUndoDelete = (accountType?: string) => accountType !== 'imap'
+
   const handleDelete = async () => {
     if (!selectedEmail) return
-    if (!window.confirm('Delete this email?')) return
+    const account = accounts.find(a => a.id === selectedEmail.accountId)
+    const undoable = canUndoDelete(account?.type)
+    if (!undoable && !window.confirm('Delete this email?')) return
+
+    const { id, accountId, folder } = selectedEmail
     try {
-      await emailsApi.delete(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder)
-      removeEmail(selectedEmail.id)
-      showNotification('success', 'Email deleted')
+      await emailsApi.delete(accountId, id, folder)
+      removeEmail(id)
+      if (!undoable) {
+        showNotification('success', 'Email deleted')
+        return
+      }
+      showNotification('success', 'Email deleted', {
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              await emailsApi.untrash(accountId, id, folder || 'INBOX')
+              showNotification('success', 'Delete undone')
+              window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
+            } catch {
+              showNotification('error', 'Could not restore the message')
+            }
+          },
+        },
+        timeoutMs: 8000,
+      })
     } catch {
       showNotification('error', 'Failed to delete email')
     }
@@ -371,10 +349,30 @@ export function EmailViewer() {
 
   const handleArchive = async () => {
     if (!selectedEmail) return
+    const { id, accountId, folder } = selectedEmail
+    const archive = getArchiveFolder(accountId)
+    const origin = folder || 'INBOX'
+
     try {
-      await emailsApi.move(selectedEmail.accountId, selectedEmail.id, getArchiveFolder(selectedEmail.accountId), selectedEmail.folder)
-      removeEmail(selectedEmail.id)
-      showNotification('success', 'Archived')
+      await emailsApi.move(accountId, id, archive, origin)
+      removeEmail(id)
+      // An archive is a folder move, and a move reverses cleanly on every
+      // provider — so this undo works everywhere, unlike the one on delete.
+      showNotification('success', 'Archived', {
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              await emailsApi.move(accountId, id, origin, archive)
+              showNotification('success', 'Moved back to ' + origin)
+              window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
+            } catch {
+              showNotification('error', 'Could not move the message back')
+            }
+          },
+        },
+        timeoutMs: 8000,
+      })
     } catch {
       showNotification('error', 'Failed to archive email')
     }
@@ -548,13 +546,39 @@ export function EmailViewer() {
 
   const accountFolders = (currentAccountId ? folders[currentAccountId] : null) || []
   const movableFolders = accountFolders.filter(f => f.path !== currentFolder && f.path !== '__starred__')
-  const unsubscribeLink = extractUnsubscribeLink(body?.html, body?.text)
+  const unsubscribeLink = findUnsubscribeUrl(body?.html, body?.text, body?.listUnsubscribe)
 
-  const isPreviewable = (att: Attachment) => {
-    const type = (att.contentType || '').toLowerCase()
-    const name = (att.filename || '').toLowerCase()
-    return type.startsWith('image/') || type === 'application/pdf' || name.endsWith('.pdf')
-  }
+  // The reader frame is a separate document, so it cannot inherit the app's
+  // CSS variables — it has to be told which palette to paint.
+  const readerTheme: 'light' | 'dark' =
+    typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light'
+      ? 'light'
+      : 'dark'
+
+  // Tracking pixels are gone for good; remote images are merely held back. The
+  // notice has to say which, because only one of them "Show images" restores.
+  const blockedSummary = (() => {
+    if (!sanitized) return ''
+    const { images, pixels } = sanitized.blocked
+    const parts: string[] = []
+    if (pixels) parts.push(`${pixels} tracking pixel${pixels === 1 ? '' : 's'} removed`)
+    if (images) parts.push(`${images} remote image${images === 1 ? '' : 's'} blocked`)
+    if (!parts.length) return 'Some remote content was blocked for privacy.'
+    return `${parts.join(' · ')} for privacy.`
+  })()
+
+  // The server will only ever serve these types inline; everything else comes
+  // back as a download, so offering a preview for it would just be a broken
+  // button. Note this keys on the declared type and never on the filename —
+  // an attachment called "invoice.pdf" that declares text/html is not a PDF.
+  const PREVIEWABLE_TYPES = new Set([
+    'application/pdf', 'text/plain',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/avif',
+  ])
+  const attachmentType = (att: Attachment) =>
+    (att.contentType || '').toLowerCase().split(';')[0].trim()
+  const isPreviewable = (att: Attachment) => PREVIEWABLE_TYPES.has(attachmentType(att))
+  const isImage = (att: Attachment) => attachmentType(att).startsWith('image/')
 
   // Attachment bytes are no longer inlined in the message payload; each one is
   // streamed from its own endpoint, so preview and download are plain URLs.
@@ -797,7 +821,10 @@ export function EmailViewer() {
           <Avatar from={selectedEmail.from} size={36} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-4">
-              <span className="font-semibold text-ink text-[14px] truncate tracking-[-0.01em]">{selectedEmail.from}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-semibold text-ink text-[14px] truncate tracking-[-0.01em]">{selectedEmail.from}</span>
+                <SenderBadge authentication={body?.authentication} />
+              </div>
               <span className="text-[12px] text-ink-3 flex-shrink-0 tabular-nums">
                 {body?.date ? formatFullDate(body.date) : formatFullDate(selectedEmail.date)}
               </span>
@@ -810,10 +837,12 @@ export function EmailViewer() {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-7 py-6" onClick={() => { setShowMoveMenu(false); setShowSnoozeMenu(false); setShowMoreMenu(false) }}>
-        {sanitized?.blocked ? (
+        {sanitized && totalBlocked(sanitized.blocked) ? (
           <div className="mb-5 flex items-center justify-between gap-3 rounded-xl bg-accent/12 px-3.5 py-2.5 text-[12.5px] text-ink-2">
-            <span>{sanitized.blocked} remote image{sanitized.blocked === 1 ? '' : 's'} blocked for privacy.</span>
-            <button onClick={() => setShowRemoteImages(true)} className="font-semibold text-info hover:underline flex-shrink-0">Show images</button>
+            <span>{blockedSummary}</span>
+            {sanitized && sanitized.blocked.images > 0 && (
+              <button onClick={() => setShowRemoteImages(true)} className="font-semibold text-info hover:underline flex-shrink-0">Show images</button>
+            )}
           </div>
         ) : null}
         {conversationBodies.length > 0 && (
@@ -867,8 +896,14 @@ export function EmailViewer() {
           <div className="mb-5 text-xs text-danger ">{summaryError}</div>
         )}
 
+        {body?.calendarInvite && (
+          <div className="mb-5">
+            <InviteCard invite={body.calendarInvite} email={selectedEmail} />
+          </div>
+        )}
+
         {sanitizedHtml ? (
-          <div className="email-body" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
+          <ReaderFrame html={sanitizedHtml} theme={readerTheme} />
         ) : body?.text ? (
           <pre className="whitespace-pre-wrap font-sans text-[14px] text-ink leading-[1.65]">{body.text}</pre>
         ) : (
@@ -901,17 +936,24 @@ export function EmailViewer() {
                     >
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
                     </button>
-                    {(att.contentType === 'application/pdf' || att.contentType?.startsWith('text/')) && (
+                    {(attachmentType(att) === 'application/pdf' || attachmentType(att).startsWith('text/')) && (
                       <button onClick={() => summarizeAttachment(att, i)} className="text-ai text-[11px]">Summarize</button>
                     )}
                   </div>
                   {attachmentSummaries[i] && <div className="rounded-md bg-surface-2 p-3 text-xs whitespace-pre-wrap">{attachmentSummaries[i]}</div>}
                   {previewOpen[i] && isPreviewable(att) && (
                     <div className="border border-line rounded-md overflow-hidden bg-white w-full">
-                      {att.contentType?.toLowerCase().startsWith('image/') ? (
+                      {isImage(att) ? (
                         <img src={attachmentSrc(i, true)} alt={att.filename} className="w-full h-auto max-h-[80vh] object-contain" />
                       ) : (
-                        <iframe title={att.filename} src={attachmentSrc(i, true)} className="w-full h-[80vh]" />
+                        // Sandboxed: an attachment is sender-controlled content
+                        // and must never run with this origin's privileges.
+                        <iframe
+                          title={att.filename}
+                          src={attachmentSrc(i, true)}
+                          sandbox=""
+                          className="w-full h-[80vh]"
+                        />
                       )}
                     </div>
                   )}

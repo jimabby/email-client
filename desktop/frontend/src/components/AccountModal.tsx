@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useEmailStore } from '../store/emailStore'
+import { AwaySettings } from './AwaySettings'
 import { accountsApi, aiApi, emailsApi } from '../api/client'
 import type { Account, Alias, MailTemplate } from '../types/email'
 
-type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature' | 'productivity' | 'privacy'
+type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature' | 'productivity' | 'privacy' | 'away'
 
 const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHost: string; smtpPort: number }> = {
   'Gmail (App Password)': { imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 587 },
@@ -160,6 +161,7 @@ export function AccountModal() {
     { id: 'signature' as Tab, label: 'Signature', sub: 'Email footer' },
     { id: 'productivity' as Tab, label: 'Rules & Templates', sub: 'Automate mail' },
     { id: 'privacy' as Tab, label: 'Privacy & Appearance', sub: 'Tracking, theme' },
+    { id: 'away' as Tab, label: 'Away & Export', sub: 'Auto-reply, backup' },
   ]
 
   return (
@@ -190,7 +192,7 @@ export function AccountModal() {
               </button>
             ))}
             <div className="mt-2 mb-0.5 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em] px-2 py-1.5">Preferences</div>
-            {tabs.filter(t => ['ai','signature','productivity','privacy'].includes(t.id)).map(t => (
+            {tabs.filter(t => ['ai','signature','productivity','privacy','away'].includes(t.id)).map(t => (
               <button key={t.id} onClick={() => setTab(t.id)}
                 className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors
                   ${tab === t.id
@@ -354,6 +356,8 @@ export function AccountModal() {
               </div>
             </div>
           )}
+
+          {tab === 'away' && <AwaySettings />}
 
           {tab === 'signature' && (
             <div className="space-y-5">

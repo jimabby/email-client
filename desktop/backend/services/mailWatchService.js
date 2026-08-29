@@ -78,6 +78,11 @@ async function handleNewMail(accountId, meta = {}) {
       } catch (err) {
         console.warn('[watch] Rule run failed:', err.message);
       }
+      // Auto-replies go out through the same send queue as anything else, so a
+      // reply composed while the network is down is retried rather than lost.
+      try { require('./vacationService').respondTo(fresh, account); }
+      catch (err) { console.warn('[watch] Vacation responder failed:', err.message); }
+
       try { notifications.notifyNewMail(accountId, fresh); } catch { /* best effort */ }
     }
 
@@ -92,27 +97,39 @@ async function handleNewMail(accountId, meta = {}) {
 
 // ─── Unread counts ──────────────────────────────────────────────────────────
 
-let cachedCounts = { at: 0, byAccount: {} };
+// Keyed by the folder set, not just by time. refreshBadge() asks for INBOX
+// alone while the sidebar asks for every folder it shows; a time-only cache let
+// whichever ran first answer the other, so sidebar badges intermittently read
+// zero for every folder but the inbox.
+let cachedCounts = { at: 0, key: '', byAccount: {} };
+
+function countsKey(folders) {
+  return Array.from(new Set(folders)).sort().join(',');
+}
 
 /**
  * Unread/total per folder for every account. Cached briefly because the
  * sidebar asks for it often and each call hits the provider.
  */
 async function getUnreadCounts({ maxAgeMs = 20000, folders } = {}) {
-  if (Date.now() - cachedCounts.at < maxAgeMs) return cachedCounts.byAccount;
+  const requested = folders && folders.length ? folders : ['INBOX'];
+  const key = countsKey(requested);
+  if (cachedCounts.key === key && Date.now() - cachedCounts.at < maxAgeMs) {
+    return cachedCounts.byAccount;
+  }
 
   const byAccount = {};
   await Promise.all(store.getAccounts().map(async (account) => {
     try {
       const service = getService(account.type);
       if (!service.getUnreadCounts) { byAccount[account.id] = {}; return; }
-      byAccount[account.id] = await service.getUnreadCounts(account, folders || ['INBOX']);
+      byAccount[account.id] = await service.getUnreadCounts(account, requested);
     } catch {
       byAccount[account.id] = {};
     }
   }));
 
-  cachedCounts = { at: Date.now(), byAccount };
+  cachedCounts = { at: Date.now(), key, byAccount };
   return byAccount;
 }
 
@@ -127,7 +144,7 @@ async function refreshBadge() {
 }
 
 function invalidateCounts() {
-  cachedCounts = { at: 0, byAccount: {} };
+  cachedCounts = { at: 0, key: '', byAccount: {} };
 }
 
 // ─── Watchers ───────────────────────────────────────────────────────────────

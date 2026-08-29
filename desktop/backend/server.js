@@ -1,6 +1,7 @@
 require('dotenv').config();
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const apiAuth = require('./middleware/apiAuth');
@@ -52,6 +53,30 @@ app.use((req, res, next) => {
   next();
 });
 
+// Message bodies are sanitized before they reach the DOM, but a CSP is the
+// backstop for whatever gets past the sanitizer. Inline scripts run only with
+// the per-response nonce, so injected markup cannot execute even if it were to
+// survive DOMPurify. `img-src https:` is required because "Show images" loads
+// remote images by design; `style-src 'unsafe-inline'` because mail is built
+// out of inline style attributes.
+function contentSecurityPolicy(nonce) {
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}'`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "media-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    // The reader renders each message in a sandboxed srcdoc iframe.
+    "frame-src 'self' blob: data:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
+
 // A 30 MB body is only ever a compose with attachments. Webhook payloads are
 // tiny, and they are the unauthenticated surface, so they get their own tight
 // cap rather than inheriting the composer's.
@@ -72,6 +97,10 @@ app.use('/api', (req, res, next) => {
     '/auth/outlook/callback'
   ];
   if (publicPaths.includes(req.path) || req.path.startsWith('/webhooks/')) return next();
+  // A download ticket carries its own authority: single-use, two minutes, and
+  // bound to one attachment. It exists so the mobile app can hand a URL to the
+  // OS viewer without putting the master token in a browser's history.
+  if (req.path.startsWith('/emails/attachment-ticket/')) return next();
   return apiAuth(req, res, next);
 });
 
@@ -105,12 +134,17 @@ if (fs.existsSync(frontendDist)) {
       return res.status(404).json({ error: 'Not found' });
     }
     let html = fs.readFileSync(indexPath, 'utf8');
+    const nonce = crypto.randomBytes(16).toString('base64');
+    res.set('Content-Security-Policy', contentSecurityPolicy(nonce));
+    // The built page carries an inline theme-bootstrap script; both it and the
+    // token bootstrap below need the nonce to survive the policy above.
+    html = html.replace(/<script(?![^>]*src=)/g, `<script nonce="${nonce}"`);
     // This page is NOT behind apiAuth — it cannot be, since it is what
     // bootstraps the credential. So the token only ever goes to a caller on
     // this machine (the Electron window). Handing it to a remote visitor would
     // give anyone who can reach the port full access to every mailbox.
     if (process.env.API_TOKEN && isLoopback(req)) {
-      const bootstrap = `<script>window.__HERMES_TOKEN__=${JSON.stringify(process.env.API_TOKEN)}</script>`;
+      const bootstrap = `<script nonce="${nonce}">window.__HERMES_TOKEN__=${JSON.stringify(process.env.API_TOKEN)}</script>`;
       html = html.replace('</head>', `${bootstrap}</head>`);
     }
     res.type('html').send(html);

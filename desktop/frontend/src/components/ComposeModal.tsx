@@ -49,29 +49,66 @@ function ContactField({
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [activeIdx, setActiveIdx] = useState(-1)
   const ref = useRef<HTMLDivElement>(null)
+  const lookupRef = useRef<number | null>(null)
+  // Read inside the debounced callback to tell a stale response from a current
+  // one without making the timer depend on `value`.
+  const valueRef = useRef(value)
+  valueRef.current = value
+
+  useEffect(() => () => {
+    if (lookupRef.current) window.clearTimeout(lookupRef.current)
+  }, [])
+
+  // Locally remembered addresses answer instantly; the server's ranked address
+  // book — built from every indexed message, weighted by how often and how
+  // recently you have written to someone — arrives a moment later and is
+  // merged in. Typing never waits on the network.
+  const localMatches = (needle: string) => contacts
+    .filter(c => c.toLowerCase().includes(needle))
+    .sort((a, b) => {
+      const aPrefix = a.toLowerCase().startsWith(needle) ? 0 : 1
+      const bPrefix = b.toLowerCase().startsWith(needle) ? 0 : 1
+      return aPrefix - bPrefix // otherwise keep the store's recency order
+    })
 
   const handleChange = (v: string) => {
     onChange(v)
     // Only autocomplete the last token (after the last comma)
     const lastToken = v.split(',').pop()?.trim() || ''
-    if (lastToken.length >= 1) {
-      const needle = lastToken.toLowerCase()
-      const filtered = contacts
-        .filter(c => c.toLowerCase().includes(needle))
-        .sort((a, b) => {
-          const aLower = a.toLowerCase()
-          const bLower = b.toLowerCase()
-          const aPrefix = aLower.startsWith(needle) ? 0 : 1
-          const bPrefix = bLower.startsWith(needle) ? 0 : 1
-          if (aPrefix !== bPrefix) return aPrefix - bPrefix
-          return 0 // keep existing recency order from store
-        })
-        .slice(0, 6)
-      setSuggestions(filtered)
-      setActiveIdx(-1)
-    } else {
+
+    if (lastToken.length < 1) {
       setSuggestions([])
+      if (lookupRef.current) window.clearTimeout(lookupRef.current)
+      return
     }
+
+    const needle = lastToken.toLowerCase()
+    setSuggestions(localMatches(needle).slice(0, 6))
+    setActiveIdx(-1)
+
+    if (lookupRef.current) window.clearTimeout(lookupRef.current)
+    lookupRef.current = window.setTimeout(async () => {
+      try {
+        const found = await emailsApi.contacts(lastToken, { limit: 8 })
+        // The request may land after the user has typed on; only apply it if
+        // the field still ends with the token it was asked about.
+        const current = (valueRef.current.split(',').pop() || '').trim().toLowerCase()
+        if (current !== needle) return
+
+        const formatted = found.map(c => (c.name ? `${c.name} <${c.email}>` : c.email))
+        const merged: string[] = []
+        const seen = new Set<string>()
+        for (const entry of [...formatted, ...localMatches(needle)]) {
+          const key = (entry.match(/<([^>]+)>/)?.[1] || entry).toLowerCase()
+          if (seen.has(key)) continue
+          seen.add(key)
+          merged.push(entry)
+        }
+        setSuggestions(merged.slice(0, 8))
+      } catch {
+        // Keep whatever the local list already offered.
+      }
+    }, 140)
   }
 
   const selectSuggestion = (suggestion: string) => {
@@ -172,7 +209,7 @@ function RichToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
 export function ComposeModal() {
   const {
     composeData, accounts, closeCompose, showNotification,
-    aiProvider, aiConfigured, contacts, addContacts, getSignatureForAccount,
+    aiProvider, aiConfigured, contacts, addContacts, getSignatureFor,
     saveDraft, deleteDraft,
   } = useEmailStore()
 
@@ -247,7 +284,7 @@ export function ComposeModal() {
   // Build initial content: reply body stays as-is; new emails get signature
   const initialHtml = (() => {
     const base = composeData?.body || ''
-    const sig = getSignatureForAccount(accountId)
+    const sig = getSignatureFor(accountId, sendAs || null)
     if (!isReply && sig) {
       return base + `<p></p><p>--<br>${sig.replace(/\n/g, '<br>')}</p>`
     }

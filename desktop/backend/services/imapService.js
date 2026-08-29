@@ -2,6 +2,8 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const nodemailer = require('nodemailer');
 const MailComposer = require('nodemailer/lib/mail-composer');
+const calendar = require('./calendarService');
+const authResults = require('./authResultsService');
 
 // ─── IMAP Connection Pool ─────────────────────────────────────────────────────
 // One persistent connection per account. All operations are serialized through
@@ -127,12 +129,44 @@ function getTransporter(account) {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+// Gmail and Outlook both return a server-side snippet; IMAP has no equivalent,
+// so one is derived from the first couple of KB of the raw message. Without it
+// categorisation loses a whole signal on IMAP accounts and the search index
+// stores an empty preview.
+const SNIPPET_SOURCE_BYTES = 2048;
+const SNIPPET_CHARS = 200;
+
+function snippetFromSource(source) {
+  if (!source) return '';
+  const raw = source.toString('utf8');
+  // Headers end at the first blank line; everything after it is the body.
+  const split = raw.search(/\r?\n\r?\n/);
+  if (split === -1) return '';
+  let body = raw.slice(split).replace(/^\s+/, '');
+
+  // A base64 or quoted-printable body decodes to noise at this size — better an
+  // empty snippet than a screenful of encoded bytes.
+  if (/^[A-Za-z0-9+/=\r\n]{200,}$/.test(body.slice(0, 400))) return '';
+
+  body = body
+    .replace(/=\r?\n/g, '')          // quoted-printable soft line breaks
+    .replace(/=([0-9A-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return body.slice(0, SNIPPET_CHARS);
+}
+
 // Envelope → EmailSummary. Shared by list, search, and attachment search so
 // the three paths can't drift apart.
 function toSummary(account, msg, folder) {
   const envelope = msg.envelope || {};
   return {
     id: `${account.id}::${msg.uid}`,
+    snippet: snippetFromSource(msg.source),
     uid: msg.uid,
     from: envelope.from?.[0]
       ? `${envelope.from[0].name || ''} <${envelope.from[0].address}>`.trim()
@@ -158,28 +192,53 @@ async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = nu
     // Page by UID, not sequence number. Sequence numbers shift whenever mail
     // arrives or is expunged, so a sequence-based page token silently skips or
     // repeats messages while the user is scrolling.
-    const ceiling = pageToken ? parseInt(pageToken, 10) : (mailbox.uidNext ? mailbox.uidNext - 1 : '*');
-    if (pageToken && (!Number.isFinite(ceiling) || ceiling < 1)) {
+    let ceiling;
+    if (pageToken) {
+      ceiling = parseInt(pageToken, 10);
+    } else if (mailbox.uidNext) {
+      ceiling = mailbox.uidNext - 1;
+    } else {
+      // Not every server reports uidNext. Falling back to 0 here would report
+      // an empty mailbox, so find the top UID the expensive way — once, only
+      // for the first page, and only on servers that need it.
+      const all = await client.search({ all: true }, { uid: true });
+      ceiling = all?.length ? Math.max(...all) : 0;
+    }
+    if (!Number.isFinite(ceiling) || ceiling < 1) {
       return { emails: [], nextToken: null };
     }
 
-    // UID ranges are sparse, so ask for a generous window and keep the newest
-    // `limit` messages from it.
-    const range = ceiling === '*' ? '1:*' : `1:${ceiling}`;
-    const uids = await client.search({ uid: range }, { uid: true });
-    if (!uids || !uids.length) return { emails: [], nextToken: null };
-
-    uids.sort((a, b) => a - b);
-    const pageUids = uids.slice(-limit);
+    // Walk down from the ceiling in bounded windows. Listing every UID in the
+    // mailbox first (a `1:*` SEARCH) meant each "load more" on a 100k-message
+    // account pulled the entire UID set just to keep the last `limit` of it.
+    // UIDs are sparse, so the window widens until enough messages are found.
     const emails = [];
-    for await (const msg of client.fetch(pageUids, { envelope: true, uid: true, flags: true }, { uid: true })) {
-      emails.push(toSummary(account, msg, folder));
-    }
-    emails.sort((a, b) => b.uid - a.uid);
+    let cursor = ceiling;
+    let window = Math.max(limit * 2, 50);
 
-    const lowestUid = pageUids[0];
-    const hasMore = uids.length > pageUids.length;
-    return { emails, nextToken: hasMore && lowestUid > 1 ? String(lowestUid - 1) : null };
+    while (emails.length < limit && cursor >= 1) {
+      const low = Math.max(1, cursor - window + 1);
+      for await (const msg of client.fetch(
+        `${low}:${cursor}`,
+        { envelope: true, uid: true, flags: true, source: { maxLength: SNIPPET_SOURCE_BYTES } },
+        { uid: true },
+      )) {
+        emails.push(toSummary(account, msg, folder));
+      }
+      if (low === 1) { cursor = 0; break; }
+      cursor = low - 1;
+      // Empty stretches are common in a mailbox with lots of deletions.
+      window = Math.min(window * 2, 10000);
+    }
+
+    emails.sort((a, b) => b.uid - a.uid);
+    const page = emails.slice(0, limit);
+    if (!page.length) return { emails: [], nextToken: null };
+
+    // More to come only if we stopped short of UID 1.
+    const lowestUid = page[page.length - 1].uid;
+    const hasMore = lowestUid > 1;
+    return { emails: page, nextToken: hasMore ? String(lowestUid - 1) : null };
   });
 }
 
@@ -210,7 +269,7 @@ async function searchEmails(account, query, folder = 'INBOX', limit = 50) {
     if (!uids || uids.length === 0) return [];
     const recentUids = uids.slice(-limit);
     const emails = [];
-    for await (const msg of client.fetch(recentUids, { envelope: true, uid: true, flags: true }, { uid: true })) {
+    for await (const msg of client.fetch(recentUids, { envelope: true, uid: true, flags: true, source: { maxLength: SNIPPET_SOURCE_BYTES } }, { uid: true })) {
       emails.push(toSummary(account, msg, folder));
     }
     emails.sort((a, b) => b.uid - a.uid);
@@ -305,6 +364,13 @@ async function fetchEmailBody(account, uid, folder = 'INBOX') {
     if (!rawEmail) return null;
 
     const parsed = await simpleParser(rawEmail);
+
+    // mailparser exposes text/calendar both as an attachment and, for some
+    // messages, only as an alternative body part — check both.
+    const icsAttachment = (parsed.attachments || []).find(a => calendar.isCalendarPart(a));
+    let calendarText = icsAttachment?.content ? icsAttachment.content.toString('utf8') : '';
+    if (!calendarText && /BEGIN:VCALENDAR/i.test(parsed.text || '')) calendarText = parsed.text;
+
     return {
       uid,
       from: parsed.from?.text || '',
@@ -319,6 +385,11 @@ async function fetchEmailBody(account, uid, folder = 'INBOX') {
       references: Array.isArray(parsed.references)
         ? parsed.references.join(' ')
         : (parsed.references || ''),
+      authentication: authResults.summarize(
+        parsed.headers?.get('authentication-results'),
+        parsed.from?.text,
+      ),
+      calendarInvite: calendarText ? calendar.parseInvite(calendarText) : null,
       // Metadata only — bytes come from getAttachment on demand so a message
       // with large attachments doesn't have to be buffered through the API
       // just to display its text.
@@ -350,6 +421,17 @@ async function getAttachment(account, uid, folder = 'INBOX', index = 0) {
       contentType: att.contentType || 'application/octet-stream',
       content: att.content,
     };
+  });
+}
+
+// The complete RFC822 source, for mbox export.
+async function getRawMessage(account, uid, folder = 'INBOX') {
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(folder);
+    for await (const msg of client.fetch(String(uid), { source: true }, { uid: true })) {
+      return msg.source;
+    }
+    return null;
   });
 }
 
@@ -392,7 +474,7 @@ function resolveFrom(account, sendAs) {
   return { name: account.name || account.email, address: account.email };
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs }) {
+async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs, autoSubmitted }) {
   const transporter = getTransporter(account);
   // References for a reply = the original's References + its Message-ID.
   const replyRefs = [references, inReplyTo].filter(Boolean).join(' ');
@@ -403,6 +485,8 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
     to, cc, bcc, subject, text, html,
     inReplyTo: inReplyTo || undefined,
     references: replyRefs || undefined,
+    // RFC 3834 — see the Gmail builder for why this matters.
+    headers: autoSubmitted ? { 'Auto-Submitted': autoSubmitted } : undefined,
     attachments: (attachments || []).map(a => ({
       filename: a.filename,
       content: Buffer.from(a.content, 'base64'),
@@ -428,16 +512,23 @@ async function getThreadingInfo(account, uid, folder = 'INBOX') {
 }
 
 // Build a raw RFC822 message buffer from a draft for IMAP APPEND.
-function buildMime(account, { to, cc, bcc, subject, text, html, attachments }) {
+// Mirrors sendEmail: a draft saved from an alias, or as a reply, must come back
+// with the same From and the same threading headers it would have been sent
+// with — otherwise reopening it silently reverts to the account address and
+// detaches the reply from its thread.
+function buildMime(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs }) {
+  const replyRefs = [references, inReplyTo].filter(Boolean).join(' ');
   return new Promise((resolve, reject) => {
     const mail = new MailComposer({
-      from: `${account.name || account.email} <${account.email}>`,
+      from: resolveFrom(account, sendAs),
       to: to || undefined,
       cc: cc || undefined,
       bcc: bcc || undefined,
       subject: subject || '',
       text: text || undefined,
       html: html || undefined,
+      inReplyTo: inReplyTo || undefined,
+      references: replyRefs || undefined,
       attachments: (attachments || []).map(a => ({
         filename: a.filename,
         content: Buffer.from(a.content, 'base64'),
@@ -547,6 +638,7 @@ module.exports = {
   searchAttachments,
   fetchEmailBody,
   getAttachment,
+  getRawMessage,
   getUnreadCounts,
   getThreadingInfo,
   getFolders,

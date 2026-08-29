@@ -271,6 +271,7 @@ export function EmailList() {
     folders, showNotification,
     accounts, setCurrentAccount, setCurrentFolder, setActiveCategory,
     threadView, toggleThreadView,
+    unifiedView, unifiedTokens, setUnifiedTokens,
     snoozes, getArchiveFolder,
   } = useEmailStore()
 
@@ -343,6 +344,16 @@ export function EmailList() {
     setExpandedThreads({})
   }, [currentFolder, currentAccountId, searchResults, threadView])
 
+  // Entering the unified view (or changing folder while in it) reloads across
+  // every account. The per-account path is driven from the sidebar instead.
+  useEffect(() => {
+    if (!unifiedView) return
+    handleRefresh().catch(() => {})
+    // handleRefresh is intentionally omitted: it changes identity on every
+    // token update, which would make this loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unifiedView, currentFolder, accounts.length])
+
 
   useEffect(() => {
     setSavedSearches(readJson<SearchEntry[]>(SAVED_KEY, []))
@@ -373,15 +384,28 @@ export function EmailList() {
   }
 
   const handleRefresh = useCallback(async () => {
-    if (!currentAccountId || currentFolder === '__starred__' || currentFolder === '__snoozed__') return
+    if (currentFolder === '__starred__' || currentFolder === '__snoozed__') return
+    if (!unifiedView && !currentAccountId) return
     setLoadingEmails(true)
     try {
-      const { emails: fetched, nextToken: nt } = await emailsApi.list(currentAccountId, currentFolder)
-      setEmails(fetched)
-      setNextToken(nt)
+      if (unifiedView) {
+        const page = await emailsApi.unified(currentFolder, 50)
+        setEmails(page.emails)
+        setUnifiedTokens(page.nextTokens)
+        // One unreachable account must not blank the others, so the list still
+        // renders and the failure is reported rather than swallowed.
+        setNextToken(Object.keys(page.nextTokens).length ? 'unified' : null)
+        if (page.errors.length) {
+          showNotification('error', `${page.errors[0].email}: ${page.errors[0].error}`)
+        }
+      } else {
+        const { emails: fetched, nextToken: nt } = await emailsApi.list(currentAccountId!, currentFolder)
+        setEmails(fetched)
+        setNextToken(nt)
+      }
     } catch (err) { console.error(err) }
     finally { setLoadingEmails(false) }
-  }, [currentAccountId, currentFolder, setLoadingEmails, setEmails, setNextToken])
+  }, [currentAccountId, currentFolder, unifiedView, setLoadingEmails, setEmails, setNextToken, setUnifiedTokens, showNotification])
 
   useEffect(() => {
     return () => {
@@ -392,36 +416,58 @@ export function EmailList() {
     }
   }, [])
 
+  // One stream per account, not just the selected one. Watching only the
+  // current account meant mail arriving on any other account never refreshed
+  // anything — and in the unified view that is most of the mailbox.
   useEffect(() => {
-    if (!currentAccountId) return
+    if (!accounts.length) return
+
+    const scheduleRefresh = () => {
+      if (liveRefreshTimerRef.current) return
+      liveRefreshTimerRef.current = window.setTimeout(() => {
+        liveRefreshTimerRef.current = null
+        handleRefresh().catch(() => {})
+      }, 1200)
+    }
 
     // EventSource can't send an Authorization header, so the token rides along
     // as a query parameter (the backend accepts it for stream routes only).
-    const es = new EventSource(withToken(`/api/emails/stream/${currentAccountId}`))
-    es.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data)
-        if (msg.type !== 'new-mail') return
-        if (currentFolder !== 'INBOX') return
-        if (liveRefreshTimerRef.current) return
-
-        liveRefreshTimerRef.current = window.setTimeout(() => {
-          liveRefreshTimerRef.current = null
-          handleRefresh().catch(() => {})
-        }, 1200)
-      } catch {
-        // Ignore malformed SSE payloads.
+    const streams = accounts.map(account => {
+      const es = new EventSource(withToken(`/api/emails/stream/${account.id}`))
+      es.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data)
+          if (msg.type !== 'new-mail') return
+          // In the unified view every account is on screen; otherwise only the
+          // selected account's inbox is worth reloading for.
+          if (currentFolder !== 'INBOX') return
+          if (!unifiedView && msg.accountId !== currentAccountId) return
+          scheduleRefresh()
+        } catch {
+          // Ignore malformed SSE payloads.
+        }
       }
-    }
+      // The browser reconnects an EventSource on its own; nothing to do here
+      // beyond keeping the error off the console.
+      es.onerror = () => {}
+      return es
+    })
 
     return () => {
       if (liveRefreshTimerRef.current) {
         window.clearTimeout(liveRefreshTimerRef.current)
         liveRefreshTimerRef.current = null
       }
-      es.close()
+      streams.forEach(es => es.close())
     }
-  }, [currentAccountId, currentFolder, handleRefresh])
+  }, [accounts, currentAccountId, currentFolder, unifiedView, handleRefresh])
+
+  // An undo elsewhere in the app (archive, delete) needs the list to catch up.
+  useEffect(() => {
+    const onRefresh = () => { handleRefresh().catch(() => {}) }
+    window.addEventListener('hermes:refresh-list', onRefresh)
+    return () => window.removeEventListener('hermes:refresh-list', onRefresh)
+  }, [handleRefresh])
 
   const handleSearch = async (q: string, opts?: {
     accountId?: string | null
@@ -599,12 +645,20 @@ export function EmailList() {
   }
 
   const handleLoadMore = async () => {
-    if (!currentAccountId || !nextToken || isLoadingMore) return
+    if (!nextToken || isLoadingMore) return
     setLoadingMore(true)
     try {
-      const { emails: more, nextToken: nt } = await emailsApi.list(currentAccountId, currentFolder, 50, nextToken)
-      appendEmails(more)
-      setNextToken(nt)
+      if (unifiedView) {
+        const page = await emailsApi.unified(currentFolder, 50, unifiedTokens)
+        appendEmails(page.emails)
+        setUnifiedTokens(page.nextTokens)
+        setNextToken(Object.keys(page.nextTokens).length ? 'unified' : null)
+      } else {
+        if (!currentAccountId) return
+        const { emails: more, nextToken: nt } = await emailsApi.list(currentAccountId, currentFolder, 50, nextToken)
+        appendEmails(more)
+        setNextToken(nt)
+      }
     } catch (err) { console.error(err) }
     finally { setLoadingMore(false) }
   }
@@ -726,7 +780,7 @@ export function EmailList() {
     toggleEmailSelection(email.id)
   }
 
-  const showAccountLabel = searchAll && searchResults !== null
+  const showAccountLabel = unifiedView || (searchAll && searchResults !== null)
   const getPriorityLabel = (id: string) => (priorityMode ? priorityMap[id]?.label : undefined)
 
   // Determine which list to show.

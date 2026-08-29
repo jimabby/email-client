@@ -38,6 +38,11 @@ const STATIC_GET_PATHS = [
   ['/rules', '/rules'],
   ['/templates', '/templates'],
   ['/outbox', '/outbox'],
+  ['/contacts', '/contacts'],
+  ['/unified', '/unified'],
+  ['/vacation', '/vacation'],
+  ['/signatures', '/signatures'],
+  ['/export', '/export'],
 ];
 
 for (const [url, expected] of STATIC_GET_PATHS) {

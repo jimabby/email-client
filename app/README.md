@@ -32,8 +32,18 @@ For local development, the LAN URL still works when the backend is running, and
 - **Settings** - configure the backend URL and private API token
 - **Accounts** - list accounts stored by the cloud backend
 - **Inbox** - email list with pull-to-refresh, infinite scroll, and search
-- **Viewer** - full email (HTML rendered), star, delete, archive, and reply
-- **Compose** - new message, reply, and drafts
+- **Viewer** - full email, star, delete, archive, snooze, and reply
+- **Compose** - new message, reply, drafts, send later, and undo send
+
+## Privacy
+
+Remote images and tracking pixels are blocked until you tap **Show images**, so
+opening a message does not confirm your address to the sender. The rules come
+from `shared/emailPolicy.ts`, which the desktop client enforces too — the two
+readers cannot drift apart.
+
+Attachments open through a single-use link that expires in two minutes, so the
+API token never reaches the system browser's history.
 
 ## Stack
 

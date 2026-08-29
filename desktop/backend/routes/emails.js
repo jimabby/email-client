@@ -7,6 +7,11 @@ const { createQueuedSend, cancelQueuedSend, retryQueuedSend, listOutbox } = requ
 const { ensureWatch, subscribe, getUnreadCounts, invalidateCounts } = require('../services/mailWatchService');
 const searchIndex = require('../services/searchIndexService');
 const rulesService = require('../services/rulesService');
+const contactsService = require('../services/contactsService');
+const vacationService = require('../services/vacationService');
+const exportService = require('../services/exportService');
+const calendarService = require('../services/calendarService');
+const downloadTickets = require('../services/downloadTicketService');
 const { v4: uuidv4 } = require('uuid');
 
 function getService(accountType) {
@@ -39,6 +44,62 @@ function publicBody(body) {
     ...body,
     attachments: (body.attachments || []).map(({ attachmentId, inlineData, graphAttachmentId, ...rest }) => rest),
   };
+}
+
+// Types a browser renders without any chance of executing script. Anything
+// else — text/html, image/svg+xml, application/xhtml+xml — is forced to a
+// download, whatever the sender labelled it or named the file.
+const INLINE_SAFE_TYPES = new Set([
+  'application/pdf',
+  'text/plain',
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/avif',
+  'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/mp4',
+  'video/mp4', 'video/webm', 'video/ogg',
+]);
+
+/** @returns {string|null} the safe type to serve inline, or null to force download. */
+function safeInlineType(contentType) {
+  const base = String(contentType || '').split(';')[0].trim().toLowerCase();
+  return INLINE_SAFE_TYPES.has(base) ? base : null;
+}
+
+/**
+ * Write attachment bytes to the response.
+ *
+ * Both the authenticated route and the single-use ticket route go through here
+ * so the content-type allowlist and the sandbox headers can never drift apart
+ * between them — the ticket path is the one reachable without the API token,
+ * so it is the one that most needs them.
+ */
+function sendAttachment(res, attachment, index, wantsInlineRequested) {
+  const filename = String(attachment.filename || `attachment-${index}`).replace(/["\r\n]/g, '');
+  // The declared type comes from the sender. Serving it back verbatim with
+  // Content-Disposition: inline would let a message render attacker HTML on
+  // this origin — the same origin as the app, which holds the API token. Only
+  // types that cannot execute script are ever shown inline.
+  const declared = safeInlineType(attachment.contentType);
+  const wantsInline = wantsInlineRequested && declared !== null;
+  const disposition = wantsInline ? 'inline' : 'attachment';
+
+  res.setHeader('Content-Type', wantsInline ? declared : 'application/octet-stream');
+  res.setHeader('Content-Length', attachment.content.length);
+  res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  // Defence in depth: even for an allowlisted type, deny the response its own
+  // origin, scripts, and plugins, so a parser quirk cannot become execution.
+  res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; object-src 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Attachment bytes are private to this user; never let a proxy keep them.
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.send(attachment.content);
+}
+
+/** Pull one attachment's bytes, whichever provider the account uses. */
+async function loadAttachment(account, emailId, index, folder) {
+  const service = getService(account.type);
+  if (!service.getAttachment) throw new Error('Attachments are not supported for this account');
+  return account.type === 'imap'
+    ? service.getAttachment(account, imapUid(emailId), folder || 'INBOX', index)
+    : service.getAttachment(account, gmailOrOutlookId(emailId), index);
 }
 
 // ─── Static routes ──────────────────────────────────────────────────────────
@@ -298,6 +359,177 @@ router.post('/trigger-report', async (req, res) => {
   }
 });
 
+// ─── Contacts ───────────────────────────────────────────────────────────────
+// Derived from indexed mail rather than a synced address book — see
+// contactsService for why frequency plus recency is the right ranking.
+
+// GET /api/emails/contacts?q=al&limit=10&accountId=
+router.get('/contacts', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+  res.json(contactsService.search(req.query.q || '', {
+    limit,
+    accountId: req.query.accountId || null,
+  }));
+});
+
+// ─── Unified inbox ──────────────────────────────────────────────────────────
+
+// GET /api/emails/unified?folder=INBOX&limit=50
+// One date-ordered list across every account. Page tokens are per-account, so
+// the client sends back the whole map it received to continue.
+router.get('/unified', async (req, res) => {
+  const folder = req.query.folder || 'INBOX';
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+
+  let tokens = {};
+  if (req.query.pageTokens) {
+    try { tokens = JSON.parse(req.query.pageTokens) || {}; } catch { tokens = {}; }
+  }
+
+  const accounts = store.getAccounts();
+  if (!accounts.length) return res.json({ emails: [], nextTokens: {}, errors: [] });
+
+  const nextTokens = {};
+  const errors = [];
+
+  const pages = await Promise.all(accounts.map(async (account) => {
+    // An account that has already run out must not be asked again.
+    if (tokens[account.id] === null) return [];
+    try {
+      const service = getService(account.type);
+      const result = await service.fetchEmails(account, folder, limit, tokens[account.id] || null);
+      if (result?.nextToken) nextTokens[account.id] = result.nextToken;
+      searchIndex.indexSummaries(result?.emails || []);
+      return result?.emails || [];
+    } catch (err) {
+      errors.push({ accountId: account.id, email: account.email, error: err.message });
+      // A provider being down should not blank out the other accounts.
+      const cached = store.getEmailCache(`list:${account.id}:${folder}:`);
+      return cached ? (cached.value.emails || []) : [];
+    }
+  }));
+
+  const merged = pages.flat();
+  merged.sort((a, b) => {
+    const ta = Date.parse(a.date || '');
+    const tb = Date.parse(b.date || '');
+    return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta);
+  });
+
+  res.json({ emails: merged.slice(0, limit), nextTokens, errors });
+});
+
+// ─── Vacation auto-responder ────────────────────────────────────────────────
+
+router.get('/vacation', (req, res) => {
+  const config = vacationService.settings();
+  res.json({ ...config, active: vacationService.isActive() });
+});
+
+router.put('/vacation', (req, res) => {
+  const body = req.body || {};
+  const iso = (value) => {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
+
+  const saved = store.saveVacationSettings({
+    enabled: body.enabled === true,
+    subject: String(body.subject || 'Out of office').slice(0, 300),
+    message: String(body.message || '').slice(0, 20000),
+    startAt: iso(body.startAt),
+    endAt: iso(body.endAt),
+    accountIds: Array.isArray(body.accountIds) ? body.accountIds.slice(0, 20) : [],
+    knownContactsOnly: body.knownContactsOnly === true,
+    cooldownDays: Math.min(Math.max(Number(body.cooldownDays) || 4, 1), 30),
+  });
+
+  // Turning the responder on starts a fresh conversation with everyone; the
+  // old log would otherwise suppress replies left over from a past trip.
+  if (saved.enabled && body.resetLog !== false) store.clearAutoReplyLog();
+
+  const config = vacationService.settings();
+  res.json({ ...config, active: vacationService.isActive() });
+});
+
+// ─── Signatures ─────────────────────────────────────────────────────────────
+// Keyed by account id, and by `${accountId}:${aliasEmail}` for an alias, so
+// sending from a second identity signs with that identity.
+
+router.get('/signatures', (req, res) => res.json(store.getSignatures()));
+
+router.put('/signatures', (req, res) => {
+  const incoming = req.body?.signatures;
+  const out = {};
+  if (incoming && typeof incoming === 'object') {
+    for (const [key, value] of Object.entries(incoming).slice(0, 100)) {
+      out[String(key).slice(0, 200)] = String(value ?? '').slice(0, 20000);
+    }
+  }
+  res.json(store.saveSignatures(out));
+});
+
+// ─── Mailbox export ─────────────────────────────────────────────────────────
+
+// GET /api/emails/export?accountId=...&folder=INBOX&limit=5000
+// Streams the folder as mbox, the format every other mail client imports.
+router.get('/export', async (req, res) => {
+  const account = store.getAccount(req.query.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const folder = req.query.folder || 'INBOX';
+  const limit = Math.min(parseInt(req.query.limit) || 5000, 50000);
+  const filename = exportService.suggestFilename(account, folder);
+
+  res.setHeader('Content-Type', 'application/mbox');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  // The total size is unknown until the last message is written, so this has
+  // to be a chunked response rather than one with a Content-Length.
+  res.setHeader('Transfer-Encoding', 'chunked');
+
+  let aborted = false;
+  req.on('close', () => { aborted = true; });
+
+  try {
+    const result = await exportService.exportFolder(account, res, {
+      folder,
+      limit,
+      onProgress: () => { if (aborted) throw new Error('Client disconnected'); },
+    });
+    console.log(`[export] ${account.email}/${folder}: ${result.exported} exported, ${result.failed} skipped`);
+    res.end();
+  } catch (err) {
+    console.error('Export error:', err.message);
+    // Headers are long gone by this point, so the only honest signal left is
+    // an mbox comment at the tail and a truncated stream.
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+    else res.end(`\n\nX-Hermes-Export-Error: ${String(err.message).replace(/[\r\n]+/g, ' ')}\n`);
+  }
+});
+
+// GET /api/emails/attachment-ticket/:token
+// Redeem a download ticket. Reachable without the API token by design — the
+// ticket is the credential — so it is single-use, expires in two minutes, and
+// is bound to exactly one attachment.
+router.get('/attachment-ticket/:token', async (req, res) => {
+  const claim = downloadTickets.redeem(req.params.token);
+  // Unknown, expired, and already-spent are deliberately indistinguishable.
+  if (!claim) return res.status(404).json({ error: 'This download link has expired' });
+
+  const account = store.getAccount(claim.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  try {
+    const attachment = await loadAttachment(account, claim.emailId, claim.index, claim.folder);
+    sendAttachment(res, attachment, claim.index, true);
+  } catch (err) {
+    console.error('Ticketed attachment error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Per-account routes ─────────────────────────────────────────────────────
 
 // GET /api/emails/:accountId?folder=INBOX&limit=50&pageToken=...
@@ -457,25 +689,36 @@ router.get('/:accountId/message/:emailId/attachment/:index', async (req, res) =>
   if (!Number.isInteger(index) || index < 0) return res.status(400).json({ error: 'Invalid attachment index' });
 
   try {
-    const service = getService(account.type);
-    if (!service.getAttachment) return res.status(400).json({ error: 'Attachments are not supported for this account' });
-
-    const attachment = account.type === 'imap'
-      ? await service.getAttachment(account, imapUid(req.params.emailId), req.query.folder || 'INBOX', index)
-      : await service.getAttachment(account, gmailOrOutlookId(req.params.emailId), index);
-
-    const filename = String(attachment.filename || `attachment-${index}`).replace(/["\r\n]/g, '');
-    const disposition = req.query.inline === 'true' ? 'inline' : 'attachment';
-    res.setHeader('Content-Type', attachment.contentType || 'application/octet-stream');
-    res.setHeader('Content-Length', attachment.content.length);
-    res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
-    // Attachment bytes are private to this user; never let a proxy keep them.
-    res.setHeader('Cache-Control', 'private, no-store');
-    res.send(attachment.content);
+    const attachment = await loadAttachment(account, req.params.emailId, index, req.query.folder);
+    sendAttachment(res, attachment, index, req.query.inline === 'true');
   } catch (err) {
     console.error('Fetch attachment error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /api/emails/:accountId/message/:emailId/attachment/:index/ticket
+// Mint a single-use, two-minute URL for one attachment.
+//
+// The mobile app hands attachment URLs to the OS viewer, so the URL leaves the
+// app. It used to carry the master API token, which then sat in the system
+// browser's history — often synced across the user's devices. A ticket is
+// scoped to one file and worthless within minutes.
+router.post('/:accountId/message/:emailId/attachment/:index/ticket', (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const index = parseInt(req.params.index, 10);
+  if (!Number.isInteger(index) || index < 0) return res.status(400).json({ error: 'Invalid attachment index' });
+
+  const { token, expiresIn } = downloadTickets.issue({
+    accountId: account.id,
+    emailId: req.params.emailId,
+    index,
+    folder: req.query.folder || 'INBOX',
+  });
+
+  res.json({ url: `/api/emails/attachment-ticket/${token}`, expiresIn });
 });
 
 router.get('/:accountId/thread/:threadId', async (req, res) => {
@@ -583,7 +826,10 @@ router.post('/:accountId/drafts', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
-  const { to, cc, bcc, subject, text, html, attachments, replaceRef } = req.body;
+  const {
+    to, cc, bcc, subject, text, html, attachments, replaceRef,
+    inReplyTo, references, sendAs,
+  } = req.body;
   try {
     const service = getService(account.type);
     if (!service.saveDraft) return res.status(400).json({ error: 'Drafts are not supported for this account' });
@@ -593,7 +839,9 @@ router.post('/:accountId/drafts', async (req, res) => {
       try { await service.deleteDraft(account, replaceRef); } catch { /* ignore */ }
     }
 
-    const ref = await service.saveDraft(account, { to, cc, bcc, subject, text, html, attachments });
+    const ref = await service.saveDraft(account, {
+      to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs,
+    });
     res.json({ success: true, ref });
   } catch (err) {
     console.error('Save draft error:', err);
@@ -677,7 +925,36 @@ router.delete('/:accountId/message/:emailId', async (req, res) => {
   }
 });
 
-// POST /api/emails/:accountId/message/:emailId/read
+// POST /api/emails/:accountId/message/:emailId/untrash
+// Undo a delete. Body: { folder } — where to put it back (default INBOX).
+//
+// Gmail and Outlook both keep a message's id stable through the bin, so the
+// original can be restored exactly. IMAP does not: the message gets a new UID
+// in the Trash mailbox and the old one no longer addresses anything, so undo is
+// honestly unavailable there rather than silently doing nothing.
+router.post('/:accountId/message/:emailId/untrash', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const service = getService(account.type);
+  if (!service.untrashEmail) {
+    return res.status(400).json({ error: 'Undo is not available for IMAP accounts' });
+  }
+
+  try {
+    await service.untrashEmail(
+      account,
+      gmailOrOutlookId(req.params.emailId),
+      req.body?.folder || 'INBOX',
+    );
+    invalidateCounts();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/emails/:accountId/message/:emailId/read// POST /api/emails/:accountId/message/:emailId/read
 router.post('/:accountId/message/:emailId/read', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
@@ -845,18 +1122,96 @@ router.delete('/:accountId/message/:emailId/snooze', (req, res) => {
   res.json({ success: true });
 });
 
+// POST /api/emails/:accountId/message/:emailId/rsvp
+// Body: { response: 'accepted' | 'declined' | 'tentative', comment?: string }
+// Sends the organiser a METHOD:REPLY calendar part, which is what turns an
+// invitation into an accepted meeting in their calendar.
+router.post('/:accountId/message/:emailId/rsvp', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const choice = String(req.body?.response || '').toLowerCase();
+  const PARTSTAT = { accepted: 'ACCEPTED', declined: 'DECLINED', tentative: 'TENTATIVE' };
+  if (!PARTSTAT[choice]) {
+    return res.status(400).json({ error: 'response must be "accepted", "declined", or "tentative"' });
+  }
+
+  try {
+    const service = getService(account.type);
+    const emailId = req.params.emailId;
+    const body = account.type === 'imap'
+      ? await service.fetchEmailBody(account, imapUid(emailId), req.query.folder || 'INBOX')
+      : await service.fetchEmailBody(account, gmailOrOutlookId(emailId));
+
+    const invite = body?.calendarInvite;
+    if (!invite) return res.status(400).json({ error: 'This message contains no calendar invitation' });
+    if (!invite.organizer?.email) {
+      return res.status(400).json({ error: 'This invitation names no organiser to reply to' });
+    }
+
+    const ics = calendarService.buildReply(invite, account.email, PARTSTAT[choice]);
+    const verb = { accepted: 'Accepted', declined: 'Declined', tentative: 'Tentatively accepted' }[choice];
+
+    const queued = createQueuedSend({
+      accountId: account.id,
+      email: {
+        to: invite.organizer.email,
+        subject: `${verb}: ${invite.summary || '(no subject)'}`,
+        text: req.body?.comment
+          ? String(req.body.comment).slice(0, 5000)
+          : `${verb} the invitation "${invite.summary || '(no subject)'}".`,
+        attachments: [{
+          filename: 'invite.ics',
+          contentType: 'text/calendar; method=REPLY; charset=utf-8',
+          content: Buffer.from(ics, 'utf8').toString('base64'),
+        }],
+        inReplyTo: body.messageId || undefined,
+      },
+      undoWindowSec: 0,
+    });
+
+    res.json({ success: true, response: choice, jobId: queued.id });
+  } catch (err) {
+    console.error('RSVP error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Bulk actions ───────────────────────────────────────────────────────────
 
-async function runBulk(emailIds, worker) {
-  const results = { succeeded: 0, failed: 0, errors: [] };
-  const settled = await Promise.allSettled(emailIds.map(worker));
-  for (const outcome of settled) {
-    if (outcome.status === 'fulfilled') results.succeeded++;
-    else {
-      results.failed++;
-      if (results.errors.length < 5) results.errors.push(String(outcome.reason?.message || outcome.reason));
-    }
+// A select-all can hand us thousands of ids. Firing them at a provider all at
+// once earns a 429 and a temporary ban, and on IMAP they queue behind a single
+// connection anyway — so the parallelism bought nothing and just held the
+// request open. Bounded batch, bounded concurrency.
+const BULK_MAX_IDS = 500;
+const BULK_CONCURRENCY = { imap: 1, gmail: 8, outlook: 8 };
+
+async function runBulk(emailIds, worker, accountType = 'imap') {
+  const results = { succeeded: 0, failed: 0, errors: [], skipped: 0 };
+
+  let ids = emailIds;
+  if (ids.length > BULK_MAX_IDS) {
+    results.skipped = ids.length - BULK_MAX_IDS;
+    ids = ids.slice(0, BULK_MAX_IDS);
   }
+
+  const limit = BULK_CONCURRENCY[accountType] || 4;
+  let cursor = 0;
+
+  const runOne = async (emailId) => {
+    try {
+      await worker(emailId);
+      results.succeeded++;
+    } catch (err) {
+      results.failed++;
+      if (results.errors.length < 5) results.errors.push(String(err?.message || err));
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(limit, ids.length) }, async () => {
+    while (cursor < ids.length) await runOne(ids[cursor++]);
+  }));
+
   return results;
 }
 
@@ -875,10 +1230,10 @@ router.post('/:accountId/bulk/delete', async (req, res) => {
     if (account.type === 'imap') await service.deleteEmail(account, imapUid(emailId), folder);
     else await service.deleteEmail(account, gmailOrOutlookId(emailId));
     searchIndex.remove(emailId);
-  });
+  }, account.type);
 
   invalidateCounts();
-  res.json({ success: results.failed === 0, ...results });
+  res.json({ success: results.failed === 0 && !results.skipped, ...results });
 });
 
 // POST /api/emails/:accountId/bulk/read
@@ -897,10 +1252,10 @@ router.post('/:accountId/bulk/read', async (req, res) => {
     if (account.type === 'imap') await service.markAsRead(account, imapUid(emailId), folder);
     else await service.markAsRead(account, gmailOrOutlookId(emailId));
     searchIndex.setFlags(emailId, { read: true });
-  });
+  }, account.type);
 
   invalidateCounts();
-  res.json({ success: results.failed === 0, ...results });
+  res.json({ success: results.failed === 0 && !results.skipped, ...results });
 });
 
 // POST /api/emails/:accountId/bulk/unread
@@ -918,10 +1273,10 @@ router.post('/:accountId/bulk/unread', async (req, res) => {
     if (account.type === 'imap') await service.markAsUnread(account, imapUid(emailId), folder);
     else await service.markAsUnread(account, gmailOrOutlookId(emailId));
     searchIndex.setFlags(emailId, { read: false });
-  });
+  }, account.type);
 
   invalidateCounts();
-  res.json({ success: results.failed === 0, ...results });
+  res.json({ success: results.failed === 0 && !results.skipped, ...results });
 });
 
 // POST /api/emails/:accountId/bulk/move
@@ -941,10 +1296,10 @@ router.post('/:accountId/bulk/move', async (req, res) => {
     else if (account.type === 'gmail') await service.moveEmail(account, gmailOrOutlookId(emailId), sourceFolder, toFolder);
     else await service.moveEmail(account, gmailOrOutlookId(emailId), toFolder);
     searchIndex.remove(emailId);
-  });
+  }, account.type);
 
   invalidateCounts();
-  res.json({ success: results.failed === 0, ...results });
+  res.json({ success: results.failed === 0 && !results.skipped, ...results });
 });
 
 module.exports = router;

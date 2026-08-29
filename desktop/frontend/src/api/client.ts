@@ -2,6 +2,7 @@ import axios from 'axios'
 import type {
   Account, EmailSummary, EmailBody, Folder, SnoozeItem, ServerDraftRef,
   MailRule, MailTemplate, Alias, OutboxItem, UnreadCounts,
+  Contact, VacationSettings, SignatureMap, UnifiedPage,
 } from '../types/email'
 
 // When the backend runs with an API_TOKEN it injects the value into the served
@@ -11,8 +12,51 @@ declare global {
   interface Window { __HERMES_TOKEN__?: string }
 }
 
-export const apiToken = (): string | undefined =>
-  typeof window !== 'undefined' ? window.__HERMES_TOKEN__ : undefined
+// The bootstrap only fires for a caller on the server's own machine, which is
+// correct — handing the token to a remote visitor would defeat the point. But
+// it left the deployed web UI with no way to authenticate at all: it served a
+// complete app that 401'd on every request. A token entered by hand covers
+// that case, and lives in sessionStorage so it is gone when the tab closes.
+const SESSION_TOKEN_KEY = 'hermes-api-token'
+
+function storedToken(): string | undefined {
+  try {
+    return sessionStorage.getItem(SESSION_TOKEN_KEY) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+export const apiToken = (): string | undefined => {
+  if (typeof window === 'undefined') return undefined
+  return window.__HERMES_TOKEN__ || storedToken()
+}
+
+export function setApiToken(token: string | null) {
+  try {
+    if (token) sessionStorage.setItem(SESSION_TOKEN_KEY, token)
+    else sessionStorage.removeItem(SESSION_TOKEN_KEY)
+  } catch { /* private mode — the token simply won't persist across reloads */ }
+}
+
+/** True when the backend requires a token that we do not have. */
+export const needsToken = (): boolean => !apiToken()
+
+type UnauthorizedHandler = () => void
+let onUnauthorized: UnauthorizedHandler | null = null
+
+/** Registered by AuthGate so a 401 anywhere re-prompts rather than failing mutely. */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null) {
+  onUnauthorized = handler
+}
+
+/** Verify a candidate token before storing it. */
+export async function verifyToken(token: string): Promise<boolean> {
+  const res = await fetch('/api/auth-check', {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return res.ok
+}
 
 export function authHeaders(): Record<string, string> {
   const token = apiToken()
@@ -43,6 +87,10 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   response => response,
   error => {
+    if (error?.response?.status === 401) {
+      setApiToken(null)
+      onUnauthorized?.()
+    }
     const message = error?.response?.data?.error
     if (message) error.message = message
     return Promise.reject(error)
@@ -126,6 +174,53 @@ export const emailsApi = {
       params: folder ? { folder } : {},
       responseType: 'arraybuffer',
     }).then(r => r.data),
+
+  /** One date-ordered list across every account. */
+  unified: (folder = 'INBOX', limit = 50, pageTokens?: Record<string, string>) =>
+    api.get<UnifiedPage>('/emails/unified', {
+      params: {
+        folder, limit,
+        ...(pageTokens && Object.keys(pageTokens).length
+          ? { pageTokens: JSON.stringify(pageTokens) }
+          : {}),
+      },
+    }).then(r => r.data),
+
+  /** Autocomplete over people the user actually corresponds with. */
+  contacts: (q: string, opts: { limit?: number; accountId?: string | null } = {}) =>
+    api.get<Contact[]>('/emails/contacts', {
+      params: { q, limit: opts.limit ?? 10, accountId: opts.accountId || undefined },
+    }).then(r => r.data),
+
+  /** Respond to a meeting invitation. */
+  /** Undo a delete. Unavailable on IMAP, where the message gets a new UID. */
+  untrash: (accountId: string, emailId: string, folder = 'INBOX') =>
+    api.post(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/untrash`, { folder })
+      .then(r => r.data),
+
+  rsvp: (accountId: string, emailId: string, response: 'accepted' | 'declined' | 'tentative', folder?: string) =>
+    api.post<{ success: boolean; jobId: string }>(
+      `/emails/${accountId}/message/${encodeURIComponent(emailId)}/rsvp`,
+      { response },
+      { params: folder ? { folder } : {} },
+    ).then(r => r.data),
+
+  getVacation: () => api.get<VacationSettings>('/emails/vacation').then(r => r.data),
+  saveVacation: (settings: Partial<VacationSettings>) =>
+    api.put<VacationSettings>('/emails/vacation', settings).then(r => r.data),
+
+  getSignatures: () => api.get<SignatureMap>('/emails/signatures').then(r => r.data),
+  saveSignatures: (signatures: SignatureMap) =>
+    api.put<SignatureMap>('/emails/signatures', { signatures }).then(r => r.data),
+
+  /**
+   * URL for an mbox export. The response is a large streamed download, so it
+   * is handed to the browser rather than pulled through axios.
+   */
+  exportUrl: (accountId: string, folder: string, limit = 5000) => {
+    const params = new URLSearchParams({ accountId, folder, limit: String(limit) })
+    return withToken(`/api/emails/export?${params.toString()}`)
+  },
 
   getFolders: (accountId: string) =>
     api.get<Folder[]>(`/emails/${accountId}/folders`).then(r => r.data),

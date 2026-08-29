@@ -30,14 +30,40 @@ export default function ComposeScreen({ navigation, route }: Props) {
   const bodyHtml = () => `<p>${text.replace(/\n/g, '<br>')}</p>`;
   const isEmpty = () => !to.trim() && !cc.trim() && !bcc.trim() && !subject.trim() && !text.trim();
 
-  const send = async () => {
+  // The desktop holds a message briefly before it goes, so a misdirected reply
+  // can still be caught. The server has always accepted the same parameters;
+  // the phone simply never sent them.
+  const UNDO_WINDOW_SEC = 10;
+
+  const scheduleChoices = () => {
+    const now = new Date();
+    const at = (base: Date, hour: number) => {
+      const d = new Date(base);
+      d.setHours(hour, 0, 0, 0);
+      return d;
+    };
+    const tomorrow = at(new Date(now.getTime() + 86400000), 8);
+    const nextWeek = (() => {
+      const d = at(now, 8);
+      const add = ((1 - d.getDay()) + 7) % 7 || 7;
+      d.setDate(d.getDate() + add);
+      return d;
+    })();
+    return [
+      { label: 'In 1 hour', at: new Date(now.getTime() + 3600 * 1000) },
+      { label: 'Tomorrow morning', at: tomorrow },
+      { label: 'Monday morning', at: nextWeek },
+    ];
+  };
+
+  const dispatch = async (sendAt?: Date) => {
     if (!to.trim() || !subject.trim()) {
       Alert.alert('Missing fields', 'Please fill in the recipient and subject.');
       return;
     }
     setSending(true);
     try {
-      await api.send(account.id, {
+      const result = await api.send(account.id, {
         to: to.trim(),
         cc: cc.trim() || undefined,
         bcc: bcc.trim() || undefined,
@@ -46,8 +72,27 @@ export default function ComposeScreen({ navigation, route }: Props) {
         html: bodyHtml(),
         replyToEmailId: replyTo?.id,
         replyToFolder: replyTo?.folder,
+        sendAt: sendAt?.toISOString(),
+        undoWindowSec: sendAt ? 0 : UNDO_WINDOW_SEC,
       });
-      Alert.alert('Sent', 'Your email was sent.', [
+
+      const when = sendAt
+        ? `Scheduled for ${sendAt.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}.`
+        : `Sending in ${UNDO_WINDOW_SEC} seconds.`;
+
+      Alert.alert('Queued', when, [
+        {
+          text: 'Undo',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.cancelSend(account.id, result.jobId);
+              Alert.alert('Recalled', 'The message was not sent. It is still in your outbox.');
+            } catch (err) {
+              Alert.alert('Too late', errorMessage(err));
+            }
+          },
+        },
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch (err) {
@@ -55,6 +100,18 @@ export default function ComposeScreen({ navigation, route }: Props) {
     } finally {
       setSending(false);
     }
+  };
+
+  const send = () => dispatch();
+
+  const sendLater = () => {
+    Alert.alert('Send later', undefined, [
+      ...scheduleChoices().map((choice) => ({
+        text: `${choice.label} · ${choice.at.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`,
+        onPress: () => dispatch(choice.at),
+      })),
+      { text: 'Cancel', style: 'cancel' as const },
+    ]);
   };
 
   const saveDraft = async () => {
@@ -86,9 +143,14 @@ export default function ComposeScreen({ navigation, route }: Props) {
         sending ? (
           <ActivityIndicator color={theme.accent} />
         ) : (
-          <TouchableOpacity onPress={send}>
-            <Text style={styles.sendBtn}>Send</Text>
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity onPress={sendLater} hitSlop={8}>
+              <Text style={styles.laterBtn}>Later</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={send} hitSlop={8}>
+              <Text style={styles.sendBtn}>Send</Text>
+            </TouchableOpacity>
+          </View>
         ),
     });
   }, [navigation, to, cc, bcc, subject, text, sending]);
@@ -192,6 +254,8 @@ export default function ComposeScreen({ navigation, route }: Props) {
 
 const styles = StyleSheet.create({
   container: ui.screen,
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  laterBtn: { ...ui.headerAction, color: theme.textMuted },
   sendBtn: ui.headerAction,
   fieldRow: {
     flexDirection: 'row',

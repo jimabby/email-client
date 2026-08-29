@@ -63,9 +63,94 @@ export interface EmailBody {
   messageId?: string;
   references?: string;
   threadId?: string | null;
+  /** Raw List-Unsubscribe header, when the sender provides one. */
+  listUnsubscribe?: string;
+  /** Provider verdict on SPF/DKIM/DMARC — see SenderBadge. */
+  authentication?: SenderAuthentication | null;
+  /** Parsed meeting invitation, when the message carries one. */
+  calendarInvite?: CalendarInvite | null;
   /** Set when served from the offline cache. */
   offline?: boolean;
   cachedAt?: string;
+}
+
+/** The receiving provider's sender-authentication result. */
+export interface SenderAuthentication {
+  status: 'pass' | 'partial' | 'fail' | 'unknown';
+  label: string;
+  detail: string;
+  spf: string | null;
+  dkim: string | null;
+  dmarc: string | null;
+  /** The domain the signature actually authenticated. */
+  alignedDomain: string | null;
+}
+
+export interface InviteTime {
+  /** ISO timestamp, or a bare YYYY-MM-DD for an all-day event. */
+  iso: string;
+  allDay: boolean;
+  /** True when the time carries no zone and must not be converted. */
+  floating: boolean;
+  tzid: string | null;
+}
+
+export interface InviteAttendee {
+  email: string;
+  name: string;
+  status: string;
+  role: string;
+  optional: boolean;
+}
+
+export interface CalendarInvite {
+  method: string;
+  uid: string;
+  sequence: number;
+  summary: string;
+  description: string;
+  location: string;
+  url: string;
+  status: string;
+  organizer: { email: string; name: string } | null;
+  attendees: InviteAttendee[];
+  start: InviteTime | null;
+  end: InviteTime | null;
+  recurrence: { text: string; raw: string } | null;
+}
+
+/** One correspondent, derived from indexed mail rather than an address book. */
+export interface Contact {
+  name: string;
+  email: string;
+  count: number;
+  lastSeen: string | null;
+}
+
+export interface VacationSettings {
+  enabled: boolean;
+  subject: string;
+  message: string;
+  startAt: string | null;
+  endAt: string | null;
+  accountIds: string[];
+  knownContactsOnly: boolean;
+  cooldownDays: number;
+  /** Server-computed: enabled AND inside the scheduled window. */
+  active?: boolean;
+}
+
+/**
+ * Signatures keyed by account id, and by `${accountId}:${aliasEmail}` for an
+ * alias, so sending from a second identity signs with that identity.
+ */
+export type SignatureMap = Record<string, string>;
+
+export interface UnifiedPage {
+  emails: EmailSummary[];
+  /** Per-account continuation tokens; send the whole map back to page on. */
+  nextTokens: Record<string, string>;
+  errors: Array<{ accountId: string; email: string; error: string }>;
 }
 
 export interface Folder {

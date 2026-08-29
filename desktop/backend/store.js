@@ -16,18 +16,14 @@ const CACHE_FILE = path.join(DATA_DIR, 'email-cache.json');
 // the file holding credentials.
 const CATEGORIES_FILE = path.join(DATA_DIR, 'categories.json');
 
-// On first launch of a packaged app the user-data dir won't have accounts.json yet.
-// If there's a bundled seed file next to this module, copy it over once.
+// A fresh install has no accounts to seed, so nothing is ever copied in from
+// the bundle. An earlier version seeded from a developer's own accounts.json
+// sitting next to this module, which meant real credentials rode along inside
+// the installer — the data directory is created empty instead.
 function ensureDataDir() {
   try {
     if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(STORE_FILE)) {
-      const bundled = path.join(__dirname, 'accounts.json');
-      if (fs.existsSync(bundled)) {
-        fs.copyFileSync(bundled, STORE_FILE);
-      }
+      fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
     }
   } catch (e) {
     console.error('Failed to initialise data directory:', e.message);
@@ -367,6 +363,58 @@ module.exports = {
     const before = store.snoozes.length;
     store.snoozes = store.snoozes.filter(s => validIds.has(s.accountId));
     if (store.snoozes.length !== before) saveStore();
+  },
+
+  // ─── Vacation auto-responder ──────────────────────────────────────────────
+  // Settings plus a log of who has already been auto-replied to, so a busy
+  // correspondent gets one out-of-office rather than one per message.
+  getVacationSettings() {
+    return store.vacation || { enabled: false };
+  },
+
+  saveVacationSettings(settings) {
+    store.vacation = settings;
+    saveStore();
+    return store.vacation;
+  },
+
+  /** ISO timestamp of the last auto-reply sent to `email`, or null. */
+  lastAutoReplyTo(email) {
+    const key = String(email || '').toLowerCase();
+    return store.autoReplies?.[key] || null;
+  },
+
+  recordAutoReply(email) {
+    if (!store.autoReplies) store.autoReplies = {};
+    const key = String(email || '').toLowerCase();
+    store.autoReplies[key] = new Date().toISOString();
+
+    // Bound the log. Oldest entries go first, which is also the least useful
+    // half — a sender not written to in months should get a fresh reply anyway.
+    const keys = Object.keys(store.autoReplies);
+    if (keys.length > 2000) {
+      const sorted = keys.sort((a, b) => String(store.autoReplies[a]).localeCompare(String(store.autoReplies[b])));
+      for (const stale of sorted.slice(0, keys.length - 2000)) delete store.autoReplies[stale];
+    }
+    saveStore();
+  },
+
+  clearAutoReplyLog() {
+    store.autoReplies = {};
+    saveStore();
+  },
+
+  // ─── Per-account signatures ───────────────────────────────────────────────
+  // Keyed by account id, and by `${accountId}:${aliasEmail}` for an alias, so
+  // sending from a second identity signs with that identity's signature.
+  getSignatures() {
+    return store.signatures || {};
+  },
+
+  saveSignatures(signatures) {
+    store.signatures = signatures && typeof signatures === 'object' ? signatures : {};
+    saveStore();
+    return store.signatures;
   },
 
   // Limit categories cache to prevent unbounded growth

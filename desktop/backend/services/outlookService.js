@@ -1,4 +1,6 @@
 const { ConfidentialClientApplication } = require('@azure/msal-node');
+const calendar = require('./calendarService');
+const authResults = require('./authResultsService');
 
 const SCOPES = ['https://graph.microsoft.com/Mail.ReadWrite', 'https://graph.microsoft.com/Mail.Send', 'https://graph.microsoft.com/User.Read'];
 const REDIRECT_URI = process.env.OUTLOOK_REDIRECT_URI || 'http://localhost:3001/api/auth/outlook/callback';
@@ -213,9 +215,27 @@ async function fetchEmailBody(account, outlookId) {
   // $select on the attachments collection keeps contentBytes out of the
   // response — the bytes are fetched on demand by getAttachment instead.
   const [msg, attData] = await Promise.all([
-    graphRequestWithRefresh(account, `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body,hasAttachments,internetMessageId`),
+    // internetMessageHeaders carries Authentication-Results; Graph omits it
+    // unless it is asked for by name.
+    graphRequestWithRefresh(account, `/me/messages/${outlookId}?$select=id,from,toRecipients,ccRecipients,subject,receivedDateTime,body,hasAttachments,internetMessageId,internetMessageHeaders`),
     graphRequestWithRefresh(account, `/me/messages/${outlookId}/attachments?$select=id,name,contentType,size`).catch(() => ({ value: [] })),
   ]);
+
+  const header = (name) => (msg.internetMessageHeaders || [])
+    .find(h => String(h.name || '').toLowerCase() === name)?.value || '';
+
+  // Graph will not hand back an .ics body through the metadata $select, so the
+  // one calendar attachment (if any) is fetched in full.
+  let calendarText = '';
+  const icsMeta = (attData?.value || []).find(a => calendar.isCalendarPart({
+    contentType: a.contentType, filename: a.name,
+  }));
+  if (icsMeta?.id) {
+    try {
+      const full = await graphRequestWithRefresh(account, `/me/messages/${outlookId}/attachments/${icsMeta.id}`);
+      if (full?.contentBytes) calendarText = Buffer.from(full.contentBytes, 'base64').toString('utf8');
+    } catch { /* an unreadable invite is still a readable message */ }
+  }
 
   const attachments = (attData?.value || [])
     .filter(a => !a['@odata.type'] || a['@odata.type'] === '#microsoft.graph.fileAttachment')
@@ -244,6 +264,11 @@ async function fetchEmailBody(account, outlookId) {
     // RFC 822 Message-ID — used by other providers' reply headers. Outlook
     // replies themselves thread via the Graph createReply endpoint instead.
     messageId: msg.internetMessageId || '',
+    authentication: authResults.summarize(
+      header('authentication-results'),
+      msg.from?.emailAddress?.address,
+    ),
+    calendarInvite: calendarText ? calendar.parseInvite(calendarText) : null,
   };
 }
 
@@ -264,6 +289,24 @@ async function getAttachment(account, outlookId, index) {
     contentType: att.contentType,
     content: Buffer.from(full.contentBytes, 'base64'),
   };
+}
+
+// Undo a delete. Graph keeps the message id stable across folders, so the
+// message can simply be moved back out of Deleted Items.
+async function untrashEmail(account, outlookId, toFolder = 'INBOX') {
+  const destinationId = FOLDER_MAP[toFolder] || toFolder;
+  await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId });
+}
+
+// The complete RFC822 source, for mbox export. Graph exposes it at /$value,
+// which returns raw bytes rather than JSON — so it bypasses graphRequest.
+async function getRawMessage(account, outlookId) {
+  const accessToken = await refreshAccessToken(account);
+  const res = await fetch(`${GRAPH_ROOT}/me/messages/${outlookId}/$value`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) return null;
+  return Buffer.from(await res.arrayBuffer());
 }
 
 async function deleteEmail(account, outlookId) {
@@ -415,6 +458,7 @@ module.exports = {
   getFolders,
   getUnreadCounts,
   getAttachment,
+  getRawMessage,
   createFolder,
   renameFolder,
   reportSpam,
@@ -427,4 +471,5 @@ module.exports = {
   toggleStar,
   moveEmail,
   deleteEmail,
+  untrashEmail,
 };

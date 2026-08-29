@@ -10,12 +10,13 @@ const store = require('../store');
 // same process, which matters more here than the last 20% of query features.
 //
 // Documents hold headers plus body text; the postings map is rebuilt from the
-// documents on load (fast enough for the ~50k documents we cap at) so only one
-// file has to stay consistent on disk.
+// documents on load (fast enough at the default 50k-document cap, which
+// HERMES_SEARCH_MAX_DOCS can raise) so only one file has to stay consistent
+// on disk.
 
 const DATA_DIR = process.env.HERMES_DATA_DIR || path.join(__dirname, '..');
 const INDEX_FILE = path.join(DATA_DIR, 'search-index.json');
-const MAX_DOCS = 50000;
+const MAX_DOCS = Number(process.env.HERMES_SEARCH_MAX_DOCS) || 50000;
 const MAX_BODY_CHARS = 20000;
 
 /** @type {Map<string, object>} emailId -> document */
@@ -72,10 +73,16 @@ function docTokens(doc) {
   return out;
 }
 
+// A sorted copy of the vocabulary, rebuilt lazily. Prefix search used to walk
+// every entry in `postings` for each term that missed — at the document cap
+// that is a map of hundreds of thousands of tokens, traversed on every
+// keystroke. Sorting once per vocabulary change turns it into a binary search.
+let sortedTokens = null;
+
 function addPostings(doc) {
   for (const token of docTokens(doc)) {
     let set = postings.get(token);
-    if (!set) { set = new Set(); postings.set(token, set); }
+    if (!set) { set = new Set(); postings.set(token, set); sortedTokens = null; }
     set.add(doc.id);
   }
 }
@@ -85,8 +92,35 @@ function removePostings(doc) {
     const set = postings.get(token);
     if (!set) continue;
     set.delete(doc.id);
-    if (!set.size) postings.delete(token);
+    if (!set.size) { postings.delete(token); sortedTokens = null; }
   }
+}
+
+function vocabulary() {
+  if (!sortedTokens) sortedTokens = Array.from(postings.keys()).sort();
+  return sortedTokens;
+}
+
+/** Index of the first token >= prefix, or vocab.length. */
+function lowerBound(vocab, prefix) {
+  let lo = 0;
+  let hi = vocab.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (vocab[mid] < prefix) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function tokensWithPrefix(prefix) {
+  const vocab = vocabulary();
+  const out = [];
+  for (let i = lowerBound(vocab, prefix); i < vocab.length; i++) {
+    if (!vocab[i].startsWith(prefix)) break;
+    out.push(vocab[i]);
+  }
+  return out;
 }
 
 // ─── Persistence ────────────────────────────────────────────────────────────
@@ -126,6 +160,7 @@ function load() {
     console.error('[search] Failed to load index, starting empty:', e.message);
     docs.clear();
     postings.clear();
+    sortedTokens = null;
   }
 }
 
@@ -274,8 +309,8 @@ function candidateIds(parsed) {
     // Prefix fallback so "invoic" still finds "invoice".
     const union = new Set();
     if (term.length >= 3) {
-      for (const [token, ids] of postings) {
-        if (token.startsWith(term)) for (const id of ids) union.add(id);
+      for (const token of tokensWithPrefix(term)) {
+        for (const id of postings.get(token) || []) union.add(id);
       }
     }
     termSets.push(union);
@@ -439,6 +474,8 @@ module.exports = {
   toSummary,
   backfill,
   stats: () => ({ documents: docs.size, tokens: postings.size }),
+  /** Every indexed document. The contacts book is derived from these. */
+  allDocuments: () => docs.values(),
   // exported for tests
-  _internals: { tokenize, parseQuery, score },
+  _internals: { tokenize, parseQuery, score, tokensWithPrefix },
 };

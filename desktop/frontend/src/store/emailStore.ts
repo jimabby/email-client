@@ -15,6 +15,16 @@ interface EmailStore {
   // Navigation
   currentAccountId: string | null
   currentFolder: string
+  /**
+   * When set, the list shows every account merged into one date-ordered view.
+   * currentAccountId stays pointed at the last real account so compose, folder
+   * lists, and account-scoped actions still have something to work with.
+   */
+  unifiedView: boolean
+  setUnifiedView: (on: boolean) => void
+  /** Per-account continuation tokens for the unified list. */
+  unifiedTokens: Record<string, string>
+  setUnifiedTokens: (tokens: Record<string, string>) => void
   setCurrentAccount: (id: string | null) => void
   setCurrentFolder: (folder: string) => void
 
@@ -122,6 +132,15 @@ interface EmailStore {
   accountSignatures: Record<string, string>
   setAccountSignature: (accountId: string, sig: string) => void
   getSignatureForAccount: (accountId: string) => string
+  /**
+   * The signature for the identity actually being sent from. Aliases are
+   * honoured at send time by every provider, but the signature stayed global —
+   * so mail sent from a second identity was signed as the first.
+   *
+   * Resolution order: this alias, then the account, then the global default.
+   */
+  getSignatureFor: (accountId: string, aliasEmail?: string | null) => string
+  setAliasSignature: (accountId: string, aliasEmail: string, sig: string) => void
 
   // Contacts autocomplete (localStorage-persisted)
   contacts: string[]
@@ -177,8 +196,23 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
 
   currentAccountId: null,
   currentFolder: 'INBOX',
-  setCurrentAccount: (id) => set({ currentAccountId: id, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null, selectedEmailIds: [] }),
-  setCurrentFolder: (folder) => set({ currentFolder: folder, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null, selectedEmailIds: [] }),
+  unifiedView: false,
+  unifiedTokens: {},
+  setUnifiedView: (on) => set({
+    unifiedView: on,
+    selectedEmail: null,
+    selectedEmailBody: null,
+    nextToken: null,
+    unifiedTokens: {},
+    searchResults: null,
+    selectedEmailIds: [],
+  }),
+  setUnifiedTokens: (tokens) => set({ unifiedTokens: tokens }),
+  // Choosing a specific account leaves the unified view — the two are
+  // alternatives, and staying in both at once is what would make the folder
+  // list and the message list disagree.
+  setCurrentAccount: (id) => set({ currentAccountId: id, unifiedView: false, unifiedTokens: {}, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null, selectedEmailIds: [] }),
+  setCurrentFolder: (folder) => set({ currentFolder: folder, unifiedTokens: {}, selectedEmail: null, selectedEmailBody: null, nextToken: null, searchResults: null, selectedEmailIds: [] }),
 
   folders: {},
   setFolders: (accountId, folders) => set((s) => ({ folders: { ...s.folders, [accountId]: folders } })),
@@ -340,6 +374,19 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   accountSignatures: readJson<Record<string, string>>('hermes-account-signatures', {}),
   setAccountSignature: (accountId, sig) => set((s) => {
     const next = { ...s.accountSignatures, [accountId]: sig }
+    writeJson('hermes-account-signatures', next)
+    return { accountSignatures: next }
+  }),
+  getSignatureFor: (accountId, aliasEmail) => {
+    const s = get()
+    if (aliasEmail) {
+      const scoped = s.accountSignatures[`${accountId}:${aliasEmail.toLowerCase()}`]
+      if (scoped !== undefined && scoped !== '') return scoped
+    }
+    return s.accountSignatures[accountId] || s.signature
+  },
+  setAliasSignature: (accountId, aliasEmail, sig) => set((s) => {
+    const next = { ...s.accountSignatures, [`${accountId}:${aliasEmail.toLowerCase()}`]: sig }
     writeJson('hermes-account-signatures', next)
     return { accountSignatures: next }
   }),

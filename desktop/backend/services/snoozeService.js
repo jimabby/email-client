@@ -23,6 +23,9 @@ function startScheduler() {
   // Drop snoozes for removed accounts on startup.
   try { store.pruneSnoozes(); } catch { /* ignore */ }
   intervalHandle = setInterval(processDueSnoozes, 30000);
+  // Every other scheduler unrefs its timer; without this the backend process
+  // stays alive on shutdown waiting for a tick that no longer matters.
+  intervalHandle.unref?.();
   processDueSnoozes();
   console.log('😴 Snooze scheduler started (checks every 30s)');
 }

@@ -1,7 +1,7 @@
 {
   "name": "hermes",
   "version": "1.0.0",
-  "description": "Hermes — Desktop Email Client with AI",
+  "description": "Hermes \u2014 Desktop Email Client with AI",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"cd backend && npm run dev\" \"cd frontend && npm run dev\"",
@@ -37,7 +37,7 @@
   "build": {
     "appId": "com.hermes.app",
     "productName": "Hermes",
-    "copyright": "Copyright © 2025 Hermes",
+    "copyright": "Copyright \u00a9 2025 Hermes",
     "asar": false,
     "directories": {
       "output": "dist-electron"
@@ -46,6 +46,14 @@
       "electron/**/*",
       "backend/**/*",
       "!backend/node_modules/**/*",
+      "!backend/.env",
+      "!backend/.env.*",
+      "!backend/accounts.json",
+      "!backend/*.key",
+      "!backend/email-cache.json",
+      "!backend/categories.json",
+      "!backend/search-index.json",
+      "!backend/test/**/*",
       "frontend/dist/**/*",
       "node_modules/**/*"
     ],

@@ -1,4 +1,6 @@
 const { google } = require('googleapis');
+const calendar = require('./calendarService');
+const authResults = require('./authResultsService');
 
 function createOAuth2Client() {
   return new google.auth.OAuth2(
@@ -293,22 +295,34 @@ async function fetchEmailBody(account, gmailId) {
   // GET /api/emails/:accountId/message/:emailId/attachment/:index so that
   // opening a message with a 20 MB PDF doesn't buffer it through the API.
   const attachments = [];
+  let calendarText = '';
   function collectAttachments(part) {
     if (!part) return;
+    // A meeting invite arrives as a text/calendar part which usually has no
+    // filename at all, so it has to be matched on type before the filename
+    // check below decides what counts as an attachment.
+    const mimeType = part.mimeType || '';
+    if (!calendarText && /^text\/calendar/i.test(mimeType) && part.body?.data) {
+      calendarText = decodeBase64(part.body.data);
+    }
     if (part.filename && part.body) {
       attachments.push({
         filename: part.filename,
-        contentType: part.mimeType || 'application/octet-stream',
+        contentType: mimeType || 'application/octet-stream',
         size: part.body.size || 0,
         content: null,
         // Kept internally for the download endpoint; stripped before responding.
         attachmentId: part.body.attachmentId || null,
         inlineData: part.body.data || null,
       });
+      if (!calendarText && /\.ics$/i.test(part.filename) && part.body.data) {
+        calendarText = decodeBase64(part.body.data);
+      }
     }
     if (part.parts) part.parts.forEach(collectAttachments);
   }
   collectAttachments(detail.data.payload);
+  rememberAttachments(account, gmailId, attachments);
 
   return {
     gmailId,
@@ -325,14 +339,35 @@ async function fetchEmailBody(account, gmailId) {
     messageId,
     references,
     threadId: detail.data.threadId || null,
+    authentication: authResults.summarize(getHeader('Authentication-Results'), getHeader('From')),
+    calendarInvite: calendarText ? calendar.parseInvite(calendarText) : null,
   };
+}
+
+// Opening a message already walked its payload, so remember where each
+// attachment lives. Downloading one used to re-issue a full format=full read
+// of the entire message just to turn an index into an attachmentId.
+const ATTACHMENT_MAP_LIMIT = 200;
+const attachmentMaps = new Map(); // `${accountId}:${gmailId}` -> attachment metadata[]
+
+function rememberAttachments(account, gmailId, attachments) {
+  const key = `${account.id}:${gmailId}`;
+  attachmentMaps.delete(key);
+  attachmentMaps.set(key, attachments);
+  // Map iteration is insertion-ordered, so the oldest key is the first one.
+  while (attachmentMaps.size > ATTACHMENT_MAP_LIMIT) {
+    attachmentMaps.delete(attachmentMaps.keys().next().value);
+  }
 }
 
 // Pull one attachment's bytes on demand. `index` refers to the position in the
 // attachment array returned by fetchEmailBody.
 async function getAttachment(account, gmailId, index) {
-  const body = await fetchEmailBody(account, gmailId);
-  const att = body.attachments?.[index];
+  let att = attachmentMaps.get(`${account.id}:${gmailId}`)?.[index];
+  if (!att) {
+    const body = await fetchEmailBody(account, gmailId);
+    att = body.attachments?.[index];
+  }
   if (!att) throw new Error('Attachment not found');
 
   if (att.inlineData) {
@@ -367,9 +402,24 @@ async function getThreadingInfo(account, gmailId) {
   return { inReplyTo: get('Message-ID'), references: get('References'), threadId: detail.data.threadId || null };
 }
 
+// The complete RFC822 source, for mbox export.
+async function getRawMessage(account, gmailId) {
+  const gmail = getGmailClient(account);
+  const detail = await gmail.users.messages.get({ userId: 'me', id: gmailId, format: 'raw' });
+  if (!detail.data.raw) return null;
+  return Buffer.from(String(detail.data.raw).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
+
 async function deleteEmail(account, gmailId) {
   const gmail = getGmailClient(account);
   await gmail.users.messages.trash({ userId: 'me', id: gmailId });
+}
+
+// Undo a delete. Gmail keeps the message id stable through the bin, so this
+// restores it to exactly the labels it had.
+async function untrashEmail(account, gmailId) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.untrash({ userId: 'me', id: gmailId });
 }
 
 // Labels Gmail exposes but that make no sense as a mail folder in the UI.
@@ -518,39 +568,120 @@ function resolveFrom(account, sendAs) {
   return { name: account.name || account.email, email: account.email };
 }
 
+// Strip markup down to readable text for the plain-text alternative part.
+// Block-level tags become line breaks so the result keeps its shape instead of
+// collapsing into one run-on paragraph.
+function htmlToPlainText(html) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|li|h[1-6]|blockquote)>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .split('\n').map(line => line.trim()).join('\n')
+    .trim();
+}
+
+// Split an address list on commas that sit outside quoted display names, so
+// `"Doe, Jane" <j@x.com>, bob@y.com` yields two addresses rather than three.
+function splitAddresses(value) {
+  if (Array.isArray(value)) return value.map(v => String(v).trim()).filter(Boolean);
+  const out = [];
+  let current = '';
+  let inQuotes = false;
+  for (const ch of String(value ?? '')) {
+    if (ch === '"') { inQuotes = !inQuotes; current += ch; continue; }
+    if (ch === ',' && !inQuotes) { out.push(current); current = ''; continue; }
+    current += ch;
+  }
+  out.push(current);
+  return out.map(a => a.trim()).filter(Boolean);
+}
+
+// RFC 2047-encode the display name of one address, leaving the addr-spec
+// untouched. Without this a non-ASCII recipient name goes out as raw 8-bit and
+// arrives as mojibake — the subject was already encoded, recipients were not.
+function encodeAddress(address) {
+  const safe = sanitizeHeaderValue(address);
+  const match = safe.match(/^(.*?)\s*<([^>]+)>$/);
+  if (!match) return safe;
+  const name = match[1].replace(/^"|"$/g, '').trim();
+  const addr = match[2].trim();
+  return name ? `${encodeHeader(name)} <${addr}>` : `<${addr}>`;
+}
+
+function encodeAddressList(value) {
+  return splitAddresses(value).map(encodeAddress).join(', ');
+}
+
+// Base64 with a declared transfer encoding, so a body line longer than the
+// RFC 5322 limit of 998 octets can never be produced.
+function mimePart(contentType, body) {
+  return [
+    `Content-Type: ${contentType}; charset=utf-8`,
+    'Content-Transfer-Encoding: base64',
+    '',
+    wrapBase64(Buffer.from(String(body ?? ''), 'utf8').toString('base64')),
+  ].join('\r\n');
+}
+
 // Build a base64url-encoded RFC822 message for the Gmail send/draft endpoints.
-function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs }) {
+function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs, autoSubmitted }) {
   const hasAttachments = attachments && attachments.length > 0;
   // References for a reply = the original's References + its Message-ID.
   const replyRefs = [references, inReplyTo].filter(Boolean).map(sanitizeHeaderValue).join(' ');
   const from = resolveFrom(account, sendAs);
-  const list = (value) => sanitizeHeaderValue(Array.isArray(value) ? value.join(', ') : value);
 
   const headers = [
     `From: ${encodeHeader(from.name)} <${sanitizeHeaderValue(from.email)}>`,
-    to  ? `To: ${list(to)}` : null,
-    cc  ? `Cc: ${list(cc)}` : null,
-    bcc ? `Bcc: ${list(bcc)}` : null,
+    to  ? `To: ${encodeAddressList(to)}` : null,
+    cc  ? `Cc: ${encodeAddressList(cc)}` : null,
+    bcc ? `Bcc: ${encodeAddressList(bcc)}` : null,
     `Subject: ${encodeHeader(subject || '')}`,
     inReplyTo ? `In-Reply-To: ${sanitizeHeaderValue(inReplyTo)}` : null,
     replyRefs ? `References: ${replyRefs}` : null,
+    // RFC 3834. Marks a vacation reply as machine-generated so the other end's
+    // responder does not answer it — the other half of mail-loop prevention.
+    autoSubmitted ? `Auto-Submitted: ${sanitizeHeaderValue(autoSubmitted)}` : null,
     'MIME-Version: 1.0',
   ].filter(Boolean);
+
+  // Every message carries a plain-text part alongside the HTML. HTML-only mail
+  // costs real deliverability with spam filters, and labelling a plain-text
+  // compose as text/html used to swallow any '<' the user typed.
+  const plain = text || (html ? htmlToPlainText(html) : '');
+  const bodyLines = [];
+
+  if (html && plain) {
+    const altBoundary = `----=_Alt_${Date.now()}`;
+    bodyLines.push(
+      `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+      '',
+      `--${altBoundary}`,
+      mimePart('text/plain', plain),
+      `--${altBoundary}`,
+      mimePart('text/html', html),
+      `--${altBoundary}--`,
+    );
+  } else if (html) {
+    bodyLines.push(mimePart('text/html', html));
+  } else {
+    bodyLines.push(mimePart('text/plain', plain));
+  }
 
   let rawMessage;
 
   if (hasAttachments) {
     const boundary = `----=_Part_${Date.now()}`;
-    const bodyB64 = wrapBase64(Buffer.from(html || text || '').toString('base64'));
-
-    const bodyPart = [
-      `--${boundary}`,
-      'Content-Type: text/html; charset=utf-8',
-      'Content-Transfer-Encoding: base64',
-      '',
-      bodyB64,
-    ].join('\r\n');
-
     const attachmentParts = attachments.map(a => [
       `--${boundary}`,
       `Content-Type: ${sanitizeHeaderValue(a.contentType) || 'application/octet-stream'}; name="${encodeFilename(a.filename)}"`,
@@ -564,20 +695,16 @@ function buildRawMessage(account, { to, cc, bcc, subject, text, html, attachment
       ...headers,
       `Content-Type: multipart/mixed; boundary="${boundary}"`,
       '',
-      bodyPart,
+      `--${boundary}`,
+      ...bodyLines,
       ...attachmentParts,
       `--${boundary}--`,
     ].join('\r\n');
   } else {
-    rawMessage = [
-      ...headers,
-      'Content-Type: text/html; charset=utf-8',
-      '',
-      html || text || '',
-    ].join('\r\n');
+    rawMessage = [...headers, ...bodyLines].join('\r\n');
   }
 
-  return Buffer.from(rawMessage).toString('base64')
+  return Buffer.from(rawMessage, 'utf8').toString('base64')
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
@@ -661,6 +788,7 @@ module.exports = {
   getFolders,
   getUnreadCounts,
   getAttachment,
+  getRawMessage,
   createFolder,
   renameFolder,
   reportSpam,
@@ -673,4 +801,5 @@ module.exports = {
   toggleStar,
   moveEmail,
   deleteEmail,
+  untrashEmail,
 };
