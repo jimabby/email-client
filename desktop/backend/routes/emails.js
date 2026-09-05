@@ -12,6 +12,7 @@ const vacationService = require('../services/vacationService');
 const exportService = require('../services/exportService');
 const calendarService = require('../services/calendarService');
 const downloadTickets = require('../services/downloadTicketService');
+const pushService = require('../services/pushService');
 const { v4: uuidv4 } = require('uuid');
 
 function getService(accountType) {
@@ -34,6 +35,28 @@ function gmailOrOutlookId(emailId) {
 function imapUid(emailId) {
   const parts = emailId.split('::');
   return parseInt(parts[parts.length - 1]);
+}
+
+/**
+ * Rebuild the client-facing composite id after a provider-side move.
+ *
+ * Gmail keeps a message's id across a label change, but Outlook mints a new one
+ * and IMAP assigns a fresh UID in the destination mailbox. An "Undo" that sent
+ * back the old id would address nothing, so the move routes hand the caller the
+ * id the message has *now*.
+ *
+ * @returns {string|null} the new composite id, or null when it is unchanged or
+ *          the provider did not tell us (an IMAP server without UIDPLUS).
+ */
+function recomposeId(account, previousId, moveResult) {
+  if (!moveResult) return null;
+  if (account.type === 'imap') {
+    return moveResult.uid ? `${account.id}::${moveResult.uid}` : null;
+  }
+  if (!moveResult.id) return null;
+  const previousProviderId = gmailOrOutlookId(previousId);
+  if (moveResult.id === previousProviderId) return null;
+  return `${account.id}-${moveResult.id}`;
 }
 
 // Attachment entries carry provider handles used only by the download
@@ -359,6 +382,26 @@ router.post('/trigger-report', async (req, res) => {
   }
 });
 
+// ─── Mobile push registration ───────────────────────────────────────────────
+// The arrival pipeline already indexes, runs rules, and notifies the desktop
+// shell; these let a phone subscribe to the same events.
+
+// POST /api/emails/devices — register (or refresh) this device's push token.
+// Body: { token, platform, accountIds? }
+router.post('/devices', (req, res) => {
+  try {
+    const device = pushService.registerDevice(req.body || {});
+    res.json({ success: true, device: { platform: device.platform, accountIds: device.accountIds } });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/emails/devices — stop sending push to this device.
+router.delete('/devices', (req, res) => {
+  res.json({ success: pushService.unregisterDevice(req.body?.token || req.query.token) });
+});
+
 // ─── Contacts ───────────────────────────────────────────────────────────────
 // Derived from indexed mail rather than a synced address book — see
 // contactsService for why frequency plus recency is the right ranking.
@@ -377,6 +420,12 @@ router.get('/contacts', (req, res) => {
 // GET /api/emails/unified?folder=INBOX&limit=50
 // One date-ordered list across every account. Page tokens are per-account, so
 // the client sends back the whole map it received to continue.
+//
+// An account with no further pages is reported as an explicit `null` rather
+// than being left out of the map. Omitting it read back as `undefined` on the
+// next request, which is indistinguishable from "first page", so every
+// exhausted account had its first page fetched and appended again on each
+// "Load more" — the same fifty messages, over and over.
 router.get('/unified', async (req, res) => {
   const folder = req.query.folder || 'INBOX';
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
@@ -392,24 +441,44 @@ router.get('/unified', async (req, res) => {
   const nextTokens = {};
   const errors = [];
 
+  // A continuation request is one that carried tokens. On a first load the map
+  // is empty and every account is fetched from the start.
+  const isContinuation = Object.keys(tokens).length > 0;
+
   const pages = await Promise.all(accounts.map(async (account) => {
-    // An account that has already run out must not be asked again.
-    if (tokens[account.id] === null) return [];
+    const token = tokens[account.id];
+    // An account that has already run out must not be asked again. Both an
+    // explicit null and a missing entry on a continuation mean "exhausted".
+    if (token === null || (isContinuation && token === undefined)) {
+      nextTokens[account.id] = null;
+      return [];
+    }
     try {
       const service = getService(account.type);
-      const result = await service.fetchEmails(account, folder, limit, tokens[account.id] || null);
-      if (result?.nextToken) nextTokens[account.id] = result.nextToken;
+      const result = await service.fetchEmails(account, folder, limit, token || null);
+      nextTokens[account.id] = result?.nextToken || null;
       searchIndex.indexSummaries(result?.emails || []);
       return result?.emails || [];
     } catch (err) {
       errors.push({ accountId: account.id, email: account.email, error: err.message });
-      // A provider being down should not blank out the other accounts.
+      // A provider being down should not blank out the other accounts. Keep
+      // its token as-is so a later retry resumes where it left off instead of
+      // treating the failure as the end of the mailbox.
+      nextTokens[account.id] = token ?? null;
       const cached = store.getEmailCache(`list:${account.id}:${folder}:`);
       return cached ? (cached.value.emails || []) : [];
     }
   }));
 
-  const merged = pages.flat();
+  // De-duplicate before sorting: a provider can return the same message on two
+  // sides of a cursor, and the client appends whatever arrives.
+  const seen = new Set();
+  const merged = [];
+  for (const email of pages.flat()) {
+    if (!email?.id || seen.has(email.id)) continue;
+    seen.add(email.id);
+    merged.push(email);
+  }
   merged.sort((a, b) => {
     const ta = Date.parse(a.date || '');
     const tb = Date.parse(b.date || '');
@@ -954,7 +1023,7 @@ router.post('/:accountId/message/:emailId/untrash', async (req, res) => {
   }
 });
 
-// POST /api/emails/:accountId/message/:emailId/read// POST /api/emails/:accountId/message/:emailId/read
+// POST /api/emails/:accountId/message/:emailId/read
 router.post('/:accountId/message/:emailId/read', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
@@ -1002,11 +1071,34 @@ router.post('/:accountId/message/:emailId/spam', async (req, res) => {
   try {
     const service = getService(account.type);
     const id = account.type === 'imap' ? imapUid(req.params.emailId) : gmailOrOutlookId(req.params.emailId);
-    await service.reportSpam(account, id, req.query.folder || 'INBOX');
+    const result = await service.reportSpam(account, id, req.query.folder || 'INBOX');
     searchIndex.remove(req.params.emailId);
     invalidateCounts();
-    res.json({ success: true });
+    // `undoId` is what an Undo must address; absent means undo is unavailable.
+    res.json({ success: true, undoId: recomposeId(account, req.params.emailId, result) || req.params.emailId });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/emails/:accountId/message/:emailId/unspam
+// Undo a spam report. Body/query: { folder } — where to put it back.
+router.post('/:accountId/message/:emailId/unspam', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  const service = getService(account.type);
+  if (!service.unreportSpam) {
+    return res.status(400).json({ error: 'Undo is not available for this account' });
+  }
+
+  try {
+    const id = account.type === 'imap' ? imapUid(req.params.emailId) : gmailOrOutlookId(req.params.emailId);
+    const folder = req.body?.folder || req.query.folder || 'INBOX';
+    await service.unreportSpam(account, id, folder);
+    invalidateCounts();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.post('/:accountId/message/:emailId/block', async (req, res) => {
@@ -1075,18 +1167,23 @@ router.post('/:accountId/message/:emailId/move', async (req, res) => {
 
   try {
     const service = getService(account.type);
+    const sourceFolder = req.query.folder || 'INBOX';
+    let result;
     if (account.type === 'imap') {
-      await service.moveEmail(account, imapUid(req.params.emailId), req.query.folder || 'INBOX', toFolder);
+      result = await service.moveEmail(account, imapUid(req.params.emailId), sourceFolder, toFolder);
     } else if (account.type === 'gmail') {
-      await service.moveEmail(account, gmailOrOutlookId(req.params.emailId), req.query.folder || 'INBOX', toFolder);
+      result = await service.moveEmail(account, gmailOrOutlookId(req.params.emailId), sourceFolder, toFolder);
     } else {
-      await service.moveEmail(account, gmailOrOutlookId(req.params.emailId), toFolder);
+      result = await service.moveEmail(account, gmailOrOutlookId(req.params.emailId), toFolder);
     }
     // The message still exists, just elsewhere — drop it from the index so a
     // stale folder isn't reported, and let the next fetch re-index it.
     searchIndex.remove(req.params.emailId);
     invalidateCounts();
-    res.json({ success: true });
+    // The id to use when moving it back. An IMAP server that does not report
+    // COPYUID leaves this null, and the client hides Undo rather than offering
+    // one that would fail.
+    res.json({ success: true, undoId: recomposeId(account, req.params.emailId, result), fromFolder: sourceFolder });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -5,7 +5,11 @@ import { EmailViewer } from './components/EmailViewer'
 import { AiChatPanel } from './components/AiChatPanel'
 import { HermesLogo } from './components/HermesLogo'
 import { UndoSendBar } from './components/UndoSendBar'
-import { useEmailStore } from './store/emailStore'
+import { DialogHost } from './components/DialogHost'
+import { useEmailStore, systemTheme } from './store/emailStore'
+import { readJson, writeJson } from './lib/storage'
+import { drawUnreadBadge } from './lib/taskbarBadge'
+import { startFlushLoop } from './lib/localOutbox'
 import { accountsApi, aiApi, emailsApi } from './api/client'
 
 const ComposeModal = lazy(() => import('./components/ComposeModal').then(m => ({ default: m.ComposeModal })))
@@ -22,6 +26,7 @@ declare global {
     hermes?: {
       isDesktop: boolean
       on: (channel: string, handler: (payload: unknown) => void) => () => void
+      setChrome: (state: { theme?: 'light' | 'dark'; badgeDataUrl?: string }) => void
     }
   }
 }
@@ -87,13 +92,13 @@ function MoonIcon() {
   )
 }
 
-function GearIcon() {
+function SystemThemeIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-      <circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.4"/>
-      <path d="M8 1.5v1.2M8 13.3v1.2M1.5 8h1.2M13.3 8h1.2M3.4 3.4l.85.85M11.75 11.75l.85.85M3.4 12.6l.85-.85M11.75 4.25l.85-.85" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-      <path d="M6.3 1.9a6.5 6.5 0 000 0M8 1C4.13 1 1 4.13 1 8s3.13 7 7 7 7-3.13 7-7" stroke="none"/>
-      <path fillRule="evenodd" clipRule="evenodd" d="M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zM4 8a4 4 0 118 0A4 4 0 014 8z" fill="none"/>
+      <rect x="1.5" y="2.5" width="13" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.4"/>
+      <path d="M5.5 14h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+      {/* The half-fill is what says "whatever the system is doing". */}
+      <path d="M8 3.9v6.7a3.35 3.35 0 000-6.7z" fill="currentColor"/>
     </svg>
   )
 }
@@ -107,8 +112,14 @@ function SettingsIcon() {
   )
 }
 
+const THEME_LABEL: Record<'system' | 'light' | 'dark', string> = {
+  system: 'Theme: match system',
+  light: 'Theme: light',
+  dark: 'Theme: dark',
+}
+
 function TopBar() {
-  const { theme, toggleTheme, setShowAccountModal, isChatOpen, toggleChat, aiConfigured } = useEmailStore()
+  const { themePreference, toggleTheme, setShowAccountModal, isChatOpen, toggleChat, aiConfigured } = useEmailStore()
 
   const chip = 'w-8 h-8 rounded-[10px] flex items-center justify-center btn-ghost'
 
@@ -134,13 +145,16 @@ function TopBar() {
         </svg>
       </button>
 
+      {/* Cycles system -> light -> dark so "follow the OS" is reachable
+          without opening settings. The icon shows the current preference, not
+          the resolved theme, or system mode would be invisible. */}
       <button
         onClick={toggleTheme}
-        title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-        aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        title={`${THEME_LABEL[themePreference]} (click to change)`}
+        aria-label={THEME_LABEL[themePreference]}
         className={chip}
       >
-        {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+        {themePreference === 'system' ? <SystemThemeIcon /> : themePreference === 'dark' ? <MoonIcon /> : <SunIcon />}
       </button>
 
       <button
@@ -217,6 +231,9 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
   }
 }
 
+const LIST_PANE_KEY = 'hermes-pane-list'
+const CHAT_PANE_KEY = 'hermes-pane-chat'
+
 // ─── Keyboard Shortcuts Help ─────────────────────────────────────────────────
 function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
   const shortcuts = [
@@ -232,7 +249,7 @@ function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
     { key: '?', desc: 'Show shortcuts' },
   ]
   return (
-    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[100] flex items-center justify-center animate-fade" onClick={onClose}>
+    <div data-hermes-shortcuts className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[100] flex items-center justify-center animate-fade" onClick={onClose}>
       <div
         onClick={e => e.stopPropagation()}
         className="glass-elevated rounded-3xl w-[360px] overflow-hidden animate-rise"
@@ -267,6 +284,12 @@ function useKeyboardShortcuts() {
 
       // Global shortcuts (work even in inputs)
       if (e.key === 'Escape') {
+        // The shortcuts sheet is the topmost surface when it is open, so it
+        // takes Escape before anything below it does.
+        if (document.querySelector('[data-hermes-shortcuts]')) {
+          window.dispatchEvent(new CustomEvent('hermes:toggle-shortcuts'))
+          return
+        }
         if (isComposeOpen || showAccountModal || isChatOpen) return // handled by their own close logic
         useEmailStore.getState().setSelectedEmail(null)
         useEmailStore.getState().setSelectedEmailBody(null)
@@ -373,9 +396,25 @@ export default function App() {
   // The theme lives on <html>, not on a wrapper div: `body`, the page's own
   // scrollbars, and native form controls (via color-scheme) all sit outside
   // any element the React tree can put a class on.
+  //
+  // The Electron shell is told as well, so the *next* launch can paint the
+  // right window background before the first frame — the preference lives in
+  // localStorage, which the main process cannot read.
   useEffect(() => {
     document.documentElement.dataset.theme = theme
+    window.hermes?.setChrome({ theme })
   }, [theme])
+
+  // Under the 'system' preference the OS can change the theme with no
+  // interaction at all, so the media query has to be watched, not just read.
+  useEffect(() => {
+    let query: MediaQueryList
+    try { query = window.matchMedia('(prefers-color-scheme: light)') } catch { return }
+    const apply = () => useEmailStore.getState().syncSystemTheme(systemTheme())
+    apply()
+    query.addEventListener('change', apply)
+    return () => query.removeEventListener('change', apply)
+  }, [])
 
   useEffect(() => {
     const handler = () => setShowShortcuts(v => !v)
@@ -384,8 +423,16 @@ export default function App() {
   }, [])
   const splitRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ type: 'list' | 'chat'; startX: number; startWidth: number } | null>(null)
-  const [listPaneWidth, setListPaneWidth] = useState(380)
-  const [chatPaneWidth, setChatPaneWidth] = useState(288)
+  // Pane widths are a per-machine layout preference, not app state, so they
+  // live in localStorage rather than the store. Resetting them on every launch
+  // meant a deliberate layout lasted exactly one session.
+  const [listPaneWidth, setListPaneWidth] = useState(() => readJson<number>(LIST_PANE_KEY, 380))
+  const [chatPaneWidth, setChatPaneWidth] = useState(() => readJson<number>(CHAT_PANE_KEY, 288))
+
+  // onDragEnd is intentionally stable (it is removed by identity), so it reads
+  // the current widths through a ref rather than closing over stale state.
+  const latestWidths = useRef({ listPaneWidth, chatPaneWidth })
+  latestWidths.current = { listPaneWidth, chatPaneWidth }
 
   const onDragMove = useCallback((e: MouseEvent) => {
     if (!dragRef.current) return
@@ -407,11 +454,18 @@ export default function App() {
   }, [])
 
   const onDragEnd = useCallback(() => {
+    const dragged = dragRef.current
     dragRef.current = null
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
     window.removeEventListener('mousemove', onDragMove)
     window.removeEventListener('mouseup', onDragEnd)
+    // Persist once the drag settles rather than on every mousemove.
+    if (dragged) {
+      const { listPaneWidth: list, chatPaneWidth: chat } = latestWidths.current
+      writeJson(dragged.type === 'list' ? LIST_PANE_KEY : CHAT_PANE_KEY,
+        dragged.type === 'list' ? list : chat)
+    }
   }, [onDragMove])
 
   const startDrag = (type: 'list' | 'chat', startWidth: number) => (e: React.MouseEvent) => {
@@ -453,7 +507,13 @@ export default function App() {
     refreshSnoozes()
     const snoozePoll = setInterval(refreshSnoozes, 30_000)
 
-    return () => { clearInterval(reportPoll); clearInterval(snoozePoll) }
+    // Messages composed while the backend was unreachable are held in the
+    // renderer and handed over as soon as it answers again.
+    const stopFlush = startFlushLoop((sent) => {
+      showNotification('success', `Sent ${sent} message${sent === 1 ? '' : 's'} that were waiting to go out`)
+    })
+
+    return () => { clearInterval(reportPoll); clearInterval(snoozePoll); stopFlush() }
   }, [])
 
   // Desktop shell events: a clicked notification should open that exact
@@ -495,7 +555,15 @@ export default function App() {
       showNotification('error', 'The Hermes background service stopped. Restart the app to reconnect.', { timeoutMs: 0 })
     )
 
-    return () => { unsubscribeOpen(); unsubscribeCompose(); unsubscribeDown() }
+    // Windows needs an image for the taskbar overlay and the main process has
+    // no way to draw one, so it asks here.
+    const unsubscribeBadge = bridge.on('hermes:badge', (payload) => {
+      const count = (payload as { count?: number } | undefined)?.count ?? 0
+      const badgeDataUrl = drawUnreadBadge(count)
+      if (badgeDataUrl) bridge.setChrome({ badgeDataUrl })
+    })
+
+    return () => { unsubscribeOpen(); unsubscribeCompose(); unsubscribeDown(); unsubscribeBadge() }
   }, [])
 
   useEffect(() => {
@@ -568,6 +636,7 @@ export default function App() {
         </Suspense>
         <Notification />
         <UndoSendBar />
+        <DialogHost />
         {showShortcuts && <KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} />}
       </div>
     </ErrorBoundary>

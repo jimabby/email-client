@@ -533,6 +533,18 @@ async function reportSpam(account, gmailId) {
   await gmail.users.messages.modify({ userId: 'me', id: gmailId, requestBody: { addLabelIds: ['SPAM'], removeLabelIds: ['INBOX'] } });
 }
 
+// The exact inverse, so "Reported as spam" can carry an Undo. Gmail keeps the
+// message id stable across a label change, which is what makes this reachable
+// at all.
+async function unreportSpam(account, gmailId, folder = 'INBOX') {
+  const gmail = getGmailClient(account);
+  const restoreLabel = folder && folder !== 'search' ? folderToLabelId(folder) : 'INBOX';
+  await gmail.users.messages.modify({
+    userId: 'me', id: gmailId,
+    requestBody: { addLabelIds: [restoreLabel], removeLabelIds: ['SPAM'] },
+  });
+}
+
 function wrapBase64(b64) {
   return b64.match(/.{1,76}/g)?.join('\r\n') || b64;
 }
@@ -767,13 +779,16 @@ async function moveEmail(account, gmailId, fromFolder, toFolder) {
       userId: 'me', id: gmailId,
       requestBody: { removeLabelIds: [fromLabel] }
     });
-    return;
+    return { id: gmailId };
   }
   const toLabel = folderToLabelId(toFolder);
   await gmail.users.messages.modify({
     userId: 'me', id: gmailId,
     requestBody: { addLabelIds: [toLabel], removeLabelIds: [fromLabel] }
   });
+  // Gmail moves are label edits, so the id never changes and an undo can
+  // address the message with the id it already has.
+  return { id: gmailId };
 }
 
 module.exports = {
@@ -792,6 +807,7 @@ module.exports = {
   createFolder,
   renameFolder,
   reportSpam,
+  unreportSpam,
   registerPushWatch,
   sendEmail,
   saveDraft,

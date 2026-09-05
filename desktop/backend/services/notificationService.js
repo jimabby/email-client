@@ -20,6 +20,23 @@ function post(message) {
   }
 }
 
+/**
+ * Fan a notification out to registered mobile devices.
+ *
+ * Loaded lazily and guarded: push is best-effort and must never be able to
+ * fail — or slow down — the arrival pipeline it hangs off.
+ */
+function pushToDevices(run) {
+  try {
+    const result = run(require('./pushService'));
+    if (result && typeof result.catch === 'function') {
+      result.catch(err => console.warn('[push] delivery failed:', err.message));
+    }
+  } catch (err) {
+    console.warn('[push] delivery failed:', err.message);
+  }
+}
+
 function senderName(from) {
   const match = String(from || '').match(/^\s*"?([^"<]+?)"?\s*</);
   if (match) return match[1].trim();
@@ -35,6 +52,10 @@ function notifyNewMail(accountId, emails = []) {
   const account = store.getAccount(accountId);
   const unread = emails.filter(e => !e.read);
   if (!unread.length) return;
+
+  // The phone is a peer of the desktop shell, not a client of it: a registered
+  // device should hear about mail whether or not a window is open anywhere.
+  pushToDevices(push => push.notifyNewMail(accountId, unread));
 
   if (unread.length === 1) {
     const email = unread[0];
@@ -59,6 +80,27 @@ function notifyNewMail(accountId, emails = []) {
   });
 }
 
+/**
+ * A snoozed message reaching its wake time.
+ *
+ * Distinct from notifyNewMail because it is not an arrival: the message has
+ * been sitting in the mailbox all along, and the user asked to be reminded of
+ * it now. Saying so is the whole value of the feature — previously the snooze
+ * simply stopped hiding the message, which is invisible unless the inbox
+ * happens to be open and in view.
+ */
+function notifySnoozeWake(accountId, email, { title, folder } = {}) {
+  const account = store.getAccount(accountId);
+  pushToDevices(push => push.notifySnoozeWake(accountId, email, { folder }));
+  post({
+    type: 'notify',
+    title: title || senderName(email?.from),
+    body: email?.subject || '(no subject)',
+    subtitle: account?.email ? `Snoozed · ${account.email}` : 'Snoozed message',
+    payload: { accountId, emailId: email?.id, folder: folder || 'INBOX' },
+  });
+}
+
 /** Push the total unread count to the tray icon / dock badge. */
 function updateBadge(totalUnread) {
   post({ type: 'badge', count: Math.max(0, Number(totalUnread) || 0) });
@@ -74,4 +116,4 @@ function notifySendFailed(job) {
   });
 }
 
-module.exports = { notifyNewMail, updateBadge, notifySendFailed, available: () => !!parentPort() };
+module.exports = { notifyNewMail, notifySnoozeWake, updateBadge, notifySendFailed, available: () => !!parentPort() };

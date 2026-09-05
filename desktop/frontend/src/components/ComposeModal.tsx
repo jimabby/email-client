@@ -6,6 +6,8 @@ import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { useEmailStore } from '../store/emailStore'
+import { promptDialog } from './DialogHost'
+import * as localOutbox from '../lib/localOutbox'
 import { emailsApi, streamAiSuggestion, type StreamHandle } from '../api/client'
 import type { AiMode, Alias, DraftAttachment, MailTemplate } from '../types/email'
 
@@ -177,9 +179,17 @@ function RichToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
         : 'text-ink-3 hover:bg-surface-3 hover:text-ink '
     }`
 
-  const setLink = () => {
+  const setLink = async () => {
     const prev = editor.getAttributes('link').href
-    const url = window.prompt('Enter URL', prev || 'https://')
+    const url = await promptDialog({
+      title: prev ? 'Edit link' : 'Insert link',
+      label: 'Destination',
+      defaultValue: prev || 'https://',
+      confirmLabel: prev ? 'Update' : 'Insert',
+    })
+    // Cancelling leaves the document alone; clearing the field removes the
+    // link, which is the only way to unlink from this button.
+    if (url === null) return
     if (!url) { editor.chain().focus().unsetLink().run(); return }
     editor.chain().focus().setLink({ href: url }).run()
   }
@@ -424,7 +434,7 @@ export function ComposeModal() {
       // with the account id).
       const r = composeData?.replyTo
       const ownsOriginal = !!r?.id && r.id.startsWith(accountId)
-      const sendResult = await emailsApi.send(accountId, {
+      const payload = {
         to, cc: cc || undefined, bcc: bcc || undefined, subject,
         html, text, attachments: attachmentData,
         sendAt: showSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
@@ -435,7 +445,28 @@ export function ComposeModal() {
         threadId: ownsOriginal ? r?.threadId || undefined : undefined,
         replyToEmailId: ownsOriginal ? r?.id : undefined,
         replyToFolder: ownsOriginal ? r?.folder : undefined,
-      })
+      }
+
+      let sendResult
+      try {
+        sendResult = await emailsApi.send(accountId, payload)
+      } catch (err) {
+        // The server outbox retries a send the *provider* refused, but only for
+        // a message that reached it. When the backend itself is unreachable the
+        // composed message had nowhere to go and was lost, which is the one
+        // failure a mail client must not have. Park it locally and close, the
+        // same as a successful deferred send.
+        if (!localOutbox.isUnreachable(err)) throw err
+        localOutbox.enqueue(accountId, payload, err)
+        addContacts([to, cc, bcc].join(',').split(',').map(a => a.trim()).filter(Boolean))
+        deleteDraft(draftIdRef.current)
+        showNotification('success', 'Hermes is offline — the message will send when it reconnects', {
+          action: { label: 'Outbox', onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
+          timeoutMs: 8000,
+        })
+        closeCompose()
+        return
+      }
       // Save contacts for autocomplete
       const parseAddresses = (s: string) => s.split(',').map(a => a.trim()).filter(Boolean)
       addContacts([...parseAddresses(to), ...parseAddresses(cc), ...parseAddresses(bcc)])

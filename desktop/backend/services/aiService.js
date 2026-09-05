@@ -33,10 +33,17 @@ const PROMPTS = {
   custom:   null
 };
 
+// The message being replied to is attacker-controlled — anyone can send the
+// user text that reads like an instruction, and "draft a reply to this" hands
+// it straight to the model. It gets the same fence and the same warning as
+// every other place email content reaches a prompt; this was the one path that
+// interpolated it raw.
 function buildUserMessage({ subject, body, mode, customPrompt, replyTo }) {
   let msg = '';
   if (replyTo) {
-    msg += `Original email I'm replying to:\n---\nFrom: ${replyTo.from}\nSubject: ${replyTo.subject}\n\n${replyTo.body}\n---\n\n`;
+    msg += `Original email I'm replying to:\n${fenceMail(
+      `From: ${replyTo.from}\nSubject: ${replyTo.subject}\n\n${replyTo.body}`
+    )}\n\n`;
   }
   if (subject) msg += `Subject: ${subject}\n\n`;
   msg += `Email body:\n${body || '(empty)'}`;
@@ -607,14 +614,17 @@ async function streamChat(res, { messages, emailContext }) {
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 async function streamSuggestion(res, params) {
-  const { mode, customPrompt } = params;
-  const systemPrompt = mode === 'custom' ? customPrompt : PROMPTS[mode];
+  const { mode, customPrompt, replyTo } = params;
+  const base = mode === 'custom' ? customPrompt : PROMPTS[mode];
 
-  if (!systemPrompt) {
+  if (!base) {
     res.status(400).json({ error: `Unknown mode: ${mode}` });
     return;
   }
 
+  // Only when quoted mail is actually in the prompt — the note is wasted
+  // tokens on a plain "make this more concise".
+  const systemPrompt = replyTo ? `${base}\n\n${UNTRUSTED_NOTE}` : base;
   const userMessage = buildUserMessage(params);
 
   res.setHeader('Content-Type', 'text/event-stream');

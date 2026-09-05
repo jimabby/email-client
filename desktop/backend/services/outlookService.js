@@ -345,7 +345,18 @@ async function renameFolder(account, folderId, name) {
 }
 
 async function reportSpam(account, outlookId) {
-  await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId: 'junkemail' });
+  // Graph's move returns the message at its new location, with a NEW id — the
+  // old one addresses nothing afterwards. Handing it back is what lets an undo
+  // find the message again.
+  const moved = await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId: 'junkemail' });
+  return { id: moved?.id || outlookId };
+}
+
+/** The inverse of reportSpam, so the action can carry an Undo. */
+async function unreportSpam(account, outlookId, folder = 'INBOX') {
+  const destinationId = FOLDER_MAP[folder] || folder || 'inbox';
+  const moved = await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId });
+  return { id: moved?.id || outlookId };
 }
 
 // Send-as alias, if the account is configured for one. Graph only honours a
@@ -444,7 +455,10 @@ async function toggleStar(account, outlookId, starred) {
 
 async function moveEmail(account, outlookId, toFolder) {
   const destinationId = FOLDER_MAP[toFolder] || toFolder;
-  await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId });
+  const moved = await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId });
+  // A moved message gets a new id under Graph; without it an undo would try to
+  // move an id that no longer resolves.
+  return { id: moved?.id || outlookId };
 }
 
 module.exports = {
@@ -462,6 +476,7 @@ module.exports = {
   createFolder,
   renameFolder,
   reportSpam,
+  unreportSpam,
   registerPushWatch,
   sendEmail,
   saveDraft,

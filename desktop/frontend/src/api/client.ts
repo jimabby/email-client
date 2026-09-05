@@ -176,7 +176,7 @@ export const emailsApi = {
     }).then(r => r.data),
 
   /** One date-ordered list across every account. */
-  unified: (folder = 'INBOX', limit = 50, pageTokens?: Record<string, string>) =>
+  unified: (folder = 'INBOX', limit = 50, pageTokens?: Record<string, string | null>) =>
     api.get<UnifiedPage>('/emails/unified', {
       params: {
         folder, limit,
@@ -297,8 +297,18 @@ export const emailsApi = {
   getThread: (accountId: string, threadId: string) =>
     api.get<{ summary: EmailSummary; body: EmailBody }[]>(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}`).then(r => r.data),
 
+  // `undoId` is the id the message has *after* the move. Outlook mints a new
+  // one and IMAP assigns a fresh UID, so undoing with the id the client already
+  // holds would address nothing. A null means the provider could not say, and
+  // the caller should not offer an undo.
   reportSpam: (accountId: string, emailId: string, folder?: string) =>
-    api.post(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/spam`, {}, { params: folder ? { folder } : {} }).then(r => r.data),
+    api.post<{ success: boolean; undoId: string | null }>(
+      `/emails/${accountId}/message/${encodeURIComponent(emailId)}/spam`, {}, { params: folder ? { folder } : {} },
+    ).then(r => r.data),
+
+  /** Move a message back out of Spam/Junk. */
+  unreportSpam: (accountId: string, emailId: string, folder = 'INBOX') =>
+    api.post(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/unspam`, { folder }).then(r => r.data),
   blockSender: (accountId: string, emailId: string, sender: string, folder?: string) =>
     api.post(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/block`, { sender }, { params: folder ? { folder } : {} }).then(r => r.data),
 
@@ -308,9 +318,11 @@ export const emailsApi = {
     }).then(r => r.data),
 
   move: (accountId: string, emailId: string, targetFolder: string, sourceFolder?: string) =>
-    api.post(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/move`, { folder: targetFolder }, {
-      params: sourceFolder ? { folder: sourceFolder } : {}
-    }).then(r => r.data),
+    api.post<{ success: boolean; undoId: string | null; fromFolder: string }>(
+      `/emails/${accountId}/message/${encodeURIComponent(emailId)}/move`, { folder: targetFolder }, {
+        params: sourceFolder ? { folder: sourceFolder } : {}
+      },
+    ).then(r => r.data),
 
   bulkDelete: (accountId: string, emailIds: string[], folder?: string) =>
     api.post<{ succeeded: number; failed: number; errors: string[] }>(`/emails/${accountId}/bulk/delete`, { emailIds }, {

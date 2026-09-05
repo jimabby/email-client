@@ -1,6 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { accountsApi, emailsApi } from '../api/client'
+import { promptDialog, confirmDialog } from './DialogHost'
+import * as localOutbox from '../lib/localOutbox'
 
 const InboxIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 10h3l1.5 2h5L12 10h3V13a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M1 10V4a1 1 0 011-1h12a1 1 0 011 1v6" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
 const SentIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 2.5L7 9M13.5 2.5L9 14l-2-5-5-2 11.5-4.5z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -35,38 +37,60 @@ const ACCOUNT_COLOR: Record<string, string> = {
  * were four hand-maintained copies of the same markup; they are one component
  * now so the selected state can only ever look one way.
  */
-function NavItem({ icon, label, active, badge = 0, badgeTone = 'accent', onClick, onDoubleClick }: {
+function NavItem({ icon, label, active, badge = 0, badgeTone = 'accent', onClick, onRename }: {
   icon: React.ReactNode
   label: string
   active?: boolean
   badge?: number
   badgeTone?: 'accent' | 'neutral'
   onClick: () => void
-  onDoubleClick?: (e: React.MouseEvent) => void
+  /** Present only on renameable (real) folders. */
+  onRename?: () => void
 }) {
   return (
-    <button
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
-      aria-current={active ? 'page' : undefined}
-      className={`w-full flex items-center gap-2.5 px-2.5 py-[7px] text-left text-[12.5px] rounded-lg
-                  transition-colors duration-150 relative
-        ${active
-          ? 'bg-accent/14 text-accent-ink font-semibold'
-          : 'text-ink-2 hover:bg-ink/5 hover:text-ink'
-        }`}
-    >
-      <span className={`flex-shrink-0 ${active ? 'text-accent-ink' : 'text-ink-3'}`}>{icon}</span>
-      <span className="flex-1 truncate">{label}</span>
-      {badge > 0 && (
-        <span
-          className={`text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums flex-shrink-0
-            ${badgeTone === 'accent' ? 'bg-accent text-[#201500]' : 'bg-ink/12 text-ink-2'}`}
+    // Rename used to be a double-click on the row with the only hint parked in
+    // the "New folder" button's title attribute, which nobody finds. It is a
+    // pencil on hover now, and the row stays a button.
+    <div className="group/nav relative">
+      <button
+        onClick={onClick}
+        aria-current={active ? 'page' : undefined}
+        className={`w-full flex items-center gap-2.5 px-2.5 py-[7px] text-left text-[12.5px] rounded-lg
+                    transition-colors duration-150
+          ${active
+            ? 'bg-accent/14 text-accent-ink font-semibold'
+            : 'text-ink-2 hover:bg-ink/5 hover:text-ink'
+          }`}
+      >
+        <span className={`flex-shrink-0 ${active ? 'text-accent-ink' : 'text-ink-3'}`}>{icon}</span>
+        <span className="flex-1 truncate">{label}</span>
+        {badge > 0 && (
+          <span
+            className={`text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums flex-shrink-0
+              ${onRename ? 'group-hover/nav:opacity-0 transition-opacity' : ''}
+              ${badgeTone === 'accent' ? 'bg-accent text-[#201500]' : 'bg-ink/12 text-ink-2'}`}
+          >
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )}
+      </button>
+
+      {onRename && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onRename() }}
+          title={`Rename ${label}`}
+          aria-label={`Rename ${label}`}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-ink-3
+                     opacity-0 group-hover/nav:opacity-100 focus-visible:opacity-100
+                     hover:text-ink hover:bg-ink/8 transition-all"
         >
-          {badge > 99 ? '99+' : badge}
-        </span>
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+            <path d="M8.2 1.3l2.5 2.5M1.5 8l6.2-6.2 2.5 2.5L4 10.5l-3 .5.5-3z"
+              stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
       )}
-    </button>
+    </div>
   )
 }
 
@@ -87,7 +111,7 @@ export function Sidebar() {
     openCompose, setShowAccountModal,
     snoozes, drafts, setShowDraftsModal,
     setUnreadCounts, getUnreadCount, outbox, setOutbox, setShowOutboxModal, setShowRulesModal,
-    unifiedView, setUnifiedView,
+    unifiedView, setUnifiedView, showNotification,
   } = useEmailStore()
 
   useEffect(() => {
@@ -117,6 +141,9 @@ export function Sidebar() {
     const timer = setInterval(refresh, 60_000)
     return () => clearInterval(timer)
   }, [accounts, folders])
+
+  const [parkedCount, setParkedCount] = useState(0)
+  useEffect(() => localOutbox.subscribe(items => setParkedCount(items.length)), [])
 
   // Keep the outbox badge current so a stuck message is visible.
   useEffect(() => {
@@ -156,7 +183,14 @@ export function Sidebar() {
 
   const handleDeleteAccount = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!confirm('Remove this email account?')) return
+    const account = accounts.find(a => a.id === id)
+    const ok = await confirmDialog({
+      title: 'Remove this account?',
+      body: `${account?.email || 'This account'} will be disconnected from Hermes. The mailbox itself is untouched and can be added again later.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    })
+    if (!ok) return
     try {
       await accountsApi.remove(id)
       removeAccount(id)
@@ -179,10 +213,12 @@ export function Sidebar() {
   const starredCount = (accountId: string) =>
     emails.filter(e => e.accountId === accountId && e.starred).length
 
+  // Messages held in the renderer because the backend was unreachable count
+  // toward the badge too — from the user's side they are equally unsent.
   const pendingOutbox = outbox.filter(i =>
     i.status === 'pending' || i.status === 'retrying' || i.status === 'failed' || i.status === 'sending'
-  ).length
-  const failedOutbox = outbox.filter(i => i.status === 'failed').length
+  ).length + parkedCount
+  const failedOutbox = outbox.filter(i => i.status === 'failed').length + parkedCount
 
   const snoozedCount = (accountId: string) =>
     snoozes.filter(s => s.accountId === accountId).length
@@ -319,11 +355,21 @@ export function Sidebar() {
                           active={isActiveFolder}
                           badge={isActiveFolder ? 0 : unreadCount(account.id, folder.path)}
                           onClick={() => handleFolderClick(account.id, folder.path)}
-                          onDoubleClick={async (e) => {
-                            e.preventDefault()
-                            const name = prompt('Rename folder', folder.name)
+                          onRename={async () => {
+                            const name = await promptDialog({
+                              title: 'Rename folder',
+                              label: 'Folder name',
+                              defaultValue: folder.name,
+                              confirmLabel: 'Rename',
+                            })
                             if (!name || name === folder.name) return
-                            try { const updated = await emailsApi.renameFolder(account.id, folder.path, name); setFolders(account.id, accountFolders.map(f => f.path === folder.path ? updated : f)) } catch (err) { console.error(err) }
+                            try {
+                              const updated = await emailsApi.renameFolder(account.id, folder.path, name)
+                              setFolders(account.id, accountFolders.map(f => f.path === folder.path ? updated : f))
+                            } catch (err) {
+                              console.error(err)
+                              showNotification('error', 'Could not rename that folder')
+                            }
                           }}
                         />
                       )
@@ -331,11 +377,21 @@ export function Sidebar() {
 
                     <button
                       onClick={async () => {
-                        const name = prompt('New folder name')
+                        const name = await promptDialog({
+                          title: 'New folder',
+                          label: 'Folder name',
+                          placeholder: 'e.g. Receipts',
+                          confirmLabel: 'Create',
+                        })
                         if (!name) return
-                        try { const created = await emailsApi.createFolder(account.id, name); setFolders(account.id, [...accountFolders, created]) } catch (err) { console.error(err) }
+                        try {
+                          const created = await emailsApi.createFolder(account.id, name)
+                          setFolders(account.id, [...accountFolders, created])
+                        } catch (err) {
+                          console.error(err)
+                          showNotification('error', 'Could not create that folder')
+                        }
                       }}
-                      title="Double-click a folder to rename it"
                       className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-ink-3 hover:text-accent-ink rounded-lg hover:bg-ink/4 transition-colors"
                     >
                       <span className="w-[14px] flex justify-center text-base leading-none">+</span>

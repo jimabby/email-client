@@ -404,6 +404,36 @@ module.exports = {
     saveStore();
   },
 
+  // ─── Registered mobile devices ────────────────────────────────────────────
+  // Expo push tokens, keyed by token so a re-registration (which the app does
+  // on every launch) updates rather than piles up. Not a secret — a push token
+  // only lets its holder send a notification to that device — so it is not run
+  // through the secret store.
+  getDevices() {
+    if (!Array.isArray(store.devices)) store.devices = [];
+    return store.devices;
+  },
+
+  saveDevice(device) {
+    if (!Array.isArray(store.devices)) store.devices = [];
+    const idx = store.devices.findIndex(d => d.token === device.token);
+    if (idx === -1) store.devices.push(device);
+    else store.devices[idx] = { ...store.devices[idx], ...device };
+    // A phone that is reinstalled repeatedly should not grow this unbounded.
+    if (store.devices.length > 50) store.devices = store.devices.slice(-50);
+    saveStore();
+    return device;
+  },
+
+  removeDevice(token) {
+    if (!Array.isArray(store.devices)) return false;
+    const idx = store.devices.findIndex(d => d.token === token);
+    if (idx === -1) return false;
+    store.devices.splice(idx, 1);
+    saveStore();
+    return true;
+  },
+
   // ─── Per-account signatures ───────────────────────────────────────────────
   // Keyed by account id, and by `${accountId}:${aliasEmail}` for an alias, so
   // sending from a second identity signs with that identity's signature.

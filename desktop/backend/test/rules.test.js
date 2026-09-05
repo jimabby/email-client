@@ -158,3 +158,73 @@ test('previewRule reports matching ids without performing any action', () => {
   );
   assert.deepStrictEqual(matched, ['a', 'c']);
 });
+
+// ─── Empty condition values ─────────────────────────────────────────────────
+// `contains ''` used to be a wildcard: the operator short-circuited on an empty
+// needle and returned true. A rule with `match: 'any'`, one filled condition
+// and one blank one therefore matched every message that had ever arrived —
+// and paired with a delete or spam action, one blank field in the editor
+// emptied the mailbox.
+
+test('sanitizeRule drops conditions whose value is blank', () => {
+  const clean = rules.sanitizeRule({
+    conditions: [
+      { field: 'from', op: 'contains', value: 'marketing' },
+      { field: 'subject', op: 'contains', value: '' },
+      { field: 'snippet', op: 'contains', value: '   ' },
+    ],
+    actions: [{ type: 'markRead' }],
+  });
+  assert.deepStrictEqual(clean.conditions.map(c => c.field), ['from']);
+});
+
+test('isTrue keeps working without a value', () => {
+  const clean = rules.sanitizeRule({
+    conditions: [{ field: 'hasAttachment', op: 'isTrue', value: '' }],
+    actions: [{ type: 'star' }],
+  });
+  assert.strictEqual(clean.conditions.length, 1);
+  assert.strictEqual(rules.ruleMatches(email({ hasAttachments: true }), clean), true);
+  assert.strictEqual(rules.ruleMatches(email({ hasAttachments: false }), clean), false);
+});
+
+test('a blank contains matches nothing rather than everything', () => {
+  // Built by hand rather than through sanitizeRule, standing in for a rule
+  // stored before that filter existed.
+  const stored = {
+    enabled: true,
+    match: 'any',
+    conditions: [
+      { field: 'from', op: 'contains', value: 'nobody-at-all', caseSensitive: false },
+      { field: 'subject', op: 'contains', value: '', caseSensitive: false },
+    ],
+    actions: [{ type: 'delete' }],
+  };
+  assert.strictEqual(rules.ruleMatches(email(), stored), false);
+});
+
+test('a rule whose only condition was blank cannot match after sanitizing', () => {
+  const clean = rules.sanitizeRule({
+    match: 'any',
+    conditions: [{ field: 'subject', op: 'contains', value: '' }],
+    actions: [{ type: 'delete' }],
+  });
+  // No conditions survive, and ruleMatches refuses a rule with none.
+  assert.strictEqual(clean.conditions.length, 0);
+  assert.strictEqual(rules.ruleMatches(email(), clean), false);
+});
+
+test('previewRule on a half-filled rule reports only real matches', () => {
+  const matched = rules.previewRule(
+    {
+      match: 'any',
+      conditions: [
+        { field: 'from', op: 'contains', value: 'marketing' },
+        { field: 'subject', op: 'contains', value: '' },
+      ],
+      actions: [{ type: 'markRead' }],
+    },
+    [email({ id: 'a' }), email({ id: 'b', from: 'colleague@work.example' })],
+  );
+  assert.deepStrictEqual(matched, ['a']);
+});

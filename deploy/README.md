@@ -87,6 +87,22 @@ In Hermes mobile Settings, enter `https://mail.example.com` and the exact
 `API_TOKEN` from `deploy/.env`, then tap **Test connection**. A wrong or missing
 token returns HTTP 401.
 
+### Notifications
+
+Turn on **New mail notifications** in the same screen. The app asks the OS for
+permission, obtains an Expo push token, and registers it with the backend over
+the authenticated API — there is nothing to configure on the server, and no
+platform credentials are held there. Delivery goes through Expo's push service,
+which fans out to APNs and FCM.
+
+The backend then notifies the phone from the same arrival pipeline that raises
+the desktop's toasts, so notifications keep coming with the app closed and the
+desktop switched off. Snoozed messages notify on waking too.
+
+Two caveats worth knowing: push needs a physical device (a simulator has no
+transport), and tokens are pruned automatically when Expo reports the app was
+uninstalled.
+
 For a managed container host, build `desktop/backend/Dockerfile`, mount a
 persistent disk at `/data`, set the same environment variables, and use the
 host's HTTPS URL. Background schedulers require an always-on instance; services

@@ -148,8 +148,12 @@ export type SignatureMap = Record<string, string>;
 
 export interface UnifiedPage {
   emails: EmailSummary[];
-  /** Per-account continuation tokens; send the whole map back to page on. */
-  nextTokens: Record<string, string>;
+  /**
+   * Per-account continuation tokens; send the whole map back to page on.
+   * An account with no further pages is an explicit null, not a missing key —
+   * that is what tells the server not to fetch its first page again.
+   */
+  nextTokens: Record<string, string | null>;
   errors: Array<{ accountId: string; email: string; error: string }>;
 }
 

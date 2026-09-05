@@ -1,13 +1,14 @@
-import { useLayoutEffect, useState } from 'react';
+import { useLayoutEffect, useMemo, useState } from 'react';
 import {
   View, Text, TextInput, StyleSheet, TouchableOpacity, ActivityIndicator,
   KeyboardAvoidingView, Platform, ScrollView, Alert,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { api, errorMessage } from '../api';
-import { theme } from '../theme';
-import { radius, space } from '../theme';
-import { ui } from '../ui';
+import { useTheme } from '../ThemeContext';
+import { radius, space, type Palette } from '../theme';
+import type { Ui } from '../ui';
+import { ActionSheet } from '../components/ActionSheet';
 import { senderName, stripHtml } from '../utils';
 import type { RootStackParamList } from '../navigation';
 
@@ -15,6 +16,8 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Compose'>;
 
 export default function ComposeScreen({ navigation, route }: Props) {
   const { account, replyTo, prefill } = route.params;
+  const { t, ui } = useTheme();
+  const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
 
   const [to, setTo] = useState(replyTo ? replyTo.from : prefill?.to ?? '');
   const [cc, setCc] = useState(prefill?.cc ?? '');
@@ -26,6 +29,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
   const [text, setText] = useState(prefill?.body ?? '');
   const [sending, setSending] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [laterOpen, setLaterOpen] = useState(false);
 
   const bodyHtml = () => `<p>${text.replace(/\n/g, '<br>')}</p>`;
   const isEmpty = () => !to.trim() && !cc.trim() && !bcc.trim() && !subject.trim() && !text.trim();
@@ -104,16 +108,6 @@ export default function ComposeScreen({ navigation, route }: Props) {
 
   const send = () => dispatch();
 
-  const sendLater = () => {
-    Alert.alert('Send later', undefined, [
-      ...scheduleChoices().map((choice) => ({
-        text: `${choice.label} · ${choice.at.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`,
-        onPress: () => dispatch(choice.at),
-      })),
-      { text: 'Cancel', style: 'cancel' as const },
-    ]);
-  };
-
   const saveDraft = async () => {
     if (isEmpty()) { navigation.goBack(); return; }
     setSavingDraft(true);
@@ -141,10 +135,10 @@ export default function ComposeScreen({ navigation, route }: Props) {
       title: replyTo ? 'Reply' : 'New message',
       headerRight: () =>
         sending ? (
-          <ActivityIndicator color={theme.accent} />
+          <ActivityIndicator color={t.accent} />
         ) : (
           <View style={styles.headerActions}>
-            <TouchableOpacity onPress={sendLater} hitSlop={8}>
+            <TouchableOpacity onPress={() => setLaterOpen(true)} hitSlop={8}>
               <Text style={styles.laterBtn}>Later</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={send} hitSlop={8}>
@@ -153,7 +147,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
           </View>
         ),
     });
-  }, [navigation, to, cc, bcc, subject, text, sending]);
+  }, [navigation, to, cc, bcc, subject, text, sending, styles, t]);
 
   return (
     <KeyboardAvoidingView
@@ -171,7 +165,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
             value={to}
             onChangeText={setTo}
             placeholder="recipient@example.com"
-            placeholderTextColor={theme.textFaint}
+            placeholderTextColor={t.textFaint}
             autoCapitalize="none"
             keyboardType="email-address"
             style={styles.input}
@@ -190,7 +184,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
                 value={cc}
                 onChangeText={setCc}
                 placeholder="cc@example.com"
-                placeholderTextColor={theme.textFaint}
+                placeholderTextColor={t.textFaint}
                 autoCapitalize="none"
                 keyboardType="email-address"
                 style={styles.input}
@@ -202,7 +196,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
                 value={bcc}
                 onChangeText={setBcc}
                 placeholder="bcc@example.com"
-                placeholderTextColor={theme.textFaint}
+                placeholderTextColor={t.textFaint}
                 autoCapitalize="none"
                 keyboardType="email-address"
                 style={styles.input}
@@ -216,7 +210,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
             value={subject}
             onChangeText={setSubject}
             placeholder="Subject"
-            placeholderTextColor={theme.textFaint}
+            placeholderTextColor={t.textFaint}
             style={styles.input}
           />
         </View>
@@ -225,7 +219,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
           value={text}
           onChangeText={setText}
           placeholder="Write your message…"
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={t.textFaint}
           multiline
           textAlignVertical="top"
           style={styles.bodyInput}
@@ -244,52 +238,65 @@ export default function ComposeScreen({ navigation, route }: Props) {
 
         <TouchableOpacity style={styles.draftBtn} onPress={saveDraft} disabled={savingDraft}>
           {savingDraft
-            ? <ActivityIndicator color={theme.text} />
+            ? <ActivityIndicator color={t.text} />
             : <Text style={styles.draftText}>Save draft</Text>}
         </TouchableOpacity>
       </ScrollView>
+
+      <ActionSheet
+        visible={laterOpen}
+        title="Send later"
+        onClose={() => setLaterOpen(false)}
+        options={scheduleChoices().map((choice) => ({
+          label: choice.label,
+          detail: choice.at.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }),
+          onPress: () => dispatch(choice.at),
+        }))}
+      />
     </KeyboardAvoidingView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: ui.screen,
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  laterBtn: { ...ui.headerAction, color: theme.textMuted },
-  sendBtn: ui.headerAction,
-  fieldRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: space.lg,
-    paddingVertical: 13,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
-    gap: space.md,
-  },
-  label: { color: theme.textFaint, fontSize: 13.5, width: 52 },
-  fromValue: { ...ui.body, color: theme.textMuted, flex: 1 },
-  input: { ...ui.body, flex: 1 },
-  ccToggle: { color: theme.accent, fontSize: 13.5, fontWeight: '600' },
-  draftBtn: {
-    ...ui.btnSecondary,
-    marginHorizontal: space.lg,
-    marginTop: space.md,
-    marginBottom: space.xl,
-  },
-  draftText: ui.btnSecondaryText,
-  bodyInput: {
-    color: theme.text,
-    fontSize: 15,
-    lineHeight: 23,
-    padding: space.lg,
-    minHeight: 240,
-  },
-  quote: {
-    marginHorizontal: space.lg,
-    paddingLeft: space.md,
-    borderLeftWidth: 2,
-    borderLeftColor: theme.border,
-  },
-  quoteHeader: { ...ui.caption, marginBottom: 6 },
-  quoteText: { color: theme.textMuted, fontSize: 13, lineHeight: 20 },
-});
+function makeStyles(t: Palette, ui: Ui) {
+  return StyleSheet.create({
+    container: ui.screen,
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+    laterBtn: { ...ui.headerAction, color: t.textMuted },
+    sendBtn: ui.headerAction,
+    fieldRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: space.lg,
+      paddingVertical: 13,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: t.border,
+      gap: space.md,
+    },
+    label: { color: t.textFaint, fontSize: 13.5, width: 52 },
+    fromValue: { ...ui.body, color: t.textMuted, flex: 1 },
+    input: { ...ui.body, flex: 1 },
+    ccToggle: { color: t.accent, fontSize: 13.5, fontWeight: '600' },
+    draftBtn: {
+      ...ui.btnSecondary,
+      marginHorizontal: space.lg,
+      marginTop: space.md,
+      marginBottom: space.xl,
+    },
+    draftText: ui.btnSecondaryText,
+    bodyInput: {
+      color: t.text,
+      fontSize: 15,
+      lineHeight: 23,
+      padding: space.lg,
+      minHeight: 240,
+    },
+    quote: {
+      marginHorizontal: space.lg,
+      paddingLeft: space.md,
+      borderLeftWidth: 2,
+      borderLeftColor: t.border,
+    },
+    quoteHeader: { ...ui.caption, marginBottom: 6 },
+    quoteText: { color: t.textMuted, fontSize: 13, lineHeight: 20 },
+  });
+}

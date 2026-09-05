@@ -2,7 +2,12 @@ import type { Account, EmailSummary } from './types';
 
 export type RootStackParamList = {
   Accounts: undefined;
-  Inbox: { account: Account };
+  /**
+   * `folder` defaults to INBOX. `unified` merges every account into one list —
+   * the account param is still carried so Compose has an identity to send from.
+   */
+  Inbox: { account: Account; folder?: string; unified?: boolean };
+  Folders: { account: Account };
   Viewer: { account: Account; email: EmailSummary };
   Compose: {
     account: Account;

@@ -64,3 +64,19 @@ export interface OutboxItem {
   sentAt?: string;
   hasAttachments?: boolean;
 }
+
+export interface UnifiedPage {
+  emails: EmailSummary[];
+  /**
+   * Per-account continuation tokens. An exhausted account is an explicit null,
+   * not a missing key — send the whole map back to page on.
+   */
+  nextTokens: Record<string, string | null>;
+  errors: Array<{ accountId: string; email: string; error: string }>;
+}
+
+export interface ThreadSummary {
+  summary: string;
+  keyPoints: string[];
+  actionItems: string[];
+}

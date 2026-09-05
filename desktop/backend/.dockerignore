@@ -1,5 +1,19 @@
 node_modules
+
+# Secrets and runtime state. These are per-installation data, generated in
+# HERMES_DATA_DIR at runtime — a copy baked into the image would ship the
+# building machine's credentials and mail to every container that runs it.
+# The patterns are unanchored so they match at any depth: the AES key lives at
+# services/secret.key when HERMES_DATA_DIR is unset, not at the root.
 .env
-accounts.json
+.env.*
+**/*.key
+**/accounts.json
+**/email-cache.json
+**/categories.json
+**/search-index.json
+**/*.tmp
+
+test
 *.log
 npm-debug.log*

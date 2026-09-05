@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { format, isToday, isYesterday, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
+import { confirmDialog } from './DialogHost'
 import { aiApi, emailsApi, withToken } from '../api/client'
 import type { EmailSummary } from '../types/email'
 import { CategoryTabs } from './CategoryTabs'
@@ -394,7 +395,9 @@ export function EmailList() {
         setUnifiedTokens(page.nextTokens)
         // One unreachable account must not blank the others, so the list still
         // renders and the failure is reported rather than swallowed.
-        setNextToken(Object.keys(page.nextTokens).length ? 'unified' : null)
+        // The map now carries an explicit null for every exhausted account, so
+        // its size no longer says anything — only a live token does.
+        setNextToken(Object.values(page.nextTokens).some(Boolean) ? 'unified' : null)
         if (page.errors.length) {
           showNotification('error', `${page.errors[0].email}: ${page.errors[0].error}`)
         }
@@ -593,7 +596,13 @@ export function EmailList() {
   const handleBulkDelete = async () => {
     const selected = getSelectedEmails()
     if (!selected.length) { clearEmailSelection(); return }
-    if (!window.confirm(`Delete ${selected.length} email${selected.length > 1 ? 's' : ''}?`)) return
+    const ok = await confirmDialog({
+      title: `Delete ${selected.length} email${selected.length > 1 ? 's' : ''}?`,
+      body: 'They move to the Trash folder, where the provider will keep them for a while.',
+      confirmLabel: 'Delete',
+      danger: true,
+    })
+    if (!ok) return
     try {
       await Promise.all(groupSelection(selected).map(g => emailsApi.bulkDelete(g.accountId, g.ids, g.folder)))
       removeFromViews(selected.map(e => e.id))
@@ -652,7 +661,9 @@ export function EmailList() {
         const page = await emailsApi.unified(currentFolder, 50, unifiedTokens)
         appendEmails(page.emails)
         setUnifiedTokens(page.nextTokens)
-        setNextToken(Object.keys(page.nextTokens).length ? 'unified' : null)
+        // The map now carries an explicit null for every exhausted account, so
+        // its size no longer says anything — only a live token does.
+        setNextToken(Object.values(page.nextTokens).some(Boolean) ? 'unified' : null)
       } else {
         if (!currentAccountId) return
         const { emails: more, nextToken: nt } = await emailsApi.list(currentAccountId, currentFolder, 50, nextToken)

@@ -5,6 +5,30 @@ import type {
 } from '../types/email'
 import { readJson, writeJson, writeListWithinQuota } from '../lib/storage'
 
+export type ThemePreference = 'system' | 'light' | 'dark'
+export type ResolvedTheme = 'light' | 'dark'
+
+export function systemTheme(): ResolvedTheme {
+  try {
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+
+function readThemePreference(): ThemePreference {
+  try {
+    const raw = localStorage.getItem('hermes-theme')
+    return raw === 'light' || raw === 'dark' ? raw : 'system'
+  } catch {
+    return 'system'
+  }
+}
+
+function resolveTheme(preference: ThemePreference): ResolvedTheme {
+  return preference === 'system' ? systemTheme() : preference
+}
+
 interface EmailStore {
   // Accounts
   accounts: Account[]
@@ -22,9 +46,12 @@ interface EmailStore {
    */
   unifiedView: boolean
   setUnifiedView: (on: boolean) => void
-  /** Per-account continuation tokens for the unified list. */
-  unifiedTokens: Record<string, string>
-  setUnifiedTokens: (tokens: Record<string, string>) => void
+  /**
+   * Per-account continuation tokens for the unified list. A null value means
+   * that account is exhausted and must not be re-fetched from the top.
+   */
+  unifiedTokens: Record<string, string | null>
+  setUnifiedTokens: (tokens: Record<string, string | null>) => void
   setCurrentAccount: (id: string | null) => void
   setCurrentFolder: (folder: string) => void
 
@@ -179,9 +206,21 @@ interface EmailStore {
   gravatarEnabled: boolean
   setGravatarEnabled: (enabled: boolean) => void
 
-  // Theme
-  theme: 'dark' | 'light'
+  /**
+   * Theme.
+   *
+   * `themePreference` is what the user chose; `theme` is what is actually
+   * painted. They differ under 'system', which follows the OS and changes
+   * without any interaction — the old store had only the second, defaulted to
+   * dark, and never consulted prefers-color-scheme, so the whole light palette
+   * was unreachable for anyone who did not go looking for the toggle.
+   */
+  themePreference: ThemePreference
+  theme: ResolvedTheme
+  setThemePreference: (preference: ThemePreference) => void
   toggleTheme: () => void
+  /** Called by the OS media-query listener; ignored unless preference is 'system'. */
+  syncSystemTheme: (systemTheme: ResolvedTheme) => void
 
   // Thread view
   threadView: boolean
@@ -239,7 +278,15 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   emails: [],
   isLoadingEmails: false,
   setEmails: (emails) => set({ emails }),
-  appendEmails: (emails) => set((s) => ({ emails: [...s.emails, ...emails] })),
+  // De-duplicated by id. A page boundary can legitimately re-deliver a
+  // message (an account that ran out of pages, a provider that overlaps its
+  // cursors), and appending blindly produced duplicate rows sharing a React
+  // key. Existing entries win so local optimistic state is not clobbered.
+  appendEmails: (emails) => set((s) => {
+    const seen = new Set(s.emails.map(e => e.id))
+    const fresh = emails.filter(e => e?.id && !seen.has(e.id))
+    return fresh.length ? { emails: [...s.emails, ...fresh] } : {}
+  }),
   setLoadingEmails: (loading) => set({ isLoadingEmails: loading }),
   markEmailRead: (id) => set((s) => ({
     emails: s.emails.map(e => e.id === id ? { ...e, read: true } : e)
@@ -489,15 +536,30 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     set({ gravatarEnabled: enabled })
   },
 
-  // Theme — persisted in localStorage, defaults to dark
-  theme: (() => {
-    try { return (localStorage.getItem('hermes-theme') as 'dark' | 'light') || 'dark' } catch { return 'dark' }
-  })(),
-  toggleTheme: () => set((s) => {
-    const next = s.theme === 'dark' ? 'light' : 'dark'
-    try { localStorage.setItem('hermes-theme', next) } catch { /* ignore */ }
-    return { theme: next }
-  }),
+  // Theme — persisted in localStorage, defaults to following the OS.
+  themePreference: readThemePreference(),
+  theme: resolveTheme(readThemePreference()),
+  setThemePreference: (preference) => {
+    try {
+      // 'system' is the absence of a choice, so it is stored as the absence of
+      // a key. index.html reads the same key before the first paint.
+      if (preference === 'system') localStorage.removeItem('hermes-theme')
+      else localStorage.setItem('hermes-theme', preference)
+    } catch { /* ignore */ }
+    set({ themePreference: preference, theme: resolveTheme(preference) })
+  },
+  // The button cycles rather than flips, so 'system' is reachable without
+  // opening settings: system -> light -> dark -> system.
+  toggleTheme: () => {
+    const order: ThemePreference[] = ['system', 'light', 'dark']
+    const current = get().themePreference
+    const next = order[(order.indexOf(current) + 1) % order.length]
+    get().setThemePreference(next)
+  },
+  syncSystemTheme: (systemTheme) => {
+    if (get().themePreference !== 'system') return
+    set({ theme: systemTheme })
+  },
 
   threadView: (() => {
     try {

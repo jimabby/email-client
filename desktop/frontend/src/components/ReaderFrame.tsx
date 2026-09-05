@@ -13,12 +13,14 @@ interface Props {
  * Previously the body went straight into the application document via
  * dangerouslySetInnerHTML. DOMPurify kept scripts out, but inline CSS could
  * still position content over the app's own chrome — which is all a convincing
- * in-app phishing prompt needs. An iframe with an empty `sandbox` gets an
- * opaque origin and no script execution, so a message cannot reach the DOM,
- * the API token, or the network no matter what survives the sanitizer.
+ * in-app phishing prompt needs.
  *
- * `allow-popups` is the one capability granted, so that `target="_blank"` links
- * still open in the real browser.
+ * The sandbox withholds `allow-scripts`, and that alone is the guarantee: no
+ * script in this document runs, whatever survived the sanitizer. The two
+ * capabilities it does grant are `allow-popups` (so `target="_blank"` links
+ * open in the real browser) and `allow-same-origin` (so the parent can measure
+ * the content and not clip long messages). See the note on the iframe below for
+ * why that second one is safe here.
  */
 export function ReaderFrame({ html, theme }: Props) {
   const frameRef = useRef<HTMLIFrameElement>(null)

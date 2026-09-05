@@ -1,7 +1,10 @@
 import axios from 'axios';
 import { Linking } from 'react-native';
 import { useAppStore } from './store';
-import type { Account, EmailSummary, EmailBody, Folder, OutboxItem, UnreadCounts } from './types';
+import type {
+  Account, EmailSummary, EmailBody, Folder, OutboxItem, UnreadCounts, UnifiedPage,
+  ThreadSummary,
+} from './types';
 
 // The base URL and private token are configured on the Settings screen. In
 // production this should be the HTTPS URL of the always-on cloud backend.
@@ -135,6 +138,44 @@ export const api = {
         params: { q: query, accountId: opts.accountId, folder: opts.folder, limit: opts.limit ?? 50 },
       })
       .then((r) => r.data.emails),
+
+  // ─── Unified inbox ────────────────────────────────────────────────────────
+  // One date-ordered list across every account, the same endpoint the desktop
+  // "All inboxes" view uses. Continuation tokens are per-account: send back the
+  // whole map, including the nulls, or an exhausted account is re-read from the
+  // top and its first page arrives twice.
+  unified: (folder = 'INBOX', limit = 50, pageTokens?: Record<string, string | null>) =>
+    client()
+      .get<UnifiedPage>('/emails/unified', {
+        params: {
+          folder,
+          limit,
+          ...(pageTokens && Object.keys(pageTokens).length
+            ? { pageTokens: JSON.stringify(pageTokens) }
+            : {}),
+        },
+      })
+      .then((r) => r.data),
+
+  // ─── AI ───────────────────────────────────────────────────────────────────
+  // Both of these matter more on a phone than on a desktop: a small screen is
+  // where you least want to read a forty-message thread to find the ask.
+
+  aiSettings: () =>
+    client().get<{ provider: string | null; configured: boolean }>('/ai/settings').then((r) => r.data),
+
+  smartReplies: (data: { from?: string; subject?: string; body?: string }) =>
+    client().post<{ replies: string[] }>('/ai/smart-replies', data).then((r) => r.data.replies),
+
+  threadSummary: (data: { subject?: string; messages: { from?: string; date?: string; body?: string }[] }) =>
+    client().post<ThreadSummary>('/ai/thread-summary', data).then((r) => r.data),
+
+  // ─── Push registration ────────────────────────────────────────────────────
+  registerDevice: (token: string, platform: string) =>
+    client().post('/emails/devices', { token, platform }).then((r) => r.data),
+
+  unregisterDevice: (token: string) =>
+    client().delete('/emails/devices', { data: { token } }).then((r) => r.data),
 };
 
 /**

@@ -29,11 +29,31 @@ For local development, the LAN URL still works when the backend is running, and
 
 ## Screens
 
-- **Settings** - configure the backend URL and private API token
-- **Accounts** - list accounts stored by the cloud backend
-- **Inbox** - email list with pull-to-refresh, infinite scroll, and search
-- **Viewer** - full email, star, delete, archive, snooze, and reply
+- **Settings** - backend URL, API token, notifications, and appearance
+- **Accounts** - accounts stored by the cloud backend, plus **All inboxes**
+- **Folders** - every mailbox on an account, with live unread counts
+- **Inbox** - list with pull-to-refresh, infinite scroll, search, and swipe
+  actions (swipe right to archive, left to delete, long press to toggle read)
+- **Viewer** - full email, star, delete, archive, snooze, reply, and the AI
+  summary / smart replies when a key is configured on the server
 - **Compose** - new message, reply, drafts, send later, and undo send
+
+## Notifications
+
+Turn on **New mail notifications** in Settings. The app registers an Expo push
+token with the backend, which then notifies this device from the same arrival
+pipeline that drives the desktop's toasts — so mail arrives with the app closed
+and the desktop switched off. Tapping a notification opens that exact message.
+Snoozed messages notify when they wake.
+
+Push needs a physical device; a simulator has no transport for it.
+
+## Appearance
+
+Light and dark, following the system by default and overridable in Settings.
+The palettes are the desktop client's tokens from `frontend/src/index.css` —
+keep the two in step, or the phone and the desktop stop looking like the same
+product.
 
 ## Privacy
 
@@ -47,5 +67,6 @@ API token never reaches the system browser's history.
 
 ## Stack
 
-Expo SDK 51, React Native 0.74, React Navigation, Zustand, axios, and
-react-native-render-html.
+Expo SDK 51, React Native 0.74, React Navigation, Zustand, axios,
+react-native-render-html, react-native-gesture-handler (swipe actions), and
+expo-notifications (push).

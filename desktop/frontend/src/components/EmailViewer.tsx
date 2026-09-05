@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
+import { confirmDialog } from './DialogHost'
 import { aiApi, emailsApi } from '../api/client'
 import { Avatar, bareAddress } from './Avatar'
 import { readJson, writeJson } from '../lib/storage'
@@ -307,7 +308,17 @@ export function EmailViewer() {
     if (!selectedEmail) return
     const account = accounts.find(a => a.id === selectedEmail.accountId)
     const undoable = canUndoDelete(account?.type)
-    if (!undoable && !window.confirm('Delete this email?')) return
+    // Providers that support untrash get an Undo toast instead of a
+    // speed bump; only an irreversible delete is worth interrupting for.
+    if (!undoable) {
+      const ok = await confirmDialog({
+        title: 'Delete this email?',
+        body: 'This account cannot restore a deleted message from Hermes, so this cannot be undone here.',
+        confirmLabel: 'Delete',
+        danger: true,
+      })
+      if (!ok) return
+    }
 
     const { id, accountId, folder } = selectedEmail
     try {
@@ -338,13 +349,82 @@ export function EmailViewer() {
   }
 
   const handleSpam = async () => {
-    try { await emailsApi.reportSpam(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder); removeEmail(selectedEmail.id); showNotification('success', 'Reported as spam') }
-    catch { showNotification('error', 'Failed to report spam') }
+    if (!selectedEmail) return
+    const { id, accountId, folder } = selectedEmail
+    const origin = folder || 'INBOX'
+    try {
+      const { undoId } = await emailsApi.reportSpam(accountId, id, origin)
+      removeEmail(id)
+      // Reporting spam is a judgement call made in one click, and it trains the
+      // provider's filter — exactly the kind of action that needs a way back.
+      if (!undoId) {
+        showNotification('success', 'Reported as spam')
+        return
+      }
+      showNotification('success', 'Reported as spam', {
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              await emailsApi.unreportSpam(accountId, undoId, origin)
+              showNotification('success', 'Moved back to ' + origin)
+              window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
+            } catch {
+              showNotification('error', 'Could not restore the message')
+            }
+          },
+        },
+        timeoutMs: 8000,
+      })
+    } catch { showNotification('error', 'Failed to report spam') }
   }
   const handleBlock = async () => {
-    if (!confirm(`Block ${selectedEmail.from}? Future messages will go to spam.`)) return
+    const ok = await confirmDialog({
+      title: 'Block this sender?',
+      body: `${selectedEmail.from} will be reported as spam, and a rule will send future messages there automatically.`,
+      confirmLabel: 'Block',
+      danger: true,
+    })
+    if (!ok) return
     try { await emailsApi.blockSender(selectedEmail.accountId, selectedEmail.id, selectedEmail.from, selectedEmail.folder); removeEmail(selectedEmail.id); showNotification('success', 'Sender blocked') }
     catch { showNotification('error', 'Failed to block sender') }
+  }
+
+  /**
+   * Report a completed move with an Undo, when one is actually possible.
+   *
+   * The undo has to address the message by the id it has *after* the move —
+   * Outlook mints a new one, IMAP assigns a fresh UID in the destination — so
+   * the server returns it. This used to reverse with the pre-move id and a
+   * comment claiming moves "reverse cleanly on every provider"; on Outlook and
+   * on IMAP the undo simply failed. When the provider cannot report the new id
+   * (an IMAP server without UIDPLUS) the toast is shown without an Undo rather
+   * than with one that would not work.
+   */
+  const notifyMoved = (
+    message: string,
+    undo: { accountId: string; undoId: string | null; from: string; to: string } | null,
+  ) => {
+    if (!undo?.undoId) {
+      showNotification('success', message)
+      return
+    }
+    const { accountId, undoId, from, to } = undo
+    showNotification('success', message, {
+      action: {
+        label: 'Undo',
+        onClick: async () => {
+          try {
+            await emailsApi.move(accountId, undoId, from, to)
+            showNotification('success', `Moved back to ${from}`)
+            window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
+          } catch {
+            showNotification('error', 'Could not move the message back')
+          }
+        },
+      },
+      timeoutMs: 8000,
+    })
   }
 
   const handleArchive = async () => {
@@ -354,25 +434,9 @@ export function EmailViewer() {
     const origin = folder || 'INBOX'
 
     try {
-      await emailsApi.move(accountId, id, archive, origin)
+      const { undoId } = await emailsApi.move(accountId, id, archive, origin)
       removeEmail(id)
-      // An archive is a folder move, and a move reverses cleanly on every
-      // provider — so this undo works everywhere, unlike the one on delete.
-      showNotification('success', 'Archived', {
-        action: {
-          label: 'Undo',
-          onClick: async () => {
-            try {
-              await emailsApi.move(accountId, id, origin, archive)
-              showNotification('success', 'Moved back to ' + origin)
-              window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
-            } catch {
-              showNotification('error', 'Could not move the message back')
-            }
-          },
-        },
-        timeoutMs: 8000,
-      })
+      notifyMoved('Archived', { accountId, undoId, from: origin, to: archive })
     } catch {
       showNotification('error', 'Failed to archive email')
     }
@@ -487,10 +551,13 @@ export function EmailViewer() {
 
   const handleMove = async (targetFolder: string) => {
     setShowMoveMenu(false)
+    if (!selectedEmail) return
+    const { id, accountId, folder } = selectedEmail
+    const origin = folder || 'INBOX'
     try {
-      await emailsApi.move(selectedEmail.accountId, selectedEmail.id, targetFolder, selectedEmail.folder)
-      removeEmail(selectedEmail.id)
-      showNotification('success', `Moved to ${targetFolder}`)
+      const { undoId } = await emailsApi.move(accountId, id, targetFolder, origin)
+      removeEmail(id)
+      notifyMoved(`Moved to ${targetFolder}`, { accountId, undoId, from: origin, to: targetFolder })
     } catch {
       showNotification('error', 'Failed to move email')
     }

@@ -7,9 +7,16 @@
     <script>
       // Applied before the first paint so the app never flashes the wrong
       // theme on launch. App.tsx keeps this attribute in sync afterwards.
+      //
+      // 'system' is the default and follows the OS. It has to resolve to a
+      // concrete value here rather than being left to CSS, because the rest of
+      // the stylesheet keys off [data-theme] alone.
       try {
-        document.documentElement.dataset.theme =
-          localStorage.getItem('hermes-theme') === 'light' ? 'light' : 'dark';
+        var pref = localStorage.getItem('hermes-theme');
+        if (pref !== 'light' && pref !== 'dark') {
+          pref = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        document.documentElement.dataset.theme = pref;
       } catch (e) {
         document.documentElement.dataset.theme = 'dark';
       }

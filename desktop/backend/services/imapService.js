@@ -460,7 +460,16 @@ async function reportSpam(account, uid, folder = 'INBOX') {
   const list = await getFolders(account);
   const spam = list.find(f => /spam|junk/i.test(f.name));
   if (!spam) throw new Error('This account has no Spam/Junk folder');
-  return moveEmail(account, uid, folder, spam.path);
+  const moved = await moveEmail(account, uid, folder, spam.path);
+  return { ...moved, spamFolder: spam.path };
+}
+
+/** Move a message back out of Spam/Junk, so the action can carry an Undo. */
+async function unreportSpam(account, uid, folder = 'INBOX') {
+  const list = await getFolders(account);
+  const spam = list.find(f => /spam|junk/i.test(f.name));
+  if (!spam) throw new Error('This account has no Spam/Junk folder');
+  return moveEmail(account, uid, spam.path, folder || 'INBOX');
 }
 
 // Resolve the identity to send as — an explicit alias the account registered,
@@ -599,7 +608,13 @@ async function moveEmail(account, uid, fromFolder, toFolder) {
     // MOVE is atomic where the server supports it; ImapFlow falls back to
     // COPY + STORE + EXPUNGE itself when it doesn't, so there's no window
     // where the message exists in both folders or in neither.
-    await client.messageMove(String(uid), toFolder, { uid: true });
+    const result = await client.messageMove(String(uid), toFolder, { uid: true });
+    // A moved message gets a fresh UID in the destination mailbox, so the id
+    // the client is holding stops addressing anything. Servers advertising
+    // UIDPLUS report the mapping in COPYUID; without it an undo is not
+    // possible and the caller is told so by the absent id.
+    const mapped = result?.uidMap instanceof Map ? result.uidMap.get(Number(uid)) : undefined;
+    return mapped ? { uid: mapped } : {};
   });
 }
 
@@ -645,6 +660,7 @@ module.exports = {
   createFolder,
   renameFolder,
   reportSpam,
+  unreportSpam,
   sendEmail,
   saveDraft,
   deleteDraft,

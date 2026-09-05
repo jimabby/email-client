@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import { api, errorMessage } from '../api';
-import { theme } from '../theme';
-import { radius, space } from '../theme';
-import { ui } from '../ui';
+import { useTheme } from '../ThemeContext';
+import { space, type Palette } from '../theme';
+import type { Ui } from '../ui';
 import type { OutboxItem, OutboxStatus } from '../types';
 
 // Sends are queued on the server, so a message composed on a flaky connection
@@ -20,16 +20,22 @@ const STATUS_LABEL: Record<OutboxStatus, string> = {
   cancelled: 'Cancelled',
 };
 
-const STATUS_COLOR: Record<OutboxStatus, string> = {
-  pending: theme.accent,
-  sending: theme.accent,
-  retrying: theme.accent,
-  sent: theme.success,
-  failed: theme.danger,
-  cancelled: theme.textMuted,
-};
+function statusColor(t: Palette): Record<OutboxStatus, string> {
+  return {
+    pending: t.accent,
+    sending: t.accent,
+    retrying: t.accent,
+    sent: t.success,
+    failed: t.danger,
+    cancelled: t.textMuted,
+  };
+}
 
 export default function OutboxScreen() {
+  const { t, ui } = useTheme();
+  const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const colors = useMemo(() => statusColor(t), [t]);
+
   const [items, setItems] = useState<OutboxItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -66,7 +72,7 @@ export default function OutboxScreen() {
   };
 
   if (loading) {
-    return <ActivityIndicator color={theme.accent} size="large" style={{ marginTop: 40 }} />;
+    return <ActivityIndicator color={t.accent} size="large" style={{ marginTop: 40 }} />;
   }
 
   return (
@@ -78,7 +84,7 @@ export default function OutboxScreen() {
         <RefreshControl
           refreshing={refreshing}
           onRefresh={() => { setRefreshing(true); load(); }}
-          tintColor={theme.accent}
+          tintColor={t.accent}
         />
       }
       ListEmptyComponent={
@@ -87,7 +93,7 @@ export default function OutboxScreen() {
       renderItem={({ item }) => (
         <View style={styles.row}>
           <View style={styles.rowHeader}>
-            <Text style={[styles.status, { color: STATUS_COLOR[item.status] }]}>
+            <Text style={[styles.status, { color: colors[item.status] }]}>
               {STATUS_LABEL[item.status] ?? item.status}
             </Text>
             <Text style={styles.subject} numberOfLines={1}>{item.subject || '(no subject)'}</Text>
@@ -124,22 +130,24 @@ export default function OutboxScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: ui.screen,
-  empty: { ...ui.secondary, textAlign: 'center', marginTop: 48, paddingHorizontal: space.xl },
-  row: {
-    paddingHorizontal: space.lg,
-    paddingVertical: space.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
-  },
-  rowHeader: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  status: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
-  subject: { ...ui.bodyStrong, flex: 1 },
-  to: { ...ui.caption, marginTop: 2 },
-  detail: { color: theme.accent, fontSize: 12, marginTop: 4 },
-  errorText: { color: theme.danger, fontSize: 12, marginTop: 4 },
-  actions: { flexDirection: 'row', gap: 18, marginTop: space.sm },
-  action: { color: theme.accent, fontSize: 13.5, fontWeight: '600' },
-  danger: { color: theme.danger },
-});
+function makeStyles(t: Palette, ui: Ui) {
+  return StyleSheet.create({
+    container: ui.screen,
+    empty: { ...ui.secondary, textAlign: 'center', marginTop: 48, paddingHorizontal: space.xl },
+    row: {
+      paddingHorizontal: space.lg,
+      paddingVertical: space.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: t.border,
+    },
+    rowHeader: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+    status: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+    subject: { ...ui.bodyStrong, flex: 1 },
+    to: { ...ui.caption, marginTop: 2 },
+    detail: { color: t.accent, fontSize: 12, marginTop: 4 },
+    errorText: { color: t.danger, fontSize: 12, marginTop: 4 },
+    actions: { flexDirection: 'row', gap: 18, marginTop: space.sm },
+    action: { color: t.accent, fontSize: 13.5, fontWeight: '600' },
+    danger: { color: t.danger },
+  });
+}

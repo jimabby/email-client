@@ -30,16 +30,25 @@ function imapUid(emailId) {
 
 // ─── Validation ─────────────────────────────────────────────────────────────
 
+// Every operator except `isTrue` compares against a value. A condition with an
+// empty one is not a filter, it is a wildcard — and `contains ''` matched every
+// message ever received. Paired with `match: 'any'` and a delete or spam
+// action, one blank field in the rule editor emptied the mailbox. Blank
+// conditions are dropped here rather than in the UI, because the API is
+// reachable without it.
+const VALUELESS_OPS = new Set(['isTrue']);
+
 function sanitizeRule(raw) {
   const conditions = (Array.isArray(raw.conditions) ? raw.conditions : [])
     .filter(c => FIELDS.has(c?.field) && OPS.has(c?.op))
-    .slice(0, 10)
     .map(c => ({
       field: c.field,
       op: c.op,
       value: String(c.value ?? '').slice(0, 300),
       caseSensitive: c.caseSensitive === true,
-    }));
+    }))
+    .filter(c => VALUELESS_OPS.has(c.op) || c.value.trim() !== '')
+    .slice(0, 10);
 
   const actions = (Array.isArray(raw.actions) ? raw.actions : [])
     .filter(a => ACTIONS.has(a?.type))
@@ -80,8 +89,13 @@ function conditionMatches(email, condition) {
   const haystack = condition.caseSensitive ? rawHaystack : rawHaystack.toLowerCase();
   const needle = condition.caseSensitive ? condition.value : condition.value.toLowerCase();
 
+  // sanitizeRule drops empty values, but ruleMatches is also called on
+  // unsanitized input from previewRule, and a stored rule predates that filter.
+  // An empty needle matches nothing rather than everything — the safe reading.
+  if (!VALUELESS_OPS.has(condition.op) && !needle) return false;
+
   switch (condition.op) {
-    case 'contains': return !needle || haystack.includes(needle);
+    case 'contains': return haystack.includes(needle);
     case 'notContains': return !haystack.includes(needle);
     case 'equals': return haystack.trim() === needle.trim();
     case 'startsWith': return haystack.startsWith(needle);
