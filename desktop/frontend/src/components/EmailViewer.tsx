@@ -26,6 +26,19 @@ function normalizeSubject(subject: string): string {
 
 const stripHtml = htmlToText
 
+/**
+ * The id the server can fetch a whole conversation by, or null to fall back
+ * to matching subjects in the loaded list. Gmail and Outlook have real
+ * conversation ids; an IMAP thread is named by its root Message-ID, which the
+ * server searches for across the folder and Sent.
+ */
+function serverThreadId(email: { gmailId?: string; outlookId?: string; uid?: number; threadId?: string | null }): string | null {
+  if (!email.threadId) return null
+  if (email.gmailId || email.outlookId) return email.threadId
+  if (email.uid && /^<[^<>\s]+>$/.test(email.threadId)) return email.threadId
+  return null
+}
+
 // Smart replies were cached one localStorage key per message, which grew
 // without bound and could never be pruned. One bounded LRU map instead.
 const SMART_REPLY_KEY = 'hermes-smart-replies'
@@ -91,6 +104,8 @@ export function EmailViewer() {
   const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showSnoozeMenu, setShowSnoozeMenu] = useState(false)
   const [previewOpen, setPreviewOpen] = useState<Record<number, boolean>>({})
+  // Object URLs for previews, fetched with the auth header (see attachmentBlob).
+  const [previewUrls, setPreviewUrls] = useState<Record<number, string | 'loading' | 'error'>>({})
   const previewUrlRef = useRef<Record<number, string>>({})
   const [threadSummary, setThreadSummary] = useState<{ summary: string; keyPoints: string[]; actionItems: string[] } | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
@@ -114,6 +129,7 @@ export function EmailViewer() {
 
   useEffect(() => {
     setPreviewOpen({})
+    setPreviewUrls({})
     const urls = previewUrlRef.current
     for (const key of Object.keys(urls)) {
       try { URL.revokeObjectURL(urls[Number(key)]) } catch {}
@@ -138,7 +154,7 @@ export function EmailViewer() {
   // fresh smart-replies request each time.
   const conversationCandidates = useMemo<string>(() => {
     if (!selectedEmail) return ''
-    const providerThread = (selectedEmail.gmailId || selectedEmail.outlookId) ? selectedEmail.threadId : null
+    const providerThread = serverThreadId(selectedEmail)
     return emails
       .filter(e => e.id !== selectedEmail.id && e.accountId === selectedEmail.accountId &&
         (providerThread ? e.threadId === providerThread : normalizeSubject(e.subject) === normalizeSubject(selectedEmail.subject)))
@@ -152,14 +168,14 @@ export function EmailViewer() {
     if (!selectedEmail || !selectedEmailBody) { setConversationBodies([]); setSmartReplies([]); return }
     let cancelled = false
 
-    const providerThread = (selectedEmail.gmailId || selectedEmail.outlookId) ? selectedEmail.threadId : null
+    const providerThread = serverThreadId(selectedEmail)
     const candidateIds = conversationCandidates ? conversationCandidates.split(',') : []
     const candidates = candidateIds
       .map(id => emails.find(e => e.id === id))
       .filter((e): e is NonNullable<typeof e> => !!e)
 
     const conversationRequest = providerThread
-      ? emailsApi.getThread(selectedEmail.accountId, providerThread)
+      ? emailsApi.getThread(selectedEmail.accountId, providerThread, selectedEmail.folder)
           .then(items => items.filter(x => x.summary.id !== selectedEmail.id).map(x => ({ email: x.summary, body: x.body })))
       : Promise.all(candidates.map(async email => ({
           email,
@@ -298,23 +314,20 @@ export function EmailViewer() {
     })
   }
 
-  // Gmail and Outlook keep a message's id stable through the bin, so a delete
-  // there can be taken back. IMAP assigns a new UID on the way to Trash, which
-  // leaves nothing to address — so those accounts keep the confirmation
-  // prompt instead of being offered an undo that could not work.
-  const canUndoDelete = (accountType?: string) => accountType !== 'imap'
+  // Every provider now moves a deleted message to Trash and reports the id it
+  // has there, so Undo works everywhere — including IMAP, where the message
+  // gets a new UID. Only a delete from Trash itself is permanent, and that is
+  // the one worth a confirmation.
+  const isTrashFolder = (folder?: string) => /^(trash|deleteditems|deleted items|bin)$/i.test(folder || '')
+    || /trash|deleted/i.test(folder || '')
 
   const handleDelete = async () => {
     if (!selectedEmail) return
-    const account = accounts.find(a => a.id === selectedEmail.accountId)
-    const undoable = canUndoDelete(account?.type)
-    // Providers that support untrash get an Undo toast instead of a
-    // speed bump; only an irreversible delete is worth interrupting for.
-    if (!undoable) {
+    if (isTrashFolder(selectedEmail.folder)) {
       const ok = await confirmDialog({
-        title: 'Delete this email?',
-        body: 'This account cannot restore a deleted message from Hermes, so this cannot be undone here.',
-        confirmLabel: 'Delete',
+        title: 'Delete this email forever?',
+        body: 'It is already in Trash, so it will be permanently removed.',
+        confirmLabel: 'Delete forever',
         danger: true,
       })
       if (!ok) return
@@ -322,18 +335,18 @@ export function EmailViewer() {
 
     const { id, accountId, folder } = selectedEmail
     try {
-      await emailsApi.delete(accountId, id, folder)
+      const { undoId } = await emailsApi.delete(accountId, id, folder)
       removeEmail(id)
-      if (!undoable) {
+      if (!undoId) {
         showNotification('success', 'Email deleted')
         return
       }
-      showNotification('success', 'Email deleted', {
+      showNotification('success', 'Moved to Trash', {
         action: {
           label: 'Undo',
           onClick: async () => {
             try {
-              await emailsApi.untrash(accountId, id, folder || 'INBOX')
+              await emailsApi.untrash(accountId, undoId, folder || 'INBOX')
               showNotification('success', 'Delete undone')
               window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
             } catch {
@@ -378,6 +391,26 @@ export function EmailViewer() {
       })
     } catch { showNotification('error', 'Failed to report spam') }
   }
+  /**
+   * Unsubscribe the way the sender asked to be told. With a List-Unsubscribe
+   * header the server handles it (an RFC 8058 one-click POST, or an email to
+   * the list's mailto address) and nothing opens. Only a link found in the
+   * body, or a sender without one-click support, sends the user to a page.
+   */
+  const handleUnsubscribe = async (fallbackLink: string) => {
+    const openPage = (url: string) => window.open(url, '_blank', 'noopener,noreferrer')
+    if (!body?.listUnsubscribe) { openPage(fallbackLink); return }
+    try {
+      const result = await emailsApi.unsubscribe(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder)
+      if (result.method === 'one-click') showNotification('success', 'Unsubscribed')
+      else if (result.method === 'mailto') showNotification('success', `Unsubscribe request sent to ${result.to}`)
+      else if (result.method === 'browser' && result.url) openPage(result.url)
+      else openPage(fallbackLink)
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : 'Could not unsubscribe')
+    }
+  }
+
   const handleBlock = async () => {
     const ok = await confirmDialog({
       title: 'Block this sender?',
@@ -647,23 +680,42 @@ export function EmailViewer() {
   const isPreviewable = (att: Attachment) => PREVIEWABLE_TYPES.has(attachmentType(att))
   const isImage = (att: Attachment) => attachmentType(att).startsWith('image/')
 
-  // Attachment bytes are no longer inlined in the message payload; each one is
-  // streamed from its own endpoint, so preview and download are plain URLs.
-  const attachmentSrc = (index: number, inline: boolean) =>
-    emailsApi.attachmentUrl(selectedEmail.accountId, selectedEmail.id, index, {
-      folder: selectedEmail.folder,
-      inline,
-    })
+  // A plain attachment URL in <img src> cannot carry the Authorization header,
+  // so previews are fetched with it and shown from an object URL. The blob's
+  // type is pinned to the allowlisted declared type, never the server's echo.
+  const togglePreview = async (att: Attachment, index: number) => {
+    const opening = !previewOpen[index]
+    setPreviewOpen(s => ({ ...s, [index]: opening }))
+    if (!opening || previewUrlRef.current[index]) return
+    setPreviewUrls(s => ({ ...s, [index]: 'loading' }))
+    try {
+      const blob = await emailsApi.attachmentBlob(selectedEmail.accountId, selectedEmail.id, index, {
+        folder: selectedEmail.folder,
+        type: attachmentType(att),
+      })
+      const url = URL.createObjectURL(blob)
+      previewUrlRef.current[index] = url
+      setPreviewUrls(s => ({ ...s, [index]: url }))
+    } catch {
+      setPreviewUrls(s => ({ ...s, [index]: 'error' }))
+    }
+  }
 
-  const downloadAttachment = (att: Attachment, index: number) => {
-    const link = document.createElement('a')
-    link.href = attachmentSrc(index, false)
-    link.download = att.filename || `attachment-${index}`
-    // The server sets Content-Disposition: attachment, so the browser saves it
-    // without ever holding the bytes in JS memory.
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
+  // Downloads go through a single-use ticket URL: the browser streams the file
+  // to disk itself (the server sets Content-Disposition: attachment), so a
+  // large file is never held in JS memory, and the URL carries no credential.
+  const downloadAttachment = async (att: Attachment, index: number) => {
+    try {
+      const url = await emailsApi.attachmentDownloadUrl(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = att.filename || `attachment-${index}`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+    } catch {
+      showNotification('error', `Could not download ${att.filename || 'the attachment'}`)
+    }
   }
 
   // "Summarize" still needs the bytes in hand — fetch just that one file.
@@ -855,7 +907,7 @@ export function EmailViewer() {
               />
               {unsubscribeLink && (
                 <MenuItem
-                  onClick={() => { setShowMoreMenu(false); window.open(unsubscribeLink, '_blank', 'noopener,noreferrer') }}
+                  onClick={() => { setShowMoreMenu(false); handleUnsubscribe(unsubscribeLink) }}
                   label="Unsubscribe"
                   icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M8 3l5 5-5 5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                 />
@@ -970,7 +1022,7 @@ export function EmailViewer() {
         )}
 
         {sanitizedHtml ? (
-          <ReaderFrame html={sanitizedHtml} theme={readerTheme} />
+          <ReaderFrame html={sanitizedHtml} theme={readerTheme} allowRemote={showRemoteImages} />
         ) : body?.text ? (
           <pre className="whitespace-pre-wrap font-sans text-[14px] text-ink leading-[1.65]">{body.text}</pre>
         ) : (
@@ -990,7 +1042,7 @@ export function EmailViewer() {
                     {isPreviewable(att) && (
                       <button
                         title="Preview"
-                        onClick={() => setPreviewOpen(s => ({ ...s, [i]: !s[i] }))}
+                        onClick={() => togglePreview(att, i)}
                         className="text-info hover:opacity-70 transition-opacity text-[11px]"
                       >
                         {previewOpen[i] ? 'Hide' : 'Preview'}
@@ -1010,17 +1062,22 @@ export function EmailViewer() {
                   {attachmentSummaries[i] && <div className="rounded-md bg-surface-2 p-3 text-xs whitespace-pre-wrap">{attachmentSummaries[i]}</div>}
                   {previewOpen[i] && isPreviewable(att) && (
                     <div className="border border-line rounded-md overflow-hidden bg-white w-full">
-                      {isImage(att) ? (
-                        <img src={attachmentSrc(i, true)} alt={att.filename} className="w-full h-auto max-h-[80vh] object-contain" />
+                      {previewUrls[i] === 'loading' || !previewUrls[i] ? (
+                        <div className="p-4 text-xs text-ink-3">Loading preview…</div>
+                      ) : previewUrls[i] === 'error' ? (
+                        <div className="p-4 text-xs text-danger">Could not load this attachment.</div>
+                      ) : isImage(att) ? (
+                        <img src={previewUrls[i]} alt={att.filename} className="w-full h-auto max-h-[80vh] object-contain" />
+                      ) : attachmentType(att) === 'application/pdf' ? (
+                        // The browser's PDF viewer refuses to run inside a
+                        // sandboxed frame. The blob is typed application/pdf by
+                        // us (never by the sender), so it can only ever render
+                        // as a PDF, which has no script access to this page.
+                        <iframe title={att.filename} src={previewUrls[i]} className="w-full h-[80vh]" />
                       ) : (
                         // Sandboxed: an attachment is sender-controlled content
                         // and must never run with this origin's privileges.
-                        <iframe
-                          title={att.filename}
-                          src={attachmentSrc(i, true)}
-                          sandbox=""
-                          className="w-full h-[80vh]"
-                        />
+                        <iframe title={att.filename} src={previewUrls[i]} sandbox="" className="w-full h-[80vh]" />
                       )}
                     </div>
                   )}

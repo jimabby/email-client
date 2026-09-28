@@ -27,13 +27,23 @@ function sweep(now = Date.now()) {
   }
 }
 
-function issue({ accountId, emailId, index, folder }) {
+/**
+ * @param {object} claim
+ * @param {'attachment'|'export'} [claim.kind]  what the ticket unlocks
+ * @param {boolean} [claim.inline]  serve an attachment inline (a preview) or
+ *        as a download. Mobile opens tickets in the OS viewer, so inline is
+ *        the default.
+ */
+function issue({ kind = 'attachment', accountId, emailId, index, folder, inline = true, limit }) {
   const token = crypto.randomBytes(32).toString('base64url');
   tickets.set(token, {
+    kind,
     accountId,
     emailId,
     index,
     folder: folder || 'INBOX',
+    inline: inline !== false,
+    limit,
     expiresAt: Date.now() + TTL_MS,
     used: false,
   });
@@ -57,10 +67,13 @@ function redeem(token) {
   if (ticket.used || ticket.expiresAt <= Date.now()) return null;
 
   return {
+    kind: ticket.kind,
     accountId: ticket.accountId,
     emailId: ticket.emailId,
     index: ticket.index,
     folder: ticket.folder,
+    inline: ticket.inline,
+    limit: ticket.limit,
   };
 }
 

@@ -12,7 +12,7 @@ import { avatarColor, radius, space, type Palette } from '../theme';
 import type { Ui } from '../ui';
 import { ActionSheet } from '../components/ActionSheet';
 import { initials, senderName, formatFullDate, stripHtml } from '../utils';
-import type { EmailBody, ThreadSummary } from '../types';
+import type { EmailBody, EmailSummary, ThreadSummary } from '../types';
 import type { RootStackParamList } from '../navigation';
 
 // Quick snooze choices (mirrors the desktop viewer).
@@ -30,6 +30,17 @@ function snoozeChoices(): { label: string; until: Date }[] {
 }
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Viewer'>;
+
+/**
+ * The id the server can fetch the whole conversation by: Gmail and Outlook
+ * have conversation ids; an IMAP thread is named by its root Message-ID.
+ */
+function serverThreadId(email: EmailSummary): string | null {
+  if (!email.threadId) return null;
+  if (email.gmailId || email.outlookId) return email.threadId;
+  if (email.uid && /^<[^<>\s]+>$/.test(email.threadId)) return email.threadId;
+  return null;
+}
 
 export default function ViewerScreen({ navigation, route }: Props) {
   const { account, email } = route.params;
@@ -56,6 +67,11 @@ export default function ViewerScreen({ navigation, route }: Props) {
   const [summary, setSummary] = useState<ThreadSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
+  // The rest of the conversation, oldest first. The phone showed one message
+  // at a time; a reply without what it answers is half a conversation.
+  const [thread, setThread] = useState<{ summary: EmailSummary; body: EmailBody }[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
   const sanitized = useMemo(
     () => (body?.html ? sanitizeEmailHtml(body.html, showRemoteImages) : null),
     [body?.html, showRemoteImages],
@@ -79,6 +95,16 @@ export default function ViewerScreen({ navigation, route }: Props) {
   }, [account.id, email.id, email.folder]);
 
   useEffect(() => {
+    const threadId = serverThreadId(email);
+    if (!threadId) { setThread([]); return; }
+    let active = true;
+    api.getThread(account.id, threadId, email.folder)
+      .then((items) => { if (active) setThread(items.filter((item) => item.summary.id !== email.id)); })
+      .catch(() => { if (active) setThread([]); });
+    return () => { active = false; };
+  }, [account.id, email.id]);
+
+  useEffect(() => {
     api.aiSettings()
       .then(({ configured }) => setAiReady(configured))
       .catch(() => setAiReady(false));
@@ -100,9 +126,16 @@ export default function ViewerScreen({ navigation, route }: Props) {
   const loadSummary = async () => {
     setSummaryLoading(true);
     try {
+      // The whole conversation when there is one — "summarise" on a reply
+      // used to summarise just the reply.
+      const earlier = thread.map((item) => ({
+        from: item.body.from || item.summary.from,
+        date: item.body.date || item.summary.date,
+        body: (item.body.text || (item.body.html ? stripHtml(item.body.html) : '')).slice(0, 4000),
+      }));
       setSummary(await api.threadSummary({
         subject: email.subject,
-        messages: [{ from: email.from, date: body?.date || email.date, body: plainBody() }],
+        messages: [...earlier, { from: email.from, date: body?.date || email.date, body: plainBody() }],
       }));
     } catch (err) {
       Alert.alert('Could not summarise', errorMessage(err));
@@ -237,6 +270,37 @@ export default function ViewerScreen({ navigation, route }: Props) {
                     ? <ActivityIndicator color={t.ai} size="small" />
                     : <Text style={styles.aiChipText}>✦ Suggest replies</Text>}
                 </TouchableOpacity>
+              </View>
+            )}
+
+            {thread.length > 0 && (
+              <View style={styles.thread}>
+                <Text style={styles.threadTitle}>Earlier in this conversation ({thread.length})</Text>
+                {thread.map(({ summary: item, body: prior }) => {
+                  const open = expanded.has(item.id);
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={styles.threadItem}
+                      activeOpacity={0.7}
+                      onPress={() => setExpanded((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                        return next;
+                      })}
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded: open }}
+                    >
+                      <View style={styles.threadHead}>
+                        <Text style={styles.threadFrom} numberOfLines={1}>{senderName(prior.from || item.from)}</Text>
+                        <Text style={styles.threadDate}>{formatFullDate(prior.date || item.date)}</Text>
+                      </View>
+                      <Text style={styles.threadText} numberOfLines={open ? undefined : 2} selectable={open}>
+                        {prior.text || (prior.html ? stripHtml(prior.html) : item.snippet || '')}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             )}
 
@@ -411,6 +475,19 @@ function makeStyles(t: Palette, ui: Ui) {
     avatarText: { color: '#fff', fontWeight: '600', fontSize: 14 },
     fromName: { ...ui.bodyStrong },
     date: { ...ui.caption, marginTop: 2 },
+
+    thread: { marginHorizontal: space.lg, marginTop: space.md, gap: space.sm },
+    threadTitle: { ...ui.overline },
+    threadItem: {
+      backgroundColor: t.bgInput,
+      borderColor: t.border, borderWidth: StyleSheet.hairlineWidth,
+      borderRadius: radius.md,
+      paddingHorizontal: space.md, paddingVertical: 10,
+    },
+    threadHead: { flexDirection: 'row', justifyContent: 'space-between', gap: space.sm, marginBottom: 4 },
+    threadFrom: { ...ui.bodyStrong, flex: 1, fontSize: 13.5 },
+    threadDate: { ...ui.caption },
+    threadText: { ...ui.secondary, lineHeight: 19 },
 
     aiBar: { flexDirection: 'row', gap: space.sm, paddingHorizontal: space.lg, paddingTop: space.md },
     aiChip: {

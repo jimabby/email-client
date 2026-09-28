@@ -14,6 +14,8 @@ export interface Account {
   createdAt: string;
   aliases?: Alias[];
   allowInsecureTLS?: boolean;
+  /** Set when the provider stopped accepting this account's credentials. */
+  authError?: { message: string; at: string } | null;
 }
 
 export interface EmailSummary {
@@ -36,6 +38,8 @@ export interface EmailSummary {
   inReplyTo?: string;
   /** Set when the result came from the local search index rather than a provider. */
   fromIndex?: boolean;
+  /** Undefined when the provider could not say. */
+  hasAttachments?: boolean;
 }
 
 export interface Attachment {
@@ -65,6 +69,8 @@ export interface EmailBody {
   threadId?: string | null;
   /** Raw List-Unsubscribe header, when the sender provides one. */
   listUnsubscribe?: string;
+  /** RFC 8058 List-Unsubscribe-Post; "List-Unsubscribe=One-Click" enables one-click. */
+  listUnsubscribePost?: string;
   /** Provider verdict on SPF/DKIM/DMARC — see SenderBadge. */
   authentication?: SenderAuthentication | null;
   /** Parsed meeting invitation, when the message carries one. */
@@ -169,7 +175,7 @@ export type UnreadCounts = Record<string, Record<string, { unread: number; total
 
 // ─── Rules ───────────────────────────────────────────────────────────────────
 
-export type RuleField = 'from' | 'to' | 'subject' | 'snippet' | 'hasAttachment';
+export type RuleField = 'from' | 'fromAddress' | 'to' | 'subject' | 'snippet' | 'hasAttachment';
 export type RuleOp = 'contains' | 'notContains' | 'equals' | 'startsWith' | 'endsWith' | 'matches' | 'isTrue';
 export type RuleActionType = 'move' | 'archive' | 'markRead' | 'markUnread' | 'star' | 'spam' | 'delete';
 

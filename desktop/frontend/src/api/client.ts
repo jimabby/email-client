@@ -117,6 +117,10 @@ export const accountsApi = {
 
   remove: (id: string) => api.delete(`/auth/accounts/${id}`).then(r => r.data),
 
+  /** Update an IMAP password (the "Reconnect" path) — tested before saving. */
+  updatePassword: (id: string, password: string) =>
+    api.patch<{ account: Account }>(`/auth/accounts/${id}`, { password }).then(r => r.data),
+
   getGmailAuthUrl: () => api.get<{ url: string }>('/auth/gmail').then(r => r.data),
   getOutlookAuthUrl: () => api.get<{ url: string }>('/auth/outlook').then(r => r.data),
 }
@@ -157,16 +161,31 @@ export const emailsApi = {
     }).then(r => r.data),
 
   /**
-   * URL for one attachment. Bytes are streamed straight from the provider, so
-   * nothing has to be base64'd through the message payload.
+   * Attachment bytes as a Blob, fetched with the Authorization header.
+   *
+   * An <img src> or <iframe src> cannot send that header, and the server takes
+   * a token in the URL on the live-update stream only — so a plain attachment
+   * URL is a 401 whenever the backend has a token, which the desktop app
+   * always does. Previews use an object URL built from this instead.
    */
-  attachmentUrl: (accountId: string, emailId: string, index: number, opts: { folder?: string; inline?: boolean } = {}) => {
-    const params = new URLSearchParams()
-    if (opts.folder) params.set('folder', opts.folder)
-    if (opts.inline) params.set('inline', 'true')
-    const query = params.toString()
-    return withToken(`/api/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}${query ? `?${query}` : ''}`)
+  attachmentBlob: async (accountId: string, emailId: string, index: number, opts: { folder?: string; type?: string } = {}) => {
+    const res = await api.get<ArrayBuffer>(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}`, {
+      params: { ...(opts.folder ? { folder: opts.folder } : {}), inline: 'true' },
+      responseType: 'arraybuffer',
+    })
+    return new Blob([res.data], { type: opts.type || String(res.headers['content-type'] || 'application/octet-stream') })
   },
+
+  /**
+   * A single-use, two-minute URL for one attachment download. The file is
+   * streamed by the browser's own download manager, never held in JS memory,
+   * and the URL carries no reusable credential.
+   */
+  attachmentDownloadUrl: (accountId: string, emailId: string, index: number, folder?: string) =>
+    api.post<{ url: string }>(
+      `/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}/ticket`, {},
+      { params: { ...(folder ? { folder } : {}), inline: 'false' } },
+    ).then(r => r.data.url),
 
   /** Fetch attachment bytes (used when the content is needed in memory). */
   fetchAttachment: (accountId: string, emailId: string, index: number, folder?: string) =>
@@ -215,12 +234,26 @@ export const emailsApi = {
 
   /**
    * URL for an mbox export. The response is a large streamed download, so it
-   * is handed to the browser rather than pulled through axios.
+   * is handed to the browser rather than pulled through axios — via a
+   * single-use ticket, since a download link cannot carry the auth header.
    */
-  exportUrl: (accountId: string, folder: string, limit = 5000) => {
-    const params = new URLSearchParams({ accountId, folder, limit: String(limit) })
-    return withToken(`/api/emails/export?${params.toString()}`)
-  },
+  exportUrl: (accountId: string, folder: string, limit = 5000) =>
+    api.post<{ url: string }>('/emails/export-ticket', { accountId, folder, limit }).then(r => r.data.url),
+
+  /** Rules, templates, signatures, aliases, and the auto-responder as JSON. */
+  exportSettings: () => api.get<Record<string, unknown>>('/emails/settings-export').then(r => r.data),
+  importSettings: (data: unknown) =>
+    api.post<{ success: boolean; skipped: string[] }>('/emails/settings-import', data).then(r => r.data),
+
+  /**
+   * Unsubscribe using what the message advertises: RFC 8058 one-click (done
+   * server-side), a mailto request, or a URL for the caller to open.
+   */
+  unsubscribe: (accountId: string, emailId: string, folder?: string) =>
+    api.post<{ success: boolean; method: 'one-click' | 'mailto' | 'browser' | 'none'; url?: string; to?: string }>(
+      `/emails/${accountId}/message/${encodeURIComponent(emailId)}/unsubscribe`, {},
+      { params: folder ? { folder } : {} },
+    ).then(r => r.data),
 
   getFolders: (accountId: string) =>
     api.get<Folder[]>(`/emails/${accountId}/folders`).then(r => r.data),
@@ -279,8 +312,12 @@ export const emailsApi = {
   cancelQueuedSend: (accountId: string, jobId: string) =>
     api.post(`/emails/${accountId}/send-queue/${jobId}/cancel`).then(r => r.data),
 
+  /**
+   * Move to Trash. `undoId` addresses the message where it now is (IMAP gives
+   * it a new UID in Trash); null means the delete was permanent.
+   */
   delete: (accountId: string, emailId: string, folder?: string) =>
-    api.delete(`/emails/${accountId}/message/${encodeURIComponent(emailId)}`, {
+    api.delete<{ success: boolean; permanent: boolean; undoId: string | null }>(`/emails/${accountId}/message/${encodeURIComponent(emailId)}`, {
       params: folder ? { folder } : {}
     }).then(r => r.data),
 
@@ -294,8 +331,10 @@ export const emailsApi = {
       params: folder ? { folder } : {}
     }).then(r => r.data),
 
-  getThread: (accountId: string, threadId: string) =>
-    api.get<{ summary: EmailSummary; body: EmailBody }[]>(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}`).then(r => r.data),
+  getThread: (accountId: string, threadId: string, folder?: string) =>
+    api.get<{ summary: EmailSummary; body: EmailBody }[]>(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}`, {
+      params: folder ? { folder } : {},
+    }).then(r => r.data),
 
   // `undoId` is the id the message has *after* the move. Outlook mints a new
   // one and IMAP assigns a fresh UID, so undoing with the id the client already

@@ -8,6 +8,8 @@ export interface Account {
   email: string;
   name: string;
   createdAt: string;
+  /** Set when the provider stopped accepting this account's credentials. */
+  authError?: { message: string; at: string } | null;
 }
 
 export interface EmailSummary {
@@ -21,6 +23,13 @@ export interface EmailSummary {
   folder: string;
   accountId: string;
   snippet?: string;
+  /** Provider conversation id, or the root Message-ID for IMAP. */
+  threadId?: string | null;
+  gmailId?: string;
+  outlookId?: string;
+  uid?: number;
+  /** Undefined when the provider could not say. */
+  hasAttachments?: boolean;
 }
 
 export interface EmailBody {

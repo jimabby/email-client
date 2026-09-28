@@ -137,6 +137,13 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
                 </svg>
               </button>
             )}
+            {email.hasAttachments && (
+              <span title="Has attachments" aria-label="Has attachments" className="text-ink-3 flex-shrink-0">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                  <path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                </svg>
+              </span>
+            )}
             <span className={`text-[11px] tabular-nums ${!email.read ? 'text-accent-ink font-medium' : 'text-ink-3'}`}>
               {formatDate(email.date)}
             </span>

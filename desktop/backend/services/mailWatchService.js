@@ -4,6 +4,7 @@ const store = require('../store');
 const searchIndex = require('./searchIndexService');
 const notifications = require('./notificationService');
 const rules = require('./rulesService');
+const accountHealth = require('./accountHealth');
 
 const emitter = new EventEmitter();
 emitter.setMaxListeners(50); // Allow many SSE clients
@@ -43,7 +44,9 @@ async function handleNewMail(accountId, meta = {}) {
       const service = getService(account.type);
       const result = await service.fetchEmails(account, 'INBOX', 25, null);
       emails = result?.emails || [];
+      accountHealth.noteSuccess(accountId);
     } catch (err) {
+      accountHealth.noteFailure(accountId, err);
       console.warn(`[watch] Could not fetch new mail for ${account.email}: ${err.message}`);
       emitNewMail(accountId, meta);
       return [];
@@ -67,23 +70,37 @@ async function handleNewMail(accountId, meta = {}) {
     // On the very first pass everything looks new; that's a cold start, not an
     // arrival, so don't fire notifications or rules for the whole inbox.
     if (!isFirstPass && fresh.length) {
+      let applied = [];
       try {
         const archiveFolders = {};
-        try {
-          const folders = await getService(account.type).getFolders(account);
-          const match = folders.find(f => /^archive$/i.test(f.name)) || folders.find(f => /all mail/i.test(f.name));
-          if (match) archiveFolders[account.id] = match.path;
-        } catch { /* archive rules fall back to "Archive" */ }
-        await rules.applyRules(fresh, { archiveFolders });
+        const needsArchive = store.getRules().some(r => r.enabled !== false && r.actions?.some(a => a.type === 'archive'));
+        if (needsArchive) {
+          try {
+            const folders = await getService(account.type).getFolders(account);
+            const match = folders.find(f => /^archive$/i.test(f.name)) || folders.find(f => /all mail/i.test(f.name));
+            if (match) archiveFolders[account.id] = match.path;
+          } catch { /* archive rules fall back to "Archive" */ }
+        }
+        applied = (await rules.applyRules(fresh, { archiveFolders })).applied || [];
       } catch (err) {
         console.warn('[watch] Rule run failed:', err.message);
       }
+
+      // What the rules did decides what happens next. A message a rule moved,
+      // archived, deleted, or reported as spam was handled — notifying about it
+      // (or auto-replying to a blocked sender, which confirms the address to a
+      // spammer) defeats the rule. One a rule marked read is not news either.
+      const removed = new Set(applied.filter(a => rules.TERMINAL_ACTIONS.has(a.action)).map(a => a.emailId));
+      const markedRead = new Set(applied.filter(a => a.action === 'markRead').map(a => a.emailId));
+      const kept = fresh.filter(e => !removed.has(e.id));
+      const notable = kept.filter(e => !markedRead.has(e.id));
+
       // Auto-replies go out through the same send queue as anything else, so a
       // reply composed while the network is down is retried rather than lost.
-      try { require('./vacationService').respondTo(fresh, account); }
-      catch (err) { console.warn('[watch] Vacation responder failed:', err.message); }
+      require('./vacationService').respondTo(kept, account)
+        .catch(err => console.warn('[watch] Vacation responder failed:', err.message));
 
-      try { notifications.notifyNewMail(accountId, fresh); } catch { /* best effort */ }
+      try { notifications.notifyNewMail(accountId, notable); } catch { /* best effort */ }
     }
 
     refreshBadge().catch(() => {});
@@ -176,6 +193,8 @@ function startImapWatcher(account) {
       secure: fresh.imapSecure !== false,
       auth: { user: fresh.email, pass: fresh.password },
       tls: { rejectUnauthorized: fresh.allowInsecureTLS !== true },
+      greetingTimeout: 15000,
+      connectionTimeout: 30000,
       logger: false,
     });
 
@@ -204,7 +223,8 @@ function startImapWatcher(account) {
       watcher.backoffMs = 5000; // healthy again
       // Seed the seen-set so the first real arrival is recognised as new.
       handleNewMail(account.id, { source: 'imap-connect' }).catch(() => {});
-    } catch {
+    } catch (err) {
+      accountHealth.noteFailure(account.id, err);
       scheduleReconnect();
     }
   };
@@ -254,6 +274,7 @@ function startApiPollWatcher(account) {
     try {
       const service = getService(fresh.type);
       const result = await service.fetchEmails(fresh, 'INBOX', 1, null);
+      accountHealth.noteSuccess(fresh.id);
       const first = result?.emails?.[0];
       if (!first) return;
       if (!watcher.lastSeenMessageId) {
@@ -268,8 +289,10 @@ function startApiPollWatcher(account) {
         watcher.lastSeenMessageId = first.id;
         await handleNewMail(account.id, { source: `${account.type}-poll` });
       }
-    } catch {
-      // Ignore transient polling failures.
+    } catch (err) {
+      // Transient polling failures are ignored; a revoked grant is recorded
+      // so the client can ask the user to reconnect.
+      accountHealth.noteFailure(fresh.id, err);
     }
   };
 

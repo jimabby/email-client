@@ -13,7 +13,7 @@
     "@react-native-async-storage/async-storage": "1.23.1",
     "@react-navigation/native": "^6.1.18",
     "@react-navigation/native-stack": "^6.11.0",
-    "axios": "^1.7.0",
+    "axios": "^1.20.0",
     "expo": "~51.0.0",
     "expo-device": "~6.0.2",
     "expo-notifications": "~0.28.19",

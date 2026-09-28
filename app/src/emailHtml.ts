@@ -25,12 +25,37 @@ const DANGEROUS_TAGS = /<\/?(script|style|iframe|object|embed|applet|noscript|sv
 // on* handlers in any quoting style.
 const EVENT_HANDLERS = /\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", colon: ':', sol: '/', period: '.',
+  lpar: '(', rpar: ')', nbsp: ' ', tab: '\t', newline: '\n',
+};
+
+/**
+ * Decode character references the way the renderer will.
+ *
+ * Attribute values are checked here as raw markup, but RenderHtml decodes
+ * entities before it uses them. `src="https&#58;//tracker/x.gif"` therefore
+ * looked local to the check and remote to the renderer — the image loaded and
+ * the "blocked" notice never counted it. Checking the decoded value closes that.
+ */
+export function decodeEntities(value: string): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);?/gi, (whole, ref: string) => {
+    if (ref[0] === '#') {
+      const code = ref[1] === 'x' || ref[1] === 'X' ? parseInt(ref.slice(2), 16) : parseInt(ref.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    }
+    return NAMED_ENTITIES[ref.toLowerCase()] ?? whole;
+  });
+}
+
 function parseAttributes(tag: string): Record<string, string> {
   const attrs: Record<string, string> = {};
   const pattern = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(tag)) !== null) {
-    attrs[match[1].toLowerCase()] = match[2] ?? match[3] ?? match[4] ?? '';
+    // Browsers and RenderHtml ignore tabs and newlines inside a URL scheme too
+    // ("ht\ttps:"), so they go before any check as well.
+    attrs[match[1].toLowerCase()] = decodeEntities(match[2] ?? match[3] ?? match[4] ?? '').replace(/[\t\n\r]/g, '');
   }
   return attrs;
 }
@@ -69,8 +94,8 @@ export function sanitizeEmailHtml(html: string, allowRemoteImages: boolean): San
 
   // Inline styles that fetch from the network.
   if (!allowRemoteImages) {
-    out = out.replace(/\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/gi, (whole, dq, sq) => {
-      const style = dq ?? sq ?? '';
+    out = out.replace(/\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))/gi, (whole, dq, sq, bare) => {
+      const style = decodeEntities(dq ?? sq ?? bare ?? '');
       if (!hasRemoteStyleUrl(style)) return whole;
       blocked.styles++;
       return '';

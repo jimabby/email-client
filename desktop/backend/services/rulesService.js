@@ -1,4 +1,4 @@
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('crypto');
 const store = require('../store');
 
 // Rule engine.
@@ -8,7 +8,9 @@ const store = require('../store');
 // client happens to be open — and each message is processed at most once, so
 // re-listing a folder can never re-run a destructive action.
 
-const FIELDS = new Set(['from', 'to', 'subject', 'snippet', 'hasAttachment']);
+// `fromAddress` is the bare sender address, so "equals" can match exactly —
+// `from` is the whole header, display name included.
+const FIELDS = new Set(['from', 'fromAddress', 'to', 'subject', 'snippet', 'hasAttachment']);
 const OPS = new Set(['contains', 'notContains', 'equals', 'startsWith', 'endsWith', 'matches', 'isTrue']);
 const ACTIONS = new Set(['move', 'archive', 'markRead', 'markUnread', 'star', 'spam', 'delete']);
 
@@ -18,15 +20,7 @@ function getService(accountType) {
   return require('./imapService');
 }
 
-function gmailOrOutlookId(emailId) {
-  if (emailId.length > 37 && emailId[36] === '-') return emailId.slice(37);
-  return emailId.split('-').slice(5).join('-');
-}
-
-function imapUid(emailId) {
-  const parts = emailId.split('::');
-  return parseInt(parts[parts.length - 1], 10);
-}
+const { providerId: toProviderId, imapFolder } = require('./emailIds');
 
 // ─── Validation ─────────────────────────────────────────────────────────────
 
@@ -73,9 +67,15 @@ function sanitizeRules(list) {
 
 // ─── Matching ───────────────────────────────────────────────────────────────
 
+function senderAddress(from) {
+  const value = String(from || '');
+  return (value.match(/<([^>]+)>/)?.[1] || value).trim();
+}
+
 function fieldValue(email, field) {
   switch (field) {
     case 'from': return String(email.from || '');
+    case 'fromAddress': return senderAddress(email.from);
     case 'to': return Array.isArray(email.to) ? email.to.join(', ') : String(email.to || '');
     case 'subject': return String(email.subject || '');
     case 'snippet': return String(email.snippet || '');
@@ -126,8 +126,8 @@ function ruleMatches(email, rule) {
 
 async function runAction(account, email, action, archiveFolder) {
   const service = getService(account.type);
-  const providerId = account.type === 'imap' ? imapUid(email.id) : gmailOrOutlookId(email.id);
-  const folder = email.folder || 'INBOX';
+  const providerId = toProviderId(account.type, email.id);
+  const folder = account.type === 'imap' ? imapFolder(email.id, email.folder) : (email.folder || 'INBOX');
 
   switch (action.type) {
     case 'markRead':
@@ -141,9 +141,7 @@ async function runAction(account, email, action, archiveFolder) {
     case 'spam':
       return service.reportSpam(account, providerId, folder);
     case 'delete':
-      return account.type === 'imap'
-        ? service.deleteEmail(account, providerId, folder)
-        : service.deleteEmail(account, providerId);
+      return service.deleteEmail(account, providerId, folder);
     case 'archive':
     case 'move': {
       const target = action.type === 'archive' ? (archiveFolder || 'Archive') : action.targetFolder;
@@ -218,6 +216,8 @@ module.exports = {
   ruleMatches,
   applyRules,
   previewRule,
+  senderAddress,
+  TERMINAL_ACTIONS,
   FIELDS: Array.from(FIELDS),
   OPS: Array.from(OPS),
   ACTIONS: Array.from(ACTIONS),

@@ -9,6 +9,15 @@ const authResults = require('./authResultsService');
 // One persistent connection per account. All operations are serialized through
 // a queue so we never open two mailboxes concurrently on the same connection.
 
+// A server that stops answering mid-command would otherwise hold the queue
+// forever, and every later operation on the account would wait behind it.
+const OPERATION_TIMEOUT_MS = 2 * 60 * 1000;
+
+const CONNECT_OPTIONS = {
+  greetingTimeout: 15000,
+  connectionTimeout: 30000,
+};
+
 class ImapConnection {
   constructor(account) {
     this.account = account;
@@ -22,11 +31,24 @@ class ImapConnection {
       if (!this.client || !this.client.usable) {
         await this._connect();
       }
+      const client = this.client;
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          // Drop the wedged connection so the next operation starts clean.
+          if (this.client === client) this.client = null;
+          try { client.close(); } catch { /* already gone */ }
+          reject(new Error('IMAP operation timed out'));
+        }, OPERATION_TIMEOUT_MS);
+        timer.unref?.();
+      });
       try {
-        return await fn(this.client);
+        return await Promise.race([fn(client), timeout]);
       } catch (err) {
         if (!this.client || !this.client.usable) this.client = null;
         throw err;
+      } finally {
+        clearTimeout(timer);
       }
     });
     // Let the queue advance even if this task fails.
@@ -45,6 +67,7 @@ class ImapConnection {
       secure: this.account.imapSecure !== false,
       auth: { user: this.account.email, pass: this.account.password },
       tls: { rejectUnauthorized: this.account.allowInsecureTLS !== true },
+      ...CONNECT_OPTIONS,
       logger: false
     });
     await client.connect();
@@ -136,36 +159,113 @@ function getTransporter(account) {
 const SNIPPET_SOURCE_BYTES = 2048;
 const SNIPPET_CHARS = 200;
 
+function decodeSnippetBody(body, transferEncoding) {
+  if (/base64/i.test(transferEncoding)) {
+    // The source is truncated, so decode whole 4-char groups only.
+    const compact = body.replace(/[^A-Za-z0-9+/=]/g, '');
+    return Buffer.from(compact.slice(0, compact.length - (compact.length % 4)), 'base64').toString('utf8');
+  }
+  if (/quoted-printable/i.test(transferEncoding)) {
+    return body
+      .replace(/=\r?\n/g, '')
+      .replace(/=([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  }
+  return body;
+}
+
+const BLANK_LINE = /\r?\n\r?\n/;
+const BOUNDARY = /boundary="?([^";\r\n]+)"?/i;
+
+function splitPart(part) {
+  const at = part.search(BLANK_LINE);
+  return at === -1 ? null : { headers: part.slice(0, at), body: part.slice(at) };
+}
+
 function snippetFromSource(source) {
   if (!source) return '';
   const raw = source.toString('utf8');
   // Headers end at the first blank line; everything after it is the body.
-  const split = raw.search(/\r?\n\r?\n/);
-  if (split === -1) return '';
-  let body = raw.slice(split).replace(/^\s+/, '');
+  const top = splitPart(raw);
+  if (!top) return '';
+  const headers = top.headers.replace(/\r?\n[ \t]+/g, ' ');
+  let body = top.body.replace(/^\s+/, '');
+  let encoding = headers.match(/^content-transfer-encoding:\s*(\S+)/im)?.[1] || '';
 
-  // A base64 or quoted-printable body decodes to noise at this size — better an
-  // empty snippet than a screenful of encoded bytes.
-  if (/^[A-Za-z0-9+/=\r\n]{200,}$/.test(body.slice(0, 400))) return '';
+  // A multipart message opens with a preamble ("This is a multi-part message
+  // in MIME format.") and part headers. Skip to the first text part instead of
+  // showing those as the preview.
+  const boundary = headers.match(BOUNDARY)?.[1];
+  if (boundary) {
+    let found = null;
+    for (const chunk of body.split(`--${boundary}`).slice(1)) {
+      const part = splitPart(chunk);
+      if (!part) continue;
+      // A nested multipart/alternative carries its own boundary; its first
+      // text part is still the best preview.
+      const nested = part.headers.match(BOUNDARY)?.[1];
+      if (nested) {
+        const inner = part.body.split(`--${nested}`).slice(1)
+          .find(p => /content-type:\s*text\/(plain|html)/i.test(p));
+        found = inner ? splitPart(inner) : null;
+        if (found) break;
+        continue;
+      }
+      if (/content-type:\s*text\/(plain|html)/i.test(part.headers) || !/content-type:/i.test(part.headers)) {
+        found = part;
+        break;
+      }
+    }
+    if (!found) return '';
+    body = found.body.replace(/^\s+/, '');
+    encoding = found.headers.match(/content-transfer-encoding:\s*(\S+)/i)?.[1] || '';
+  } else if (/^[A-Za-z0-9+/=\r\n]{200,}$/.test(body.slice(0, 400)) && !/base64/i.test(encoding)) {
+    // Encoded noise without a declared encoding — better empty than garbage.
+    return '';
+  }
 
-  body = body
-    .replace(/=\r?\n/g, '')          // quoted-printable soft line breaks
-    .replace(/=([0-9A-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+  body = decodeSnippetBody(body, encoding)
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
     .replace(/\s+/g, ' ')
     .trim();
 
   return body.slice(0, SNIPPET_CHARS);
 }
 
+// UIDs are only unique within one mailbox, so the folder is part of the id.
+// Without it message 5 in INBOX and message 5 in Sent shared an id, and the
+// search index, categories, and snoozes confused the two.
+function composeId(accountId, folder, uid) {
+  return `${accountId}::${folder}::${uid}`;
+}
+
+// "Message-ID" values in a References header, oldest first.
+function messageIds(value) {
+  return String(value || '').match(/<[^<>\s]+>/g) || [];
+}
+
+function referencesFromHeaders(headers) {
+  if (!headers) return '';
+  const text = headers.toString('utf8').replace(/\r?\n[ \t]+/g, ' ');
+  return text.match(/^references:\s*(.+)$/im)?.[1].trim() || '';
+}
+
+// The thread a message belongs to is named after its root: the first id in
+// References, else the message it replies to, else itself. Using In-Reply-To
+// alone (as this once did) split every conversation deeper than one reply.
+function threadRoot(envelope, references) {
+  return messageIds(references)[0] || envelope.inReplyTo || envelope.messageId || null;
+}
+
 // Envelope → EmailSummary. Shared by list, search, and attachment search so
 // the three paths can't drift apart.
 function toSummary(account, msg, folder) {
   const envelope = msg.envelope || {};
+  const references = referencesFromHeaders(msg.headers);
   return {
-    id: `${account.id}::${msg.uid}`,
+    id: composeId(account.id, folder, msg.uid),
     snippet: snippetFromSource(msg.source),
     uid: msg.uid,
     from: envelope.from?.[0]
@@ -178,11 +278,21 @@ function toSummary(account, msg, folder) {
     starred: msg.flags?.has('\\Flagged') ?? false,
     folder,
     accountId: account.id,
-    threadId: envelope.inReplyTo || envelope.messageId || null,
+    threadId: threadRoot(envelope, references),
     messageId: envelope.messageId || '',
     inReplyTo: envelope.inReplyTo || '',
+    hasAttachments: msg.bodyStructure ? collectStructureAttachments(msg.bodyStructure).length > 0 : undefined,
   };
 }
+
+// What every list-style fetch asks for: enough to build a summary, including
+// the attachment flag (from BODYSTRUCTURE — no bytes) and References for
+// threading, without downloading bodies.
+const SUMMARY_FETCH = {
+  envelope: true, uid: true, flags: true, bodyStructure: true,
+  headers: ['references'],
+  source: { maxLength: SNIPPET_SOURCE_BYTES },
+};
 
 async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = null) {
   return getConn(account).run(async (client) => {
@@ -218,11 +328,7 @@ async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = nu
 
     while (emails.length < limit && cursor >= 1) {
       const low = Math.max(1, cursor - window + 1);
-      for await (const msg of client.fetch(
-        `${low}:${cursor}`,
-        { envelope: true, uid: true, flags: true, source: { maxLength: SNIPPET_SOURCE_BYTES } },
-        { uid: true },
-      )) {
+      for await (const msg of client.fetch(`${low}:${cursor}`, SUMMARY_FETCH, { uid: true })) {
         emails.push(toSummary(account, msg, folder));
       }
       if (low === 1) { cursor = 0; break; }
@@ -269,7 +375,7 @@ async function searchEmails(account, query, folder = 'INBOX', limit = 50) {
     if (!uids || uids.length === 0) return [];
     const recentUids = uids.slice(-limit);
     const emails = [];
-    for await (const msg of client.fetch(recentUids, { envelope: true, uid: true, flags: true, source: { maxLength: SNIPPET_SOURCE_BYTES } }, { uid: true })) {
+    for await (const msg of client.fetch(recentUids, SUMMARY_FETCH, { uid: true })) {
       emails.push(toSummary(account, msg, folder));
     }
     emails.sort((a, b) => b.uid - a.uid);
@@ -339,9 +445,7 @@ async function searchAttachments(account, query, type, folder = 'INBOX', limit =
     candidateUids.sort((a, b) => b - a);
     const scanUids = candidateUids.slice(0, Math.max(limit * 10, 500));
 
-    for await (const msg of client.fetch(scanUids, {
-      envelope: true, uid: true, flags: true, bodyStructure: true,
-    }, { uid: true })) {
+    for await (const msg of client.fetch(scanUids, SUMMARY_FETCH, { uid: true })) {
       const attachments = collectStructureAttachments(msg.bodyStructure);
       if (!attachments.some(att => _attachmentMatches(att, query, type))) continue;
       emails.push(toSummary(account, msg, folder));
@@ -350,6 +454,44 @@ async function searchAttachments(account, query, type, folder = 'INBOX', limit =
 
     emails.sort((a, b) => b.uid - a.uid);
     return emails;
+  });
+}
+
+// A header exactly as sent, unfolded. mailparser turns some headers (the
+// List-* family among them) into structured objects, which loses the raw
+// "<https://…>, <mailto:…>" form the unsubscribe code parses.
+function rawHeader(parsed, name) {
+  const line = (parsed.headerLines || []).find(h => h.key === name)?.line || '';
+  return line.replace(/^[^:]*:\s*/, '').replace(/\r?\n[ \t]+/g, ' ').trim();
+}
+
+// The headers that decide whether a message is automated or a list post, plus
+// the recipients — everything the vacation responder needs, without a body.
+const POLICY_HEADERS = [
+  'to', 'cc', 'list-id', 'list-unsubscribe', 'precedence', 'auto-submitted',
+  'x-auto-response-suppress',
+];
+
+function parseHeaderBlock(buffer) {
+  const text = String(buffer || '').replace(/\r?\n[ \t]+/g, ' ');
+  const out = {};
+  for (const line of text.split(/\r?\n/)) {
+    const at = line.indexOf(':');
+    if (at <= 0) continue;
+    const key = line.slice(0, at).trim().toLowerCase();
+    out[key] = out[key] ? `${out[key]}, ${line.slice(at + 1).trim()}` : line.slice(at + 1).trim();
+  }
+  return out;
+}
+
+/** Selected headers of one message, keyed in lower case. */
+async function getHeaders(account, uid, folder = 'INBOX') {
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(folder);
+    for await (const msg of client.fetch(String(uid), { headers: POLICY_HEADERS }, { uid: true })) {
+      return parseHeaderBlock(msg.headers);
+    }
+    return {};
   });
 }
 
@@ -390,6 +532,9 @@ async function fetchEmailBody(account, uid, folder = 'INBOX') {
         parsed.from?.text,
       ),
       calendarInvite: calendarText ? calendar.parseInvite(calendarText) : null,
+      // RFC 2369 / 8058 — what one-click unsubscribe needs.
+      listUnsubscribe: rawHeader(parsed, 'list-unsubscribe'),
+      listUnsubscribePost: rawHeader(parsed, 'list-unsubscribe-post'),
       // Metadata only — bytes come from getAttachment on demand so a message
       // with large attachments doesn't have to be buffered through the API
       // just to display its text.
@@ -438,8 +583,16 @@ async function getRawMessage(account, uid, folder = 'INBOX') {
 async function getFolders(account) {
   return getConn(account).run(async (client) => {
     const list = await client.list();
-    return list.map(f => ({ name: f.name, path: f.path, delimiter: f.delimiter }));
+    return list.map(f => ({ name: f.name, path: f.path, delimiter: f.delimiter, specialUse: f.specialUse || null }));
   });
+}
+
+// Prefer the RFC 6154 special-use flag; fall back to the usual names.
+async function findSpecialFolder(account, specialUse, namePattern) {
+  const list = await getFolders(account);
+  return list.find(f => f.specialUse === specialUse)
+    || list.find(f => namePattern.test(f.name))
+    || null;
 }
 
 async function createFolder(account, name) {
@@ -457,8 +610,7 @@ async function renameFolder(account, folder, name) {
 }
 
 async function reportSpam(account, uid, folder = 'INBOX') {
-  const list = await getFolders(account);
-  const spam = list.find(f => /spam|junk/i.test(f.name));
+  const spam = await findSpecialFolder(account, '\\Junk', /spam|junk/i);
   if (!spam) throw new Error('This account has no Spam/Junk folder');
   const moved = await moveEmail(account, uid, folder, spam.path);
   return { ...moved, spamFolder: spam.path };
@@ -466,8 +618,7 @@ async function reportSpam(account, uid, folder = 'INBOX') {
 
 /** Move a message back out of Spam/Junk, so the action can carry an Undo. */
 async function unreportSpam(account, uid, folder = 'INBOX') {
-  const list = await getFolders(account);
-  const spam = list.find(f => /spam|junk/i.test(f.name));
+  const spam = await findSpecialFolder(account, '\\Junk', /spam|junk/i);
   if (!spam) throw new Error('This account has no Spam/Junk folder');
   return moveEmail(account, uid, spam.path, folder || 'INBOX');
 }
@@ -614,15 +765,93 @@ async function moveEmail(account, uid, fromFolder, toFolder) {
     // UIDPLUS report the mapping in COPYUID; without it an undo is not
     // possible and the caller is told so by the absent id.
     const mapped = result?.uidMap instanceof Map ? result.uidMap.get(Number(uid)) : undefined;
-    return mapped ? { uid: mapped } : {};
+    return mapped ? { uid: mapped, folder: toFolder } : { folder: toFolder };
   });
 }
 
+/**
+ * Delete = move to Trash, exactly as Gmail and Outlook do.
+ *
+ * This used to call messageDelete, which flags \Deleted and EXPUNGEs — the
+ * message was gone for good, from a button every other provider treats as
+ * recoverable. Only mail already in Trash (or on a server with no Trash at
+ * all) is removed permanently now.
+ */
 async function deleteEmail(account, uid, folder = 'INBOX') {
-  return getConn(account).run(async (client) => {
+  const trash = await findSpecialFolder(account, '\\Trash', /^(trash|deleted( items| messages)?|bin)$|trash/i);
+  if (trash && trash.path !== folder) {
+    const moved = await moveEmail(account, uid, folder, trash.path);
+    return { ...moved, permanent: false };
+  }
+  await getConn(account).run(async (client) => {
     await client.mailboxOpen(folder);
     await client.messageDelete(String(uid), { uid: true });
   });
+  return { permanent: true };
+}
+
+/** Undo a delete: move the message (addressed by its Trash UID) back. */
+async function untrashEmail(account, uid, trashFolder, toFolder = 'INBOX') {
+  return moveEmail(account, uid, trashFolder, toFolder || 'INBOX');
+}
+
+// Folders a conversation is looked for in: wherever the message was, plus
+// Sent, so the user's own replies appear in the thread.
+async function threadFolders(account, folder) {
+  const sent = await findSpecialFolder(account, '\\Sent', /^sent/i).catch(() => null);
+  return Array.from(new Set([folder || 'INBOX', 'INBOX', sent?.path].filter(Boolean)));
+}
+
+/**
+ * Every message in a conversation, oldest first.
+ *
+ * IMAP has no conversation id, so `rootId` is the Message-ID the thread is
+ * named after (see threadRoot): a member is the root itself or anything whose
+ * References mention it.
+ */
+async function fetchThread(account, rootId, folder = 'INBOX') {
+  const root = String(rootId || '').trim();
+  if (!/^<[^<>\s]+>$/.test(root)) return [];
+
+  const folders = await threadFolders(account, folder);
+  const found = [];
+  for (const box of folders) {
+    const uids = await getConn(account).run(async (client) => {
+      await client.mailboxOpen(box);
+      const matches = await client.search({
+        or: [
+          { header: { 'message-id': root } },
+          { header: { references: root } },
+          { header: { 'in-reply-to': root } },
+        ],
+      }, { uid: true });
+      return (matches || []).slice(-50);
+    }).catch(() => []);
+    for (const uid of uids) found.push({ uid, folder: box });
+  }
+
+  const items = [];
+  const seenMessageIds = new Set();
+  for (const { uid, folder: box } of found) {
+    const [summary] = await getConn(account).run(async (client) => {
+      await client.mailboxOpen(box);
+      const out = [];
+      for await (const msg of client.fetch(String(uid), SUMMARY_FETCH, { uid: true })) {
+        out.push(toSummary(account, msg, box));
+      }
+      return out;
+    });
+    if (!summary) continue;
+    // The same message can sit in two folders (a copy kept in Sent and one
+    // delivered back to INBOX); show it once.
+    if (summary.messageId && seenMessageIds.has(summary.messageId)) continue;
+    if (summary.messageId) seenMessageIds.add(summary.messageId);
+    const body = await fetchEmailBody(account, uid, box);
+    items.push({ summary, body });
+  }
+
+  items.sort((a, b) => Date.parse(a.summary.date || '') - Date.parse(b.summary.date || ''));
+  return items;
 }
 
 async function testConnection(account) {
@@ -648,6 +877,11 @@ async function testConnection(account) {
 }
 
 module.exports = {
+  _internals: { snippetFromSource, threadRoot, referencesFromHeaders, parseHeaderBlock },
+  composeId,
+  getHeaders,
+  untrashEmail,
+  fetchThread,
   fetchEmails,
   searchEmails,
   searchAttachments,

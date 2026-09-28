@@ -18,6 +18,9 @@ backend/master.key
 backend/email-cache.json
 backend/categories.json
 backend/search-index.json
+backend/outbox.json
+backend/*.unreadable-*
+backend/*.tmp
 
 # Build output
 frontend/dist/

@@ -140,6 +140,21 @@ async function batchGetMessages(account, msgIds) {
   return out;
 }
 
+/**
+ * A message's date as ISO, never throwing.
+ *
+ * `new Date(header).toISOString()` throws a RangeError on a malformed Date
+ * header — and one such message used to fail the whole page it was on. Gmail's
+ * own internalDate (ms since epoch, always present) is the fallback.
+ */
+function messageDate(dateHeader, internalDate) {
+  const fromHeader = dateHeader ? new Date(dateHeader) : null;
+  if (fromHeader && !Number.isNaN(fromHeader.getTime())) return fromHeader.toISOString();
+  const internal = Number(internalDate);
+  if (Number.isFinite(internal) && internal > 0) return new Date(internal).toISOString();
+  return fromHeader === null ? new Date().toISOString() : '';
+}
+
 function messageToSummary(account, detail, folder) {
   const headers = detail.payload?.headers || [];
   const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
@@ -149,7 +164,7 @@ function messageToSummary(account, detail, folder) {
     from: getHeader('From'),
     to: [getHeader('To')],
     subject: getHeader('Subject') || '(no subject)',
-    date: getHeader('Date') ? new Date(getHeader('Date')).toISOString() : new Date().toISOString(),
+    date: messageDate(getHeader('Date'), detail.internalDate) || new Date().toISOString(),
     read: !detail.labelIds?.includes('UNREAD'),
     starred: detail.labelIds?.includes('STARRED') ?? false,
     folder,
@@ -158,6 +173,10 @@ function messageToSummary(account, detail, folder) {
     threadId: detail.threadId || null,
     messageId: getHeader('Message-ID'),
     inReplyTo: getHeader('In-Reply-To'),
+    // Metadata reads carry the top-level MIME type but no parts. A
+    // multipart/mixed message is one with attachments in practice — it is the
+    // same signal Gmail's own "has:attachment" leans on.
+    hasAttachments: /^multipart\/mixed/i.test(detail.payload?.mimeType || ''),
   };
 }
 
@@ -177,70 +196,148 @@ async function fetchSummaries(account, msgIds, folder) {
   return Promise.all(msgIds.map(id => _fetchMessageMeta(gmail, account, id, folder)));
 }
 
+function decodeBase64Bytes(data) {
+  return Buffer.from(String(data).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
+
 function decodeBase64(data) {
-  return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+  return decodeBase64Bytes(data).toString('utf8');
+}
+
+function partHeader(part, name) {
+  return (part?.headers || []).find(h => h.name.toLowerCase() === name)?.value || '';
+}
+
+/**
+ * Decode a text part in the charset it declares.
+ *
+ * The Gmail API hands back the part's original bytes, so an ISO-8859-1 or
+ * Windows-1252 message decoded as UTF-8 came out as mojibake. TextDecoder
+ * knows the WHATWG encodings; anything it does not know falls back to UTF-8.
+ */
+function decodeTextPart(part) {
+  const bytes = decodeBase64Bytes(part.body.data);
+  const charset = partHeader(part, 'content-type').match(/charset="?([^";\s]+)"?/i)?.[1];
+  if (charset && !/^utf-?8$/i.test(charset)) {
+    try { return new TextDecoder(charset.toLowerCase()).decode(bytes); } catch { /* unknown label */ }
+  }
+  return bytes.toString('utf8');
+}
+
+/** An attached file, as opposed to a body part — whatever its MIME type. */
+function isAttachmentPart(part) {
+  if (part.filename) return true;
+  return /^attachment/i.test(partHeader(part, 'content-disposition'));
 }
 
 function extractBody(payload) {
   let html = '';
   let text = '';
 
+  // The first body part of each type wins. Taking the last one meant an
+  // attached .txt or .html file — or a forwarded message further down the
+  // tree — silently replaced the message's own body.
   function processPart(part) {
+    if (!part || isAttachmentPart(part)) return;
     if (part.mimeType === 'text/html' && part.body?.data) {
-      html = decodeBase64(part.body.data);
+      if (!html) html = decodeTextPart(part);
     } else if (part.mimeType === 'text/plain' && part.body?.data) {
-      text = decodeBase64(part.body.data);
+      if (!text) text = decodeTextPart(part);
     } else if (part.parts) {
       part.parts.forEach(processPart);
     }
   }
 
-  if (payload.body?.data) {
-    if (payload.mimeType === 'text/html') {
-      html = decodeBase64(payload.body.data);
-    } else {
-      text = decodeBase64(payload.body.data);
-    }
+  if (payload?.body?.data && !isAttachmentPart(payload)) {
+    if (payload.mimeType === 'text/html') html = decodeTextPart(payload);
+    else text = decodeTextPart(payload);
   }
 
-  if (payload.parts) {
-    payload.parts.forEach(processPart);
-  }
+  if (payload?.parts) payload.parts.forEach(processPart);
 
   return { html, text };
+}
+
+/**
+ * Attachment metadata plus any calendar invite, from one walk of a payload.
+ * Shared by the single-message and the thread reads so the download endpoint
+ * finds the same attachments whichever one opened the message.
+ */
+function collectAttachments(payload) {
+  const attachments = [];
+  let calendarText = '';
+  (function walk(part) {
+    if (!part) return;
+    // A meeting invite arrives as a text/calendar part which usually has no
+    // filename at all, so it has to be matched on type before the filename
+    // check below decides what counts as an attachment.
+    const mimeType = part.mimeType || '';
+    if (!calendarText && /^text\/calendar/i.test(mimeType) && part.body?.data) {
+      calendarText = decodeBase64(part.body.data);
+    }
+    if (part.filename && part.body) {
+      attachments.push({
+        filename: part.filename,
+        contentType: mimeType || 'application/octet-stream',
+        size: part.body.size || 0,
+        content: null,
+        // Kept internally for the download endpoint; stripped before responding.
+        attachmentId: part.body.attachmentId || null,
+        inlineData: part.body.data || null,
+      });
+      if (!calendarText && /\.ics$/i.test(part.filename) && part.body.data) {
+        calendarText = decodeBase64(part.body.data);
+      }
+    }
+    if (part.parts) part.parts.forEach(walk);
+  })(payload);
+  return { attachments, calendarText };
+}
+
+/** Everything the reader shows for one full-format message. */
+function bodyFromMessage(account, msg) {
+  const headers = msg.payload?.headers || [];
+  const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+  const { html, text } = extractBody(msg.payload);
+  const { attachments, calendarText } = collectAttachments(msg.payload);
+  rememberAttachments(account, msg.id, attachments);
+
+  return {
+    gmailId: msg.id,
+    from: getHeader('From'),
+    to: getHeader('To'),
+    cc: getHeader('Cc'),
+    subject: getHeader('Subject'),
+    date: messageDate(getHeader('Date'), msg.internalDate),
+    html,
+    text,
+    attachments,
+    // Threading info so replies can set In-Reply-To/References and stay in
+    // the same Gmail thread.
+    messageId: getHeader('Message-ID'),
+    references: getHeader('References'),
+    threadId: msg.threadId || null,
+    authentication: authResults.summarize(getHeader('Authentication-Results'), getHeader('From')),
+    calendarInvite: calendarText ? calendar.parseInvite(calendarText) : null,
+    listUnsubscribe: getHeader('List-Unsubscribe'),
+    listUnsubscribePost: getHeader('List-Unsubscribe-Post'),
+  };
 }
 
 function folderToLabelId(folder) {
   if (folder === 'Sent' || folder === 'SENT') return 'SENT';
   if (folder === 'Drafts' || folder === 'DRAFT') return 'DRAFT';
   if (folder === 'Trash' || folder === 'TRASH') return 'TRASH';
+  if (/^(spam|junk)$/i.test(folder)) return 'SPAM';
   if (folder === 'INBOX') return 'INBOX';
   return folder;
 }
 
 async function _fetchMessageMeta(gmail, account, msgId, folder) {
   const detail = await gmail.users.messages.get({
-    userId: 'me', id: msgId, format: 'metadata',
-    metadataHeaders: ['From', 'To', 'Subject', 'Date', 'Message-ID', 'In-Reply-To']
+    userId: 'me', id: msgId, format: 'metadata', metadataHeaders: META_HEADERS,
   });
-  const headers = detail.data.payload?.headers || [];
-  const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
-  return {
-    id: `${account.id}-${msgId}`,
-    gmailId: msgId,
-    from: getHeader('From'),
-    to: [getHeader('To')],
-    subject: getHeader('Subject') || '(no subject)',
-    date: getHeader('Date') ? new Date(getHeader('Date')).toISOString() : new Date().toISOString(),
-    read: !detail.data.labelIds?.includes('UNREAD'),
-    starred: detail.data.labelIds?.includes('STARRED') ?? false,
-    folder,
-    accountId: account.id,
-    snippet: detail.data.snippet || '',
-    threadId: detail.data.threadId || null,
-    messageId: getHeader('Message-ID'),
-    inReplyTo: getHeader('In-Reply-To')
-  };
+  return messageToSummary(account, detail.data, folder);
 }
 
 async function fetchEmails(account, folder = 'INBOX', limit = 50, pageToken = null) {
@@ -277,71 +374,28 @@ async function searchAttachments(account, query, type, folder = 'INBOX', limit =
 
 async function fetchEmailBody(account, gmailId) {
   const gmail = getGmailClient(account);
-
-  const detail = await gmail.users.messages.get({
-    userId: 'me',
-    id: gmailId,
-    format: 'full'
-  });
-
-  const headers = detail.data.payload?.headers || [];
-  const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
-
-  const { html, text } = extractBody(detail.data.payload);
-  const messageId = getHeader('Message-ID');
-  const references = getHeader('References');
-
+  const detail = await gmail.users.messages.get({ userId: 'me', id: gmailId, format: 'full' });
   // Attachment *metadata* only. Bytes are pulled on demand by
   // GET /api/emails/:accountId/message/:emailId/attachment/:index so that
   // opening a message with a 20 MB PDF doesn't buffer it through the API.
-  const attachments = [];
-  let calendarText = '';
-  function collectAttachments(part) {
-    if (!part) return;
-    // A meeting invite arrives as a text/calendar part which usually has no
-    // filename at all, so it has to be matched on type before the filename
-    // check below decides what counts as an attachment.
-    const mimeType = part.mimeType || '';
-    if (!calendarText && /^text\/calendar/i.test(mimeType) && part.body?.data) {
-      calendarText = decodeBase64(part.body.data);
-    }
-    if (part.filename && part.body) {
-      attachments.push({
-        filename: part.filename,
-        contentType: mimeType || 'application/octet-stream',
-        size: part.body.size || 0,
-        content: null,
-        // Kept internally for the download endpoint; stripped before responding.
-        attachmentId: part.body.attachmentId || null,
-        inlineData: part.body.data || null,
-      });
-      if (!calendarText && /\.ics$/i.test(part.filename) && part.body.data) {
-        calendarText = decodeBase64(part.body.data);
-      }
-    }
-    if (part.parts) part.parts.forEach(collectAttachments);
-  }
-  collectAttachments(detail.data.payload);
-  rememberAttachments(account, gmailId, attachments);
+  return bodyFromMessage(account, detail.data);
+}
 
-  return {
-    gmailId,
-    from: getHeader('From'),
-    to: getHeader('To'),
-    cc: getHeader('Cc'),
-    subject: getHeader('Subject'),
-    date: getHeader('Date') ? new Date(getHeader('Date')).toISOString() : '',
-    html,
-    text,
-    attachments,
-    // Threading info so replies can set In-Reply-To/References and stay in
-    // the same Gmail thread.
-    messageId,
-    references,
-    threadId: detail.data.threadId || null,
-    authentication: authResults.summarize(getHeader('Authentication-Results'), getHeader('From')),
-    calendarInvite: calendarText ? calendar.parseInvite(calendarText) : null,
-  };
+// Headers the vacation responder checks before answering, read without a body.
+const POLICY_HEADERS = ['To', 'Cc', 'List-Id', 'List-Unsubscribe', 'Precedence', 'Auto-Submitted', 'X-Auto-Response-Suppress'];
+
+/** Selected headers of one message, keyed in lower case. */
+async function getHeaders(account, gmailId) {
+  const gmail = getGmailClient(account);
+  const detail = await gmail.users.messages.get({
+    userId: 'me', id: gmailId, format: 'metadata', metadataHeaders: POLICY_HEADERS,
+  });
+  const out = {};
+  for (const h of detail.data.payload?.headers || []) {
+    const key = h.name.toLowerCase();
+    out[key] = out[key] ? `${out[key]}, ${h.value}` : h.value;
+  }
+  return out;
 }
 
 // Opening a message already walked its payload, so remember where each
@@ -413,6 +467,8 @@ async function getRawMessage(account, gmailId) {
 async function deleteEmail(account, gmailId) {
   const gmail = getGmailClient(account);
   await gmail.users.messages.trash({ userId: 'me', id: gmailId });
+  // Trash is a label; the id is unchanged, so an undo can use it as-is.
+  return { id: gmailId, permanent: false };
 }
 
 // Undo a delete. Gmail keeps the message id stable through the bin, so this
@@ -473,41 +529,7 @@ async function fetchThread(account, threadId) {
 
   return (thread.data.messages || []).map((msg) => {
     const folder = msg.labelIds?.includes('SENT') ? 'SENT' : 'INBOX';
-    const headers = msg.payload?.headers || [];
-    const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
-    const { html, text } = extractBody(msg.payload);
-
-    const attachments = [];
-    (function collect(part) {
-      if (!part) return;
-      if (part.filename && part.body) {
-        attachments.push({
-          filename: part.filename,
-          contentType: part.mimeType || 'application/octet-stream',
-          size: part.body.size || 0,
-          content: null,
-        });
-      }
-      if (part.parts) part.parts.forEach(collect);
-    })(msg.payload);
-
-    return {
-      summary: messageToSummary(account, msg, folder),
-      body: {
-        gmailId: msg.id,
-        from: getHeader('From'),
-        to: getHeader('To'),
-        cc: getHeader('Cc'),
-        subject: getHeader('Subject'),
-        date: getHeader('Date') ? new Date(getHeader('Date')).toISOString() : '',
-        html,
-        text,
-        attachments,
-        messageId: getHeader('Message-ID'),
-        references: getHeader('References'),
-        threadId: msg.threadId || null,
-      },
-    };
+    return { summary: messageToSummary(account, msg, folder), body: bodyFromMessage(account, msg) };
   });
 }
 
@@ -792,6 +814,8 @@ async function moveEmail(account, gmailId, fromFolder, toFolder) {
 }
 
 module.exports = {
+  _internals: { extractBody, messageDate, messageToSummary },
+  getHeaders,
   getAuthUrl,
   handleCallback,
   fetchEmails,

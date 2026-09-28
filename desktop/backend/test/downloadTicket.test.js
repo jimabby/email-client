@@ -7,9 +7,20 @@ const TARGET = { accountId: 'a1', emailId: 'a1::7', index: 0, folder: 'INBOX' };
 test('a ticket redeems once and only once', () => {
   const { token } = tickets.issue(TARGET);
   const first = tickets.redeem(token);
-  assert.deepEqual(first, TARGET);
+  assert.deepEqual(first, { ...TARGET, kind: 'attachment', inline: true, limit: undefined });
   // The whole point: a URL that leaks after use is worthless.
   assert.equal(tickets.redeem(token), null);
+});
+
+test('a ticket carries its kind and disposition', () => {
+  const download = tickets.redeem(tickets.issue({ ...TARGET, inline: false }).token);
+  assert.equal(download.kind, 'attachment');
+  assert.equal(download.inline, false);
+
+  const exportClaim = tickets.redeem(tickets.issue({ kind: 'export', accountId: 'a1', folder: 'Sent', limit: 10 }).token);
+  assert.equal(exportClaim.kind, 'export');
+  assert.equal(exportClaim.folder, 'Sent');
+  assert.equal(exportClaim.limit, 10);
 });
 
 test('an unknown token is refused', () => {

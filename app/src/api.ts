@@ -85,9 +85,41 @@ export const api = {
       })
       .then((r) => r.data),
 
+  /** Moves to Trash; `undoId` addresses it there (null = deleted for good). */
   delete: (accountId: string, emailId: string, folder?: string) =>
     client()
-      .delete(`/emails/${accountId}/message/${encodeURIComponent(emailId)}`, {
+      .delete<{ success: boolean; permanent: boolean; undoId: string | null }>(`/emails/${accountId}/message/${encodeURIComponent(emailId)}`, {
+        params: folder ? { folder } : {},
+      })
+      .then((r) => r.data),
+
+  /** Undo a delete, using the undoId the delete returned. */
+  untrash: (accountId: string, undoId: string, folder = 'INBOX') =>
+    client()
+      .post(`/emails/${accountId}/message/${encodeURIComponent(undoId)}/untrash`, { folder })
+      .then((r) => r.data),
+
+  // ─── Bulk ─────────────────────────────────────────────────────────────────
+  // One request per account+folder; the server bounds concurrency per provider.
+  bulk: (
+    action: 'delete' | 'read' | 'unread' | 'move',
+    accountId: string,
+    emailIds: string[],
+    folder?: string,
+    targetFolder?: string,
+  ) =>
+    client()
+      .post<{ succeeded: number; failed: number; errors: string[] }>(
+        `/emails/${accountId}/bulk/${action}`,
+        { emailIds, ...(targetFolder ? { folder: targetFolder } : {}) },
+        { params: folder ? { folder } : {} },
+      )
+      .then((r) => r.data),
+
+  /** Every message in a conversation, oldest first, with bodies. */
+  getThread: (accountId: string, threadId: string, folder?: string) =>
+    client()
+      .get<{ summary: EmailSummary; body: EmailBody }[]>(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}`, {
         params: folder ? { folder } : {},
       })
       .then((r) => r.data),

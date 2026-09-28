@@ -110,11 +110,44 @@ function shouldReply(email, account, now = Date.now(), config = settings()) {
 }
 
 /**
- * Queue auto-replies for any of `emails` that qualify.
- * Called from the new-mail pipeline; never throws into it.
- * @returns {Array<{ to: string, jobId: string }>}
+ * RFC 3834 §2: only answer mail that names this mailbox directly. A message
+ * that reached us through a list, a Bcc, or an alias we don't own does not get
+ * a reply — that is how auto-responders end up spamming every list member.
  */
-function respondTo(emails, account) {
+function isDirectlyAddressed(headers, account) {
+  const own = new Set([String(account.email || '').toLowerCase()]);
+  for (const alias of account.aliases || []) own.add(String(alias.email || '').toLowerCase());
+  const recipients = `${headers.to || ''},${headers.cc || ''}`.toLowerCase();
+  const addresses = recipients.match(/[^\s<>,;"']+@[^\s<>,;"']+/g) || [];
+  return addresses.some(address => own.has(address));
+}
+
+function getService(accountType) {
+  if (accountType === 'gmail') return require('./gmailService');
+  if (accountType === 'outlook') return require('./outlookService');
+  return require('./imapService');
+}
+
+/**
+ * The headers list summaries do not carry. Without them looksAutomated could
+ * only judge by subject, and every newsletter or list post from an ordinary
+ * address got an out-of-office.
+ */
+async function fetchPolicyHeaders(email, account) {
+  const service = getService(account.type);
+  if (!service.getHeaders) return null;
+  const { providerId, imapFolder } = require('./emailIds');
+  return account.type === 'imap'
+    ? service.getHeaders(account, providerId('imap', email.id), imapFolder(email.id, email.folder))
+    : service.getHeaders(account, providerId(account.type, email.id));
+}
+
+/**
+ * Queue auto-replies for any of `emails` that qualify.
+ * Called from the new-mail pipeline; resolves rather than throwing into it.
+ * @returns {Promise<Array<{ to: string, jobId: string }>>}
+ */
+async function respondTo(emails, account, { loadHeaders = fetchPolicyHeaders } = {}) {
   const config = settings();
   if (!isActive(Date.now(), config)) return [];
 
@@ -129,6 +162,20 @@ function respondTo(emails, account) {
       continue;
     }
     if (!verdict.reply) continue;
+
+    // The cheap checks passed; now the ones that need the real headers. When
+    // they cannot be read, stay silent — a missed auto-reply is harmless, a
+    // reply to a mailing list is not.
+    let headers;
+    try {
+      headers = await loadHeaders(email, account);
+    } catch (err) {
+      console.warn(`[vacation] Skipping ${email.id}: headers unavailable (${err.message})`);
+      continue;
+    }
+    if (!headers) continue;
+    if (looksAutomated({ ...email, headers })) continue;
+    if (!isDirectlyAddressed(headers, account)) continue;
 
     const sender = addressOf(email.from);
     const subject = String(email.subject || '').replace(/^(re|fwd?)\s*:\s*/i, '').trim();
@@ -163,5 +210,5 @@ module.exports = {
   isActive,
   shouldReply,
   respondTo,
-  _internals: { addressOf, isSuppressedAddress, looksAutomated, DEFAULT_COOLDOWN_DAYS },
+  _internals: { addressOf, isSuppressedAddress, looksAutomated, isDirectlyAddressed, DEFAULT_COOLDOWN_DAYS },
 };

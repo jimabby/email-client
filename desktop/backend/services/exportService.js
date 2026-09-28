@@ -15,14 +15,7 @@ function getService(accountType) {
   return require('./imapService');
 }
 
-function providerId(accountType, emailId) {
-  if (accountType === 'imap') {
-    const parts = String(emailId).split('::');
-    return parseInt(parts[parts.length - 1], 10);
-  }
-  if (emailId.length > 37 && emailId[36] === '-') return emailId.slice(37);
-  return emailId.split('-').slice(5).join('-');
-}
+const { providerId, imapFolder } = require('./emailIds');
 
 /**
  * mbox separates messages with a "From " line at the start of a line. Any line
@@ -37,8 +30,11 @@ function escapeFromLines(text) {
 const MBOX_DATE = { weekday: 'short', month: 'short', day: '2-digit', year: 'numeric' };
 
 function mboxSeparator(email) {
-  const address = String(email.from || '').match(/<([^>]+)>/)?.[1]
-    || String(email.from || '').trim()
+  // The separator is written as latin1 alongside the raw message, and must be
+  // a single token: keep it to printable ASCII with no spaces.
+  const address = (String(email.from || '').match(/<([^>]+)>/)?.[1]
+    || String(email.from || '').trim())
+    .replace(/[^\x21-\x7e]/g, '')
     || 'unknown@localhost';
   const date = new Date(email.date || Date.now());
   const valid = Number.isNaN(date.getTime()) ? new Date() : date;
@@ -66,11 +62,25 @@ async function exportFolder(account, out, { folder = 'INBOX', limit = 5000, onPr
   let pageToken = null;
 
   const write = (chunk) => new Promise((resolve, reject) => {
+    if (out.destroyed || out.writableEnded) return reject(new Error('Client disconnected'));
     // Respect backpressure: without this a fast provider outruns a slow client
     // and the whole mailbox buffers in memory, which is what streaming is for.
     if (out.write(chunk)) return resolve();
-    out.once('drain', resolve);
-    out.once('error', reject);
+    // A client that goes away mid-export never emits 'drain', and did not
+    // always emit 'error' either — the export then waited forever. 'close'
+    // settles it too, and every listener is removed whichever fires.
+    const done = (err) => {
+      out.off('drain', onDrain);
+      out.off('error', onError);
+      out.off('close', onClose);
+      if (err) reject(err); else resolve();
+    };
+    const onDrain = () => done();
+    const onError = (err) => done(err);
+    const onClose = () => done(new Error('Client disconnected'));
+    out.on('drain', onDrain);
+    out.on('error', onError);
+    out.on('close', onClose);
   });
 
   while (exported + failed < limit) {
@@ -84,12 +94,17 @@ async function exportFolder(account, out, { folder = 'INBOX', limit = 5000, onPr
         const raw = await service.getRawMessage(
           account,
           providerId(account.type, email.id),
-          folder,
+          account.type === 'imap' ? imapFolder(email.id, folder) : folder,
         );
         if (!raw) { failed++; continue; }
 
-        const body = escapeFromLines(raw.toString('utf8').replace(/\r\n/g, '\n'));
-        await write(`${mboxSeparator(email)}\n${body}${body.endsWith('\n') ? '' : '\n'}\n`);
+        // latin1 maps every byte to one code unit and back, so the message
+        // survives byte for byte. Decoding as UTF-8 replaced any 8-bit byte
+        // that was not valid UTF-8 (a Latin-1 body, a binary part) with U+FFFD,
+        // silently corrupting the one file meant to be a backup.
+        const body = escapeFromLines(Buffer.from(raw).toString('latin1').replace(/\r\n/g, '\n'));
+        const record = `${mboxSeparator(email)}\n${body}${body.endsWith('\n') ? '' : '\n'}\n`;
+        await write(Buffer.from(record, 'latin1'));
         exported++;
         if (onProgress && exported % 50 === 0) onProgress(exported);
       } catch (err) {

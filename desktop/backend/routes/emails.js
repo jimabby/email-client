@@ -13,7 +13,7 @@ const exportService = require('../services/exportService');
 const calendarService = require('../services/calendarService');
 const downloadTickets = require('../services/downloadTicketService');
 const pushService = require('../services/pushService');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('crypto');
 
 function getService(accountType) {
   if (accountType === 'gmail') return require('../services/gmailService');
@@ -21,20 +21,22 @@ function getService(accountType) {
   return require('../services/imapService');
 }
 
-// Extract provider-specific ID from composite email IDs.
-// Gmail/Outlook: "{uuid}-{msgId}" — UUID is 36 chars (8-4-4-4-12), followed by '-'
-// IMAP:          "{accountId}::{uid}"
-function gmailOrOutlookId(emailId) {
-  // UUID v4 is always 36 characters long. The provider message ID starts at index 37.
-  if (emailId.length > 37 && emailId[36] === '-') {
-    return emailId.slice(37);
-  }
-  // Fallback: split on '-' and skip the 5 UUID segments
-  return emailId.split('-').slice(5).join('-');
-}
-function imapUid(emailId) {
-  const parts = emailId.split('::');
-  return parseInt(parts[parts.length - 1]);
+const { gmailOrOutlookId, imapUid, imapFolder } = require('../services/emailIds');
+const accountHealth = require('../services/accountHealth');
+const unsubscribeService = require('../services/unsubscribeService');
+
+// Caps on client-supplied page sizes. A provider asked for 100k messages in
+// one go answers slowly, if at all, and holds the account's connection.
+const MAX_PAGE = 200;
+const pageSize = (value, fallback = 50) => Math.min(Math.max(parseInt(value, 10) || fallback, 1), MAX_PAGE);
+
+/**
+ * The provider id and mailbox for an IMAP message. The id records its own
+ * folder, which beats the `?folder=` the client sent alongside — a UID means
+ * nothing in the wrong mailbox.
+ */
+function imapTarget(emailId, fallbackFolder) {
+  return { uid: imapUid(emailId), folder: imapFolder(emailId, fallbackFolder || 'INBOX') };
 }
 
 /**
@@ -51,7 +53,9 @@ function imapUid(emailId) {
 function recomposeId(account, previousId, moveResult) {
   if (!moveResult) return null;
   if (account.type === 'imap') {
-    return moveResult.uid ? `${account.id}::${moveResult.uid}` : null;
+    return moveResult.uid && moveResult.folder
+      ? require('../services/imapService').composeId(account.id, moveResult.folder, moveResult.uid)
+      : null;
   }
   if (!moveResult.id) return null;
   const previousProviderId = gmailOrOutlookId(previousId);
@@ -120,9 +124,11 @@ function sendAttachment(res, attachment, index, wantsInlineRequested) {
 async function loadAttachment(account, emailId, index, folder) {
   const service = getService(account.type);
   if (!service.getAttachment) throw new Error('Attachments are not supported for this account');
-  return account.type === 'imap'
-    ? service.getAttachment(account, imapUid(emailId), folder || 'INBOX', index)
-    : service.getAttachment(account, gmailOrOutlookId(emailId), index);
+  if (account.type === 'imap') {
+    const target = imapTarget(emailId, folder);
+    return service.getAttachment(account, target.uid, target.folder, index);
+  }
+  return service.getAttachment(account, gmailOrOutlookId(emailId), index);
 }
 
 // ─── Static routes ──────────────────────────────────────────────────────────
@@ -189,7 +195,7 @@ router.get('/search-index', (req, res) => {
 router.get('/search-all', async (req, res) => {
   const query = req.query.q || '';
   const folder = req.query.folder || 'INBOX';
-  const limit = parseInt(req.query.limit) || 50;
+  const limit = pageSize(req.query.limit);
 
   try {
     const accounts = store.getAccounts();
@@ -231,7 +237,7 @@ router.get('/search-attachments-all', async (req, res) => {
   const query = req.query.q || '';
   const type = req.query.type || '';
   const folder = req.query.folder || 'INBOX';
-  const limit = parseInt(req.query.limit) || 50;
+  const limit = pageSize(req.query.limit);
 
   try {
     const accounts = store.getAccounts();
@@ -457,14 +463,20 @@ router.get('/unified', async (req, res) => {
       const service = getService(account.type);
       const result = await service.fetchEmails(account, folder, limit, token || null);
       nextTokens[account.id] = result?.nextToken || null;
+      if (!token) store.saveEmailCache(`list:${account.id}:${folder}:`, result);
       searchIndex.indexSummaries(result?.emails || []);
+      accountHealth.noteSuccess(account.id);
       return result?.emails || [];
     } catch (err) {
+      accountHealth.noteFailure(account.id, err);
       errors.push({ accountId: account.id, email: account.email, error: err.message });
       // A provider being down should not blank out the other accounts. Keep
       // its token as-is so a later retry resumes where it left off instead of
       // treating the failure as the end of the mailbox.
       nextTokens[account.id] = token ?? null;
+      // The cached copy is of the first page only. Serving it for a "load
+      // more" appended fifty messages the list already showed.
+      if (token) return [];
       const cached = store.getEmailCache(`list:${account.id}:${folder}:`);
       return cached ? (cached.value.emails || []) : [];
     }
@@ -539,16 +551,148 @@ router.put('/signatures', (req, res) => {
   res.json(store.saveSignatures(out));
 });
 
+// ─── Settings backup ────────────────────────────────────────────────────────
+// Rules, templates, signatures, aliases, and the auto-responder, as one JSON
+// file. Credentials are deliberately not part of it: a settings backup is
+// something people email to themselves.
+
+router.get('/settings-export', (req, res) => {
+  const accounts = store.getAccounts();
+  const emailOf = Object.fromEntries(accounts.map(a => [a.id, a.email]));
+  // Account ids are per-installation; key everything by address instead so a
+  // backup restores onto a fresh install with the same accounts re-added.
+  const byEmail = (id) => emailOf[id] || null;
+  const signatures = {};
+  for (const [key, value] of Object.entries(store.getSignatures())) {
+    const [id, ...alias] = key.split(':');
+    const email = byEmail(id);
+    if (email) signatures[[email, ...alias].join(':')] = value;
+    else if (!key.includes(':')) signatures[key] = value;
+  }
+  const { enabled, subject, message, startAt, endAt, accountIds, knownContactsOnly, cooldownDays } = store.getVacationSettings();
+  res.setHeader('Content-Disposition', `attachment; filename="hermes-settings-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.json({
+    format: 'hermes-settings',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    rules: store.getRules().map(r => ({ ...r, accountEmail: r.accountId ? byEmail(r.accountId) : undefined, accountId: undefined })),
+    templates: store.getTemplates(),
+    signatures,
+    aliases: Object.fromEntries(accounts.map(a => [a.email, store.getAliases(a.id)])),
+    vacation: {
+      enabled, subject, message, startAt, endAt, knownContactsOnly, cooldownDays,
+      accountEmails: (accountIds || []).map(byEmail).filter(Boolean),
+    },
+  });
+});
+
+// POST /api/emails/settings-import  Body: the file settings-export produced.
+// Replaces rules and templates; merges signatures and aliases for accounts that
+// exist here; anything addressed to an unknown account is reported, not lost.
+router.post('/settings-import', (req, res) => {
+  const data = req.body || {};
+  if (data.format !== 'hermes-settings') return res.status(400).json({ error: 'Not a Hermes settings file' });
+
+  const accounts = store.getAccounts();
+  const idOf = Object.fromEntries(accounts.map(a => [String(a.email).toLowerCase(), a.id]));
+  const lookup = (email) => idOf[String(email || '').toLowerCase()] || null;
+  const skipped = [];
+
+  if (Array.isArray(data.rules)) {
+    const rules = data.rules.map(r => {
+      const accountId = r.accountEmail ? lookup(r.accountEmail) : undefined;
+      if (r.accountEmail && !accountId) skipped.push(`rule "${r.name}" (no account ${r.accountEmail})`);
+      return { ...r, accountId };
+    }).filter(r => !r.accountEmail || r.accountId);
+    store.saveRules(rulesService.sanitizeRules(rules));
+  }
+
+  if (Array.isArray(data.templates)) {
+    store.saveTemplates(data.templates.slice(0, 100).map(t => ({
+      id: t.id || uuidv4(), name: String(t.name || 'Template').slice(0, 80), subject: String(t.subject || '').slice(0, 300), body: String(t.body || '').slice(0, 50000),
+    })));
+  }
+
+  if (data.signatures && typeof data.signatures === 'object') {
+    const merged = { ...store.getSignatures() };
+    for (const [key, value] of Object.entries(data.signatures).slice(0, 200)) {
+      const [email, ...alias] = key.split(':');
+      const id = email.includes('@') ? lookup(email) : null;
+      if (email.includes('@') && !id) { skipped.push(`signature for ${email}`); continue; }
+      merged[id ? [id, ...alias].join(':') : key] = String(value ?? '').slice(0, 20000);
+    }
+    store.saveSignatures(merged);
+  }
+
+  if (data.aliases && typeof data.aliases === 'object') {
+    for (const [email, list] of Object.entries(data.aliases)) {
+      const id = lookup(email);
+      if (!id) { if (Array.isArray(list) && list.length) skipped.push(`aliases for ${email}`); continue; }
+      const clean = (Array.isArray(list) ? list : []).slice(0, 20)
+        .map(a => ({ email: String(a.email || '').trim().slice(0, 200), name: String(a.name || '').trim().slice(0, 120), isDefault: a.isDefault === true }))
+        .filter(a => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email));
+      store.saveAliases(id, clean);
+    }
+  }
+
+  if (data.vacation && typeof data.vacation === 'object') {
+    const v = data.vacation;
+    store.saveVacationSettings({
+      // Never switch an auto-responder on as a side effect of a restore.
+      enabled: false,
+      subject: String(v.subject || 'Out of office').slice(0, 300),
+      message: String(v.message || '').slice(0, 20000),
+      startAt: v.startAt || null,
+      endAt: v.endAt || null,
+      accountIds: (v.accountEmails || []).map(lookup).filter(Boolean),
+      knownContactsOnly: v.knownContactsOnly === true,
+      cooldownDays: Math.min(Math.max(Number(v.cooldownDays) || 4, 1), 30),
+    });
+  }
+
+  res.json({ success: true, skipped });
+});
+
 // ─── Mailbox export ─────────────────────────────────────────────────────────
 
 // GET /api/emails/export?accountId=...&folder=INBOX&limit=5000
 // Streams the folder as mbox, the format every other mail client imports.
-router.get('/export', async (req, res) => {
-  const account = store.getAccount(req.query.accountId);
+router.get('/export', (req, res) => streamExport(req, res, {
+  accountId: req.query.accountId,
+  folder: req.query.folder,
+  limit: req.query.limit,
+}));
+
+// POST /api/emails/export-ticket  Body: { accountId, folder, limit }
+// A browser download cannot send the Authorization header, and the query-string
+// token is accepted on the live-update stream only. A single-use ticket makes
+// the export a plain link without the master token in it.
+router.post('/export-ticket', (req, res) => {
+  const account = store.getAccount(req.body?.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  const { token, expiresIn } = downloadTickets.issue({
+    kind: 'export',
+    accountId: account.id,
+    folder: String(req.body?.folder || 'INBOX'),
+    limit: req.body?.limit,
+  });
+  res.json({ url: `/api/emails/export-ticket/${token}`, expiresIn });
+});
+
+// GET /api/emails/export-ticket/:token — reachable without the API token; the
+// ticket is the credential.
+router.get('/export-ticket/:token', (req, res) => {
+  const claim = downloadTickets.redeem(req.params.token);
+  if (!claim || claim.kind !== 'export') return res.status(404).json({ error: 'This download link has expired' });
+  return streamExport(req, res, { accountId: claim.accountId, folder: claim.folder, limit: claim.limit });
+});
+
+async function streamExport(req, res, { accountId, folder: requestedFolder, limit: requestedLimit }) {
+  const account = store.getAccount(accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
-  const folder = req.query.folder || 'INBOX';
-  const limit = Math.min(parseInt(req.query.limit) || 5000, 50000);
+  const folder = requestedFolder || 'INBOX';
+  const limit = Math.min(parseInt(requestedLimit, 10) || 5000, 50000);
   const filename = exportService.suggestFilename(account, folder);
 
   res.setHeader('Content-Type', 'application/mbox');
@@ -574,9 +718,9 @@ router.get('/export', async (req, res) => {
     // Headers are long gone by this point, so the only honest signal left is
     // an mbox comment at the tail and a truncated stream.
     if (!res.headersSent) res.status(500).json({ error: err.message });
-    else res.end(`\n\nX-Hermes-Export-Error: ${String(err.message).replace(/[\r\n]+/g, ' ')}\n`);
+    else if (!res.destroyed) res.end(`\n\nX-Hermes-Export-Error: ${String(err.message).replace(/[\r\n]+/g, ' ')}\n`);
   }
-});
+}
 
 // GET /api/emails/attachment-ticket/:token
 // Redeem a download ticket. Reachable without the API token by design — the
@@ -585,14 +729,14 @@ router.get('/export', async (req, res) => {
 router.get('/attachment-ticket/:token', async (req, res) => {
   const claim = downloadTickets.redeem(req.params.token);
   // Unknown, expired, and already-spent are deliberately indistinguishable.
-  if (!claim) return res.status(404).json({ error: 'This download link has expired' });
+  if (!claim || claim.kind !== 'attachment') return res.status(404).json({ error: 'This download link has expired' });
 
   const account = store.getAccount(claim.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   try {
     const attachment = await loadAttachment(account, claim.emailId, claim.index, claim.folder);
-    sendAttachment(res, attachment, claim.index, true);
+    sendAttachment(res, attachment, claim.index, claim.inline !== false);
   } catch (err) {
     console.error('Ticketed attachment error:', err);
     res.status(500).json({ error: err.message });
@@ -607,7 +751,7 @@ router.get('/:accountId', async (req, res) => {
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   const folder = req.query.folder || 'INBOX';
-  const limit = parseInt(req.query.limit) || 50;
+  const limit = pageSize(req.query.limit);
   const pageToken = req.query.pageToken || null;
 
   try {
@@ -615,8 +759,10 @@ router.get('/:accountId', async (req, res) => {
     const result = await service.fetchEmails(account, folder, limit, pageToken);
     store.saveEmailCache(`list:${account.id}:${folder}:${pageToken || ''}`, result);
     searchIndex.indexSummaries(result.emails || []);
+    accountHealth.noteSuccess(account.id);
     res.json(result); // { emails, nextToken }
   } catch (err) {
+    accountHealth.noteFailure(account.id, err);
     console.error('Fetch emails error:', err);
     const cached = store.getEmailCache(`list:${account.id}:${folder}:${pageToken || ''}`);
     if (cached) return res.json({ ...cached.value, offline: true, cachedAt: cached.cachedAt });
@@ -631,7 +777,7 @@ router.get('/:accountId/search', async (req, res) => {
 
   const query = req.query.q || '';
   const folder = req.query.folder || 'INBOX';
-  const limit = parseInt(req.query.limit) || 50;
+  const limit = pageSize(req.query.limit);
 
   try {
     const service = getService(account.type);
@@ -715,9 +861,10 @@ router.get('/:accountId/message/:emailId', async (req, res) => {
   try {
     const service = getService(account.type);
 
+    const target = imapTarget(emailId, folder);
     let body;
     if (account.type === 'imap') {
-      body = await service.fetchEmailBody(account, imapUid(emailId), folder);
+      body = await service.fetchEmailBody(account, target.uid, target.folder);
     } else {
       body = await service.fetchEmailBody(account, gmailOrOutlookId(emailId));
     }
@@ -726,7 +873,7 @@ router.get('/:accountId/message/:emailId', async (req, res) => {
     try {
       if (service.markAsRead && req.query.markRead !== 'false') {
         if (account.type === 'imap') {
-          await service.markAsRead(account, imapUid(emailId), folder);
+          await service.markAsRead(account, target.uid, target.folder);
         } else {
           await service.markAsRead(account, gmailOrOutlookId(emailId));
         }
@@ -785,6 +932,8 @@ router.post('/:accountId/message/:emailId/attachment/:index/ticket', (req, res) 
     emailId: req.params.emailId,
     index,
     folder: req.query.folder || 'INBOX',
+    // A desktop "Download" wants a file; the phone opens tickets in a viewer.
+    inline: req.query.inline !== 'false',
   });
 
   res.json({ url: `/api/emails/attachment-ticket/${token}`, expiresIn });
@@ -796,13 +945,42 @@ router.get('/:accountId/thread/:threadId', async (req, res) => {
   const service = getService(account.type);
   if (!service.fetchThread) return res.json([]);
   try {
-    const items = await service.fetchThread(account, req.params.threadId);
+    const items = account.type === 'imap'
+      ? await service.fetchThread(account, req.params.threadId, req.query.folder || 'INBOX')
+      : await service.fetchThread(account, req.params.threadId);
     for (const item of items) {
       if (item?.summary?.id) searchIndex.indexBody(item.summary.id, item.body);
     }
     res.json(items.map(item => ({ ...item, body: publicBody(item.body) })));
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/emails/:accountId/message/:emailId/unsubscribe
+// RFC 8058 one-click where the sender supports it, else a mailto request,
+// else the URL for the client to open. The headers are re-read here rather
+// than taken from the client, so a request can only unsubscribe using what
+// the message itself advertised.
+router.post('/:accountId/message/:emailId/unsubscribe', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  try {
+    const service = getService(account.type);
+    const target = imapTarget(req.params.emailId, req.query.folder);
+    const body = account.type === 'imap'
+      ? await service.fetchEmailBody(account, target.uid, target.folder)
+      : await service.fetchEmailBody(account, gmailOrOutlookId(req.params.emailId));
+    const result = await unsubscribeService.unsubscribe({
+      listUnsubscribe: body?.listUnsubscribe,
+      listUnsubscribePost: body?.listUnsubscribePost,
+    }, {
+      sendMail: (mail) => createQueuedSend({ accountId: account.id, email: mail, undoWindowSec: 0 }),
+    });
+    res.json({ success: result.method !== 'none', ...result });
+  } catch (err) {
+    console.error('Unsubscribe error:', err.message);
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -856,7 +1034,7 @@ router.post('/:accountId/send', async (req, res) => {
           const service = getService(account.type);
           const meta = account.type === 'gmail'
             ? await service.getThreadingInfo(account, gmailOrOutlookId(replyToEmailId))
-            : await service.getThreadingInfo(account, imapUid(replyToEmailId), replyToFolder || 'INBOX');
+            : await service.getThreadingInfo(account, imapUid(replyToEmailId), imapFolder(replyToEmailId, replyToFolder));
           if (meta) {
             email.inReplyTo = meta.inReplyTo || email.inReplyTo;
             email.references = meta.references || email.references;
@@ -981,14 +1159,20 @@ router.delete('/:accountId/message/:emailId', async (req, res) => {
 
   try {
     const service = getService(account.type);
+    let result;
     if (account.type === 'imap') {
-      await service.deleteEmail(account, imapUid(req.params.emailId), req.query.folder || 'INBOX');
+      const target = imapTarget(req.params.emailId, req.query.folder);
+      result = await service.deleteEmail(account, target.uid, target.folder);
     } else {
-      await service.deleteEmail(account, gmailOrOutlookId(req.params.emailId));
+      result = await service.deleteEmail(account, gmailOrOutlookId(req.params.emailId), req.query.folder);
     }
     searchIndex.remove(req.params.emailId);
+    store.removeSnooze(req.params.emailId);
     invalidateCounts();
-    res.json({ success: true });
+    // `undoId` addresses the message in Trash. Absent means the delete was
+    // permanent (already in Trash, or an IMAP server with no Trash / UIDPLUS).
+    const undoId = result?.permanent ? null : (recomposeId(account, req.params.emailId, result) || req.params.emailId);
+    res.json({ success: true, permanent: !!result?.permanent, undoId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1007,17 +1191,20 @@ router.post('/:accountId/message/:emailId/untrash', async (req, res) => {
 
   const service = getService(account.type);
   if (!service.untrashEmail) {
-    return res.status(400).json({ error: 'Undo is not available for IMAP accounts' });
+    return res.status(400).json({ error: 'Undo is not available for this account' });
   }
 
   try {
-    await service.untrashEmail(
-      account,
-      gmailOrOutlookId(req.params.emailId),
-      req.body?.folder || 'INBOX',
-    );
+    let result;
+    if (account.type === 'imap') {
+      // The id is the one the delete handed back: the message's UID in Trash.
+      const { uid, folder: trashFolder } = imapTarget(req.params.emailId, req.query.folder);
+      result = await service.untrashEmail(account, uid, trashFolder, req.body?.folder || 'INBOX');
+    } else {
+      result = await service.untrashEmail(account, gmailOrOutlookId(req.params.emailId), req.body?.folder || 'INBOX');
+    }
     invalidateCounts();
-    res.json({ success: true });
+    res.json({ success: true, restoredId: recomposeId(account, req.params.emailId, result) || req.params.emailId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1032,7 +1219,8 @@ router.post('/:accountId/message/:emailId/read', async (req, res) => {
     const service = getService(account.type);
     if (service.markAsRead) {
       if (account.type === 'imap') {
-        await service.markAsRead(account, imapUid(req.params.emailId), req.query.folder || 'INBOX');
+        const target = imapTarget(req.params.emailId, req.query.folder);
+        await service.markAsRead(account, target.uid, target.folder);
       } else {
         await service.markAsRead(account, gmailOrOutlookId(req.params.emailId));
       }
@@ -1053,7 +1241,8 @@ router.post('/:accountId/message/:emailId/unread', async (req, res) => {
   try {
     const service = getService(account.type);
     if (account.type === 'imap') {
-      await service.markAsUnread(account, imapUid(req.params.emailId), req.query.folder || 'INBOX');
+      const target = imapTarget(req.params.emailId, req.query.folder);
+      await service.markAsUnread(account, target.uid, target.folder);
     } else {
       await service.markAsUnread(account, gmailOrOutlookId(req.params.emailId));
     }
@@ -1071,7 +1260,8 @@ router.post('/:accountId/message/:emailId/spam', async (req, res) => {
   try {
     const service = getService(account.type);
     const id = account.type === 'imap' ? imapUid(req.params.emailId) : gmailOrOutlookId(req.params.emailId);
-    const result = await service.reportSpam(account, id, req.query.folder || 'INBOX');
+    const folder = account.type === 'imap' ? imapFolder(req.params.emailId, req.query.folder) : (req.query.folder || 'INBOX');
+    const result = await service.reportSpam(account, id, folder);
     searchIndex.remove(req.params.emailId);
     invalidateCounts();
     // `undoId` is what an Undo must address; absent means undo is unavailable.
@@ -1111,7 +1301,7 @@ router.post('/:accountId/message/:emailId/block', async (req, res) => {
   const alreadyBlocked = rules.some(r =>
     r.accountId === account.id &&
     r.actions?.some(a => a.type === 'spam') &&
-    r.conditions?.some(c => c.field === 'from' && c.value.toLowerCase() === sender.toLowerCase())
+    r.conditions?.some(c => (c.field === 'from' || c.field === 'fromAddress') && c.value.toLowerCase() === sender.toLowerCase())
   );
   if (!alreadyBlocked) {
     rules.push(rulesService.sanitizeRule({
@@ -1119,7 +1309,9 @@ router.post('/:accountId/message/:emailId/block', async (req, res) => {
       enabled: true,
       accountId: account.id,
       match: 'all',
-      conditions: [{ field: 'from', op: 'contains', value: sender.toLowerCase() }],
+      // An exact address match. `from contains` also caught every address
+      // that merely ended in this one: blocking a@b.com blocked xa@b.com.
+      conditions: [{ field: 'fromAddress', op: 'equals', value: sender.toLowerCase().trim() }],
       actions: [{ type: 'spam' }],
       stopProcessing: true,
     }));
@@ -1129,7 +1321,8 @@ router.post('/:accountId/message/:emailId/block', async (req, res) => {
   try {
     const service = getService(account.type);
     const id = account.type === 'imap' ? imapUid(req.params.emailId) : gmailOrOutlookId(req.params.emailId);
-    await service.reportSpam(account, id, req.query.folder || 'INBOX');
+    const folder = account.type === 'imap' ? imapFolder(req.params.emailId, req.query.folder) : (req.query.folder || 'INBOX');
+    await service.reportSpam(account, id, folder);
     searchIndex.remove(req.params.emailId);
     invalidateCounts();
     res.json({ success: true });
@@ -1146,7 +1339,8 @@ router.post('/:accountId/message/:emailId/star', async (req, res) => {
   try {
     const service = getService(account.type);
     if (account.type === 'imap') {
-      await service.toggleStar(account, imapUid(req.params.emailId), req.query.folder || 'INBOX', starred);
+      const target = imapTarget(req.params.emailId, req.query.folder);
+      await service.toggleStar(account, target.uid, target.folder, starred);
     } else {
       await service.toggleStar(account, gmailOrOutlookId(req.params.emailId), starred);
     }
@@ -1167,7 +1361,9 @@ router.post('/:accountId/message/:emailId/move', async (req, res) => {
 
   try {
     const service = getService(account.type);
-    const sourceFolder = req.query.folder || 'INBOX';
+    const sourceFolder = account.type === 'imap'
+      ? imapFolder(req.params.emailId, req.query.folder)
+      : (req.query.folder || 'INBOX');
     let result;
     if (account.type === 'imap') {
       result = await service.moveEmail(account, imapUid(req.params.emailId), sourceFolder, toFolder);
@@ -1236,8 +1432,9 @@ router.post('/:accountId/message/:emailId/rsvp', async (req, res) => {
   try {
     const service = getService(account.type);
     const emailId = req.params.emailId;
+    const target = imapTarget(emailId, req.query.folder);
     const body = account.type === 'imap'
-      ? await service.fetchEmailBody(account, imapUid(emailId), req.query.folder || 'INBOX')
+      ? await service.fetchEmailBody(account, target.uid, target.folder)
       : await service.fetchEmailBody(account, gmailOrOutlookId(emailId));
 
     const invite = body?.calendarInvite;
@@ -1324,9 +1521,10 @@ router.post('/:accountId/bulk/delete', async (req, res) => {
   const service = getService(account.type);
 
   const results = await runBulk(emailIds, async (emailId) => {
-    if (account.type === 'imap') await service.deleteEmail(account, imapUid(emailId), folder);
-    else await service.deleteEmail(account, gmailOrOutlookId(emailId));
+    if (account.type === 'imap') await service.deleteEmail(account, imapUid(emailId), imapFolder(emailId, folder));
+    else await service.deleteEmail(account, gmailOrOutlookId(emailId), folder);
     searchIndex.remove(emailId);
+    store.removeSnooze(emailId);
   }, account.type);
 
   invalidateCounts();
@@ -1346,7 +1544,7 @@ router.post('/:accountId/bulk/read', async (req, res) => {
   if (!service.markAsRead) return res.json({ success: true, succeeded: emailIds.length, failed: 0, errors: [] });
 
   const results = await runBulk(emailIds, async (emailId) => {
-    if (account.type === 'imap') await service.markAsRead(account, imapUid(emailId), folder);
+    if (account.type === 'imap') await service.markAsRead(account, imapUid(emailId), imapFolder(emailId, folder));
     else await service.markAsRead(account, gmailOrOutlookId(emailId));
     searchIndex.setFlags(emailId, { read: true });
   }, account.type);
@@ -1367,7 +1565,7 @@ router.post('/:accountId/bulk/unread', async (req, res) => {
   const service = getService(account.type);
 
   const results = await runBulk(emailIds, async (emailId) => {
-    if (account.type === 'imap') await service.markAsUnread(account, imapUid(emailId), folder);
+    if (account.type === 'imap') await service.markAsUnread(account, imapUid(emailId), imapFolder(emailId, folder));
     else await service.markAsUnread(account, gmailOrOutlookId(emailId));
     searchIndex.setFlags(emailId, { read: false });
   }, account.type);
@@ -1389,7 +1587,7 @@ router.post('/:accountId/bulk/move', async (req, res) => {
   const service = getService(account.type);
 
   const results = await runBulk(emailIds, async (emailId) => {
-    if (account.type === 'imap') await service.moveEmail(account, imapUid(emailId), sourceFolder, toFolder);
+    if (account.type === 'imap') await service.moveEmail(account, imapUid(emailId), imapFolder(emailId, sourceFolder), toFolder);
     else if (account.type === 'gmail') await service.moveEmail(account, gmailOrOutlookId(emailId), sourceFolder, toFolder);
     else await service.moveEmail(account, gmailOrOutlookId(emailId), toFolder);
     searchIndex.remove(emailId);

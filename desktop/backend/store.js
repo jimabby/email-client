@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('crypto');
 const secrets = require('./services/secretStore');
 
 // In packaged Electron app, HERMES_DATA_DIR points to the writable AppData folder.
@@ -15,6 +15,10 @@ const CACHE_FILE = path.join(DATA_DIR, 'email-cache.json');
 // Keeping them out of accounts.json means a category refresh never rewrites
 // the file holding credentials.
 const CATEGORIES_FILE = path.join(DATA_DIR, 'categories.json');
+// Queued and recently sent mail, with bodies and base64 attachments of up to
+// 30 MB. It used to live in accounts.json, so every token refresh or rule run
+// rewrote — and re-sealed — tens of megabytes alongside the credentials.
+const OUTBOX_FILE = path.join(DATA_DIR, 'outbox.json');
 
 // A fresh install has no accounts to seed, so nothing is ever copied in from
 // the bundle. An earlier version seeded from a developer's own accounts.json
@@ -45,6 +49,23 @@ function writeJsonAtomic(file, data) {
   const tmpFile = `${file}.tmp`;
   fs.writeFileSync(tmpFile, data, { mode: 0o600 });
   fs.renameSync(tmpFile, file);
+}
+
+/**
+ * Read a file written by the sealed writer. Message content is encrypted at
+ * rest; a plaintext file from an older build is read as-is and sealed on its
+ * next write. When the key no longer opens the file, the unreadable copy is
+ * set aside rather than overwritten — for the outbox that is unsent mail.
+ */
+function readSealedJson(file, fallback) {
+  try {
+    if (!fs.existsSync(file)) return fallback;
+    return JSON.parse(secrets.openText(fs.readFileSync(file)));
+  } catch (e) {
+    console.error(`Failed to load ${path.basename(file)}:`, e.message);
+    try { fs.renameSync(file, `${file}.unreadable-${Date.now()}`); } catch { /* leave it */ }
+    return fallback;
+  }
 }
 
 function loadStore() {
@@ -83,21 +104,26 @@ function makeWriter(file, serialize) {
 }
 
 const store = loadStore();
-const emailCache = readJson(CACHE_FILE, {});
+const emailCache = readSealedJson(CACHE_FILE, {});
 const categories = readJson(CATEGORIES_FILE, {});
+const outbox = readSealedJson(OUTBOX_FILE, { items: [] });
+if (!Array.isArray(outbox.items)) outbox.items = [];
 
 const storeWriter = makeWriter(STORE_FILE, () => JSON.stringify(secrets.sealObject(store), null, 2));
-const cacheWriter = makeWriter(CACHE_FILE, () => JSON.stringify(emailCache));
+const cacheWriter = makeWriter(CACHE_FILE, () => secrets.sealText(JSON.stringify(emailCache)));
 const categoriesWriter = makeWriter(CATEGORIES_FILE, () => JSON.stringify(categories));
+const outboxWriter = makeWriter(OUTBOX_FILE, () => secrets.sealText(JSON.stringify(outbox)));
 
 const saveStore = () => storeWriter.schedule();
 const saveCache = () => cacheWriter.schedule();
 const saveCategories = () => categoriesWriter.schedule();
+const saveOutbox = () => outboxWriter.schedule();
 
 function flushAll() {
   storeWriter.flush();
   cacheWriter.flush();
   categoriesWriter.flush();
+  outboxWriter.flush();
 }
 
 // Never lose the last few mutations when the process goes away.
@@ -122,6 +148,31 @@ if (store.categories && typeof store.categories === 'object') {
   delete store.categories;
   saveCategories();
   saveStore();
+}
+
+// Older builds kept the send queue inside accounts.json.
+if (Array.isArray(store.sendQueue)) {
+  const known = new Set(outbox.items.map(i => i.id));
+  for (const item of store.sendQueue) if (!known.has(item.id)) outbox.items.push(item);
+  delete store.sendQueue;
+  saveOutbox();
+  saveStore();
+}
+
+// IMAP ids gained their folder ("acc::uid" -> "acc::INBOX::uid"). A snooze
+// saved under the old form would never match the message it hides.
+if (Array.isArray(store.snoozes)) {
+  let migrated = false;
+  for (const snooze of store.snoozes) {
+    const parts = String(snooze.emailId || '').split('::');
+    if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+      const folder = snooze.folder || snooze.email?.folder || 'INBOX';
+      snooze.emailId = `${parts[0]}::${folder}::${parts[1]}`;
+      if (snooze.email) snooze.email.id = snooze.emailId;
+      migrated = true;
+    }
+  }
+  if (migrated) saveStore();
 }
 
 // Rules gained structured conditions; keep old single-field rules working by
@@ -232,6 +283,10 @@ module.exports = {
     // remain available online, while message text is what offline reading needs.
     const safeValue = JSON.parse(JSON.stringify(value, (name, item) => name === 'content' ? null : item));
     if (JSON.stringify(safeValue).length > 1024 * 1024) return;
+    // Delete first so a refreshed entry moves to the end of the insertion
+    // order. Reassigning in place kept its original slot, which made the trim
+    // below evict by first-cached rather than least-recently-cached.
+    delete emailCache[key];
     emailCache[key] = { value: safeValue, cachedAt: new Date().toISOString() };
     const keys = Object.keys(emailCache);
     for (const old of keys.slice(0, Math.max(0, keys.length - 300))) delete emailCache[old];
@@ -275,52 +330,50 @@ module.exports = {
 
   // ─── Send queue / outbox ──────────────────────────────────────────────────
   getSendQueue() {
-    if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
-    return store.sendQueue;
+    return outbox.items;
   },
 
   addSendQueueItem(item) {
-    if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
-    store.sendQueue.push(item);
-    saveStore();
+    outbox.items.push(item);
+    saveOutbox();
     return item;
   },
 
   updateSendQueueItem(id, updates) {
-    if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
-    const idx = store.sendQueue.findIndex(i => i.id === id);
+    const idx = outbox.items.findIndex(i => i.id === id);
     if (idx === -1) return null;
-    store.sendQueue[idx] = { ...store.sendQueue[idx], ...updates };
-    saveStore();
-    return store.sendQueue[idx];
+    const next = { ...outbox.items[idx], ...updates };
+    // Once a message is out, its body and attachments are never needed again
+    // (the provider's Sent folder has them) — keep only the outbox summary.
+    if (next.status === 'sent') delete next.email;
+    outbox.items[idx] = next;
+    saveOutbox();
+    return next;
   },
 
   getSendQueueItem(id) {
-    if (!Array.isArray(store.sendQueue)) store.sendQueue = [];
-    return store.sendQueue.find(i => i.id === id) || null;
+    return outbox.items.find(i => i.id === id) || null;
   },
 
   removeSendQueueItem(id) {
-    if (!Array.isArray(store.sendQueue)) return false;
-    const idx = store.sendQueue.findIndex(i => i.id === id);
+    const idx = outbox.items.findIndex(i => i.id === id);
     if (idx === -1) return false;
-    store.sendQueue.splice(idx, 1);
-    saveStore();
+    outbox.items.splice(idx, 1);
+    saveOutbox();
     return true;
   },
 
   // Remove sent/cancelled items older than 24 hours. Failed items stay until
   // the user deals with them — that is the whole point of an outbox.
   pruneSendQueue() {
-    if (!Array.isArray(store.sendQueue)) return;
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const before = store.sendQueue.length;
-    store.sendQueue = store.sendQueue.filter(item => {
+    const before = outbox.items.length;
+    outbox.items = outbox.items.filter(item => {
       if (item.status !== 'sent' && item.status !== 'cancelled') return true;
       const doneAt = item.sentAt || item.cancelledAt;
       return doneAt && new Date(doneAt).getTime() > cutoff;
     });
-    if (store.sendQueue.length !== before) saveStore();
+    if (outbox.items.length !== before) saveOutbox();
   },
 
   // ─── Snooze ────────────────────────────────────────────────────────────────

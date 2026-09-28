@@ -7,6 +7,7 @@ const inputCls = 'field w-full px-2.5 py-1.5 text-[12.5px]'
 
 const FIELD_LABELS: Record<RuleField, string> = {
   from: 'From',
+  fromAddress: 'Sender address',
   to: 'To',
   subject: 'Subject',
   snippet: 'Preview text',

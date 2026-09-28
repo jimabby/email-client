@@ -27,6 +27,8 @@ interface PromptRequest {
   defaultValue?: string
   placeholder?: string
   confirmLabel?: string
+  /** Mask the input — for a password. */
+  secret?: boolean
 }
 
 interface ConfirmRequest {
@@ -124,6 +126,8 @@ export function DialogHost() {
               <input
                 id="hermes-dialog-input"
                 ref={inputRef}
+                type={request.secret ? 'password' : 'text'}
+                autoComplete={request.secret ? 'current-password' : undefined}
                 value={value}
                 onChange={e => setValue(e.target.value)}
                 placeholder={request.placeholder}

@@ -126,6 +126,49 @@ export function Sidebar() {
       .catch(console.error)
   }, [])
 
+  // Re-read the account list now and then: the backend flags an account whose
+  // credentials stopped working (a revoked Google grant, a changed password),
+  // and that is only useful if the prompt to reconnect actually appears. The
+  // store is only touched when that flag changes, so nothing re-renders idly.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      accountsApi.list().then(list => {
+        const current = useEmailStore.getState().accounts
+        const flags = (items: typeof list) => items.map(a => `${a.id}:${a.authError ? 1 : 0}`).join(',')
+        if (flags(list) !== flags(current)) setAccounts(list)
+      }).catch(() => {})
+    }, 60_000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const handleReconnect = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    const account = accounts.find(a => a.id === id)
+    if (!account) return
+    try {
+      if (account.type === 'gmail' || account.type === 'outlook') {
+        // Signing in again replaces the revoked grant; the callback clears the flag.
+        const { url } = account.type === 'gmail'
+          ? await accountsApi.getGmailAuthUrl()
+          : await accountsApi.getOutlookAuthUrl()
+        window.open(url, '_blank', 'width=500,height=600')
+        return
+      }
+      const password = await promptDialog({
+        title: `Reconnect ${account.email}`,
+        label: 'The server no longer accepts the saved password. Enter the current one (or a new app password).',
+        confirmLabel: 'Reconnect',
+        secret: true,
+      })
+      if (!password) return
+      const { account: updated } = await accountsApi.updatePassword(id, password)
+      setAccounts(accounts.map(a => a.id === id ? { ...a, ...updated, authError: null } : a))
+      showNotification('success', `${account.email} reconnected`)
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : 'Could not reconnect')
+    }
+  }
+
   // Real unread totals from the provider. Counting the loaded page could only
   // ever describe the folder the user happened to be looking at.
   useEffect(() => {
@@ -312,6 +355,20 @@ export function Sidebar() {
                     </svg>
                   </button>
                 </div>
+
+                {account.authError && (
+                  <div role="alert" className="mx-1 mt-1 flex items-center gap-2 rounded-lg bg-danger/10 px-2.5 py-1.5 text-[11.5px] text-danger">
+                    <span className="flex-1 leading-snug" title={account.authError.message}>
+                      {account.type === 'imap' ? 'Password no longer accepted' : 'Sign-in expired'} — mail is not updating
+                    </span>
+                    <button
+                      onClick={(e) => handleReconnect(account.id, e)}
+                      className="shrink-0 font-semibold hover:underline"
+                    >
+                      Reconnect
+                    </button>
+                  </div>
+                )}
 
                 {isActive && (
                   <div className="mt-1 space-y-px animate-fade">

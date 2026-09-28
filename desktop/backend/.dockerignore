@@ -12,6 +12,8 @@ node_modules
 **/email-cache.json
 **/categories.json
 **/search-index.json
+**/outbox.json
+**/*.unreadable-*
 **/*.tmp
 
 test

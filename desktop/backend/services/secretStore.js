@@ -17,10 +17,15 @@ const PREFIX = 'enc:v1:';
 const GCM_PREFIX = 'enc:g1:';
 
 let safeStorage = null;
-try {
-  // Only resolvable inside the Electron main process.
-  ({ safeStorage } = require('electron'));
-} catch { /* plain Node — fall through to AES */ }
+// Only probe when actually running under Electron. From plain Node (dev mode,
+// tests, Docker) `require('electron')` resolves the npm package instead —
+// which, since Electron 3x, starts downloading the Electron binary on first
+// require and stalls startup.
+if (process.versions.electron) {
+  try {
+    ({ safeStorage } = require('electron'));
+  } catch { /* a utilityProcess has no safeStorage — fall through to AES */ }
+}
 
 function safeStorageUsable() {
   try {
@@ -177,7 +182,45 @@ function openObject(obj) {
   return out;
 }
 
+// ─── Whole-file sealing ─────────────────────────────────────────────────────
+// Credentials are sealed field by field, but the mail cache, the search index,
+// and the outbox hold message bodies — the thing the credentials protect. They
+// are sealed as a whole with the same AES key. The OS keychain is not used
+// here: the backend runs in a utilityProcess, which has no safeStorage, and
+// the key it is handed is what the keychain protects.
+
+const FILE_MAGIC = Buffer.from('HSF1');
+
+/** Encrypt a string into a self-describing buffer. */
+function sealText(plaintext) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getAesKey(), iv);
+  const body = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
+  return Buffer.concat([FILE_MAGIC, iv, cipher.getAuthTag(), body]);
+}
+
+function isSealedBuffer(buffer) {
+  return Buffer.isBuffer(buffer) && buffer.length >= 32 && buffer.subarray(0, 4).equals(FILE_MAGIC);
+}
+
+/**
+ * Decrypt a buffer from sealText. A plaintext buffer (a file written before
+ * sealing existed) is returned as a string unchanged, so upgrades migrate on
+ * the next write. Throws when the buffer is sealed but the key is wrong.
+ */
+function openText(buffer) {
+  if (!isSealedBuffer(buffer)) return Buffer.from(buffer).toString('utf8');
+  const iv = buffer.subarray(4, 16);
+  const tag = buffer.subarray(16, 32);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', getAesKey(), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(buffer.subarray(32)), decipher.final()]).toString('utf8');
+}
+
 module.exports = {
+  sealText,
+  openText,
+  isSealedBuffer,
   encrypt,
   decrypt,
   isEncrypted,

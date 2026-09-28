@@ -79,15 +79,33 @@ const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
 // Graph hands back `@odata.nextLink` as an absolute URL. Prefixing it with the
 // API root again produces a nonsense URL and breaks every "load more", so pass
 // absolute values through untouched.
+//
+// An absolute URL is only ever passed through when it points at Graph itself.
+// Page tokens come back from the client, and this request carries the user's
+// Microsoft access token — a token of "https://attacker.example/" would
+// otherwise hand it straight over.
 function graphUrl(pathOrUrl) {
-  return /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : `${GRAPH_ROOT}${pathOrUrl}`;
+  if (!/^https?:\/\//i.test(pathOrUrl)) return `${GRAPH_ROOT}${pathOrUrl}`;
+  let parsed;
+  try { parsed = new URL(pathOrUrl); } catch { throw new Error('Invalid Graph URL'); }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'graph.microsoft.com') {
+    throw new Error('Refusing to send Graph credentials to a non-Graph URL');
+  }
+  return parsed.toString();
 }
+
+// Immutable ids survive a move between folders. Regular Graph ids do not: a
+// message moved to Deleted Items or Junk got a new id, so "Undo" addressed a
+// message that no longer existed. Graph still accepts the older regular ids
+// as input, so ids cached before this change keep working.
+const ID_PREFERENCE = 'IdType="ImmutableId"';
 
 async function graphRequest(accessToken, path, method = 'GET', body = null) {
   // Node 18+ ships a global fetch — no node-fetch dependency required.
   const headers = {
     'Authorization': `Bearer ${accessToken}`,
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'Prefer': ID_PREFERENCE,
   };
 
   const options = { method, headers };
@@ -96,7 +114,9 @@ async function graphRequest(accessToken, path, method = 'GET', body = null) {
   const res = await fetch(graphUrl(path), options);
   if (!res.ok) {
     const error = await res.text();
-    throw new Error(`Graph API error: ${res.status} ${error}`);
+    const err = new Error(`Graph API error: ${res.status} ${error}`);
+    err.status = res.status;
+    throw err;
   }
 
   // Some endpoints (e.g. message /send) return 202/204 with an empty body.
@@ -130,9 +150,7 @@ function _outlookMsgToSummary(account, msg, folder) {
   return {
     id: `${account.id}-${msg.id}`,
     outlookId: msg.id,
-    from: msg.from?.emailAddress
-      ? `${msg.from.emailAddress.name || ''} <${msg.from.emailAddress.address}>`.trim()
-      : '',
+    from: formatSender(msg.from),
     to: (msg.toRecipients || []).map(r => r.emailAddress?.address),
     subject: msg.subject || '(no subject)',
     date: msg.receivedDateTime || new Date().toISOString(),
@@ -142,11 +160,21 @@ function _outlookMsgToSummary(account, msg, folder) {
     accountId: account.id,
     snippet: msg.bodyPreview || '',
     threadId: msg.conversationId || null,
-    messageId: msg.internetMessageId || ''
+    messageId: msg.internetMessageId || '',
+    hasAttachments: msg.hasAttachments === true,
   };
 }
 
-const SELECT_FIELDS = 'id,from,toRecipients,subject,receivedDateTime,isRead,flag,bodyPreview,conversationId,internetMessageId';
+// "Name <address>", or the bare address when Graph has no display name —
+// never "undefined <address>".
+function formatSender(from) {
+  const address = from?.emailAddress?.address;
+  if (!address) return '';
+  const name = from.emailAddress.name;
+  return name && name !== address ? `${name} <${address}>` : address;
+}
+
+const SELECT_FIELDS = 'id,from,toRecipients,subject,receivedDateTime,isRead,flag,bodyPreview,conversationId,internetMessageId,hasAttachments';
 
 async function graphRequestWithRefresh(account, path, method = 'GET', body = null) {
   try {
@@ -249,9 +277,7 @@ async function fetchEmailBody(account, outlookId) {
 
   return {
     outlookId,
-    from: msg.from?.emailAddress
-      ? `${msg.from.emailAddress.name} <${msg.from.emailAddress.address}>`
-      : '',
+    from: formatSender(msg.from),
     to: (msg.toRecipients || []).map(r => r.emailAddress?.address).join(', '),
     cc: (msg.ccRecipients || []).map(r => r.emailAddress?.address).join(', '),
     subject: msg.subject || '',
@@ -269,14 +295,24 @@ async function fetchEmailBody(account, outlookId) {
       msg.from?.emailAddress?.address,
     ),
     calendarInvite: calendarText ? calendar.parseInvite(calendarText) : null,
+    listUnsubscribe: header('list-unsubscribe'),
+    listUnsubscribePost: header('list-unsubscribe-post'),
   };
 }
 
+/** File attachments of a message, in the order fetchEmailBody lists them. */
+async function listFileAttachments(account, outlookId) {
+  const data = await graphRequestWithRefresh(account, `/me/messages/${outlookId}/attachments?$select=id,name,contentType,size`);
+  return (data?.value || [])
+    .filter(a => !a['@odata.type'] || a['@odata.type'] === '#microsoft.graph.fileAttachment')
+    .map(a => ({ filename: a.name, contentType: a.contentType, graphAttachmentId: a.id }));
+}
+
 // Pull one attachment's bytes on demand, by position in the array returned
-// from fetchEmailBody.
+// from fetchEmailBody. Only the attachment list is re-read — not the whole
+// message, its headers, and its calendar part, as this once did per download.
 async function getAttachment(account, outlookId, index) {
-  const body = await fetchEmailBody(account, outlookId);
-  const att = body.attachments?.[index];
+  const att = (await listFileAttachments(account, outlookId))[index];
   if (!att?.graphAttachmentId) throw new Error('Attachment not found');
 
   const full = await graphRequestWithRefresh(
@@ -303,14 +339,37 @@ async function untrashEmail(account, outlookId, toFolder = 'INBOX') {
 async function getRawMessage(account, outlookId) {
   const accessToken = await refreshAccessToken(account);
   const res = await fetch(`${GRAPH_ROOT}/me/messages/${outlookId}/$value`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: { Authorization: `Bearer ${accessToken}`, Prefer: ID_PREFERENCE },
   });
   if (!res.ok) return null;
   return Buffer.from(await res.arrayBuffer());
 }
 
-async function deleteEmail(account, outlookId) {
-  await graphRequestWithRefresh(account, `/me/messages/${outlookId}`, 'DELETE');
+/**
+ * Delete = move to Deleted Items, explicitly, so the id to undo with comes
+ * back in the response. A message already in Deleted Items is removed.
+ */
+async function deleteEmail(account, outlookId, folder) {
+  if (folder && (FOLDER_MAP[folder] || folder) === 'deleteditems') {
+    await graphRequestWithRefresh(account, `/me/messages/${outlookId}`, 'DELETE');
+    return { permanent: true };
+  }
+  const moved = await graphRequestWithRefresh(account, `/me/messages/${outlookId}/move`, 'POST', { destinationId: 'deleteditems' });
+  return { id: moved?.id || outlookId, permanent: false };
+}
+
+// Headers the vacation responder checks before answering.
+async function getHeaders(account, outlookId) {
+  const msg = await graphRequestWithRefresh(account, `/me/messages/${outlookId}?$select=internetMessageHeaders,toRecipients,ccRecipients`);
+  const out = {};
+  for (const h of msg?.internetMessageHeaders || []) {
+    const key = String(h.name || '').toLowerCase();
+    out[key] = out[key] ? `${out[key]}, ${h.value}` : h.value;
+  }
+  // Graph normalises recipients; prefer them to the raw headers.
+  out.to = (msg?.toRecipients || []).map(r => r.emailAddress?.address).filter(Boolean).join(', ') || out.to || '';
+  out.cc = (msg?.ccRecipients || []).map(r => r.emailAddress?.address).filter(Boolean).join(', ') || out.cc || '';
+  return out;
 }
 
 async function getFolders(account) {
@@ -393,18 +452,32 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
   // Replies: sendMail can't set In-Reply-To (Graph only allows x- headers),
   // so create a reply draft — which Graph threads onto the conversation —
   // overwrite its content, and send it.
+  //
+  // Only failures while *preparing* the draft fall back to a plain send. Once
+  // /send has been called the message may already be out even if the request
+  // errored (a timeout on the response), and falling back then sent it twice.
   if (replyToProviderId) {
+    let draftId = null;
     try {
       const draft = await graphRequestWithRefresh(account, `/me/messages/${replyToProviderId}/createReply`, 'POST', {});
-      if (draft?.id) {
-        await graphRequestWithRefresh(account, `/me/messages/${draft.id}`, 'PATCH', message);
+      draftId = draft?.id || null;
+      if (draftId) {
+        await graphRequestWithRefresh(account, `/me/messages/${draftId}`, 'PATCH', message);
         for (const att of atts) {
-          await graphRequestWithRefresh(account, `/me/messages/${draft.id}/attachments`, 'POST', att);
+          await graphRequestWithRefresh(account, `/me/messages/${draftId}/attachments`, 'POST', att);
         }
-        await graphRequestWithRefresh(account, `/me/messages/${draft.id}/send`, 'POST', null);
-        return;
       }
-    } catch { /* original may be gone — fall through to a plain send */ }
+    } catch {
+      // The original may be gone. Don't leave a half-built reply in Drafts.
+      if (draftId) {
+        try { await graphRequestWithRefresh(account, `/me/messages/${draftId}`, 'DELETE'); } catch { /* best effort */ }
+      }
+      draftId = null;
+    }
+    if (draftId) {
+      await graphRequestWithRefresh(account, `/me/messages/${draftId}/send`, 'POST', null);
+      return;
+    }
   }
 
   await graphRequestWithRefresh(account, '/me/sendMail', 'POST', {
@@ -414,8 +487,10 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
 }
 
 // Creating a message (POST /me/messages) saves it as a draft in the Drafts folder.
-async function saveDraft(account, { to, cc, bcc, subject, text, html, attachments }) {
+async function saveDraft(account, { to, cc, bcc, subject, text, html, attachments, sendAs }) {
+  const fromRecipient = resolveFromRecipient(account, sendAs);
   const created = await graphRequestWithRefresh(account, '/me/messages', 'POST', {
+    ...(fromRecipient ? { from: fromRecipient } : {}),
     subject: subject || '',
     body: {
       contentType: html ? 'HTML' : 'Text',
@@ -462,6 +537,8 @@ async function moveEmail(account, outlookId, toFolder) {
 }
 
 module.exports = {
+  _internals: { graphUrl, formatSender },
+  getHeaders,
   getAuthUrl,
   handleCallback,
   fetchEmails,

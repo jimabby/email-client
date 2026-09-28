@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const store = require('../store');
+const secrets = require('./secretStore');
 
 // Local full-text index over every message Hermes has seen.
 //
@@ -140,18 +141,24 @@ function flush() {
   dirty = false;
   try {
     const tmp = `${INDEX_FILE}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, docs: Array.from(docs.values()) }), { mode: 0o600 });
+    // The index holds message bodies, so it is sealed like the mail cache.
+    fs.writeFileSync(tmp, secrets.sealText(JSON.stringify({ version: 2, docs: Array.from(docs.values()) })), { mode: 0o600 });
     fs.renameSync(tmp, INDEX_FILE);
   } catch (e) {
     console.error('[search] Failed to persist index:', e.message);
   }
 }
 
+// "acc::uid" — an IMAP id from before the folder was part of it. Those
+// documents would duplicate the re-indexed "acc::INBOX::uid" ones.
+const LEGACY_IMAP_ID = /^[^:]+::\d+$/;
+
 function load() {
   try {
     if (!fs.existsSync(INDEX_FILE)) return;
-    const raw = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
+    const raw = JSON.parse(secrets.openText(fs.readFileSync(INDEX_FILE)));
     for (const doc of raw.docs || []) {
+      if (LEGACY_IMAP_ID.test(doc.id)) { dirty = true; continue; }
       docs.set(doc.id, doc);
       addPostings(doc);
     }
@@ -171,8 +178,11 @@ process.on('exit', flush);
 function evictIfNeeded() {
   if (docs.size <= MAX_DOCS) return;
   // Oldest messages go first — recent mail is what search is actually for.
+  // Trim to 95% of the cap in one pass: evicting just the overflow meant that
+  // at the cap every single new message re-sorted the whole index.
+  const target = Math.floor(MAX_DOCS * 0.95);
   const sorted = Array.from(docs.values()).sort((a, b) => (a.ts || 0) - (b.ts || 0));
-  for (const doc of sorted.slice(0, docs.size - MAX_DOCS)) {
+  for (const doc of sorted.slice(0, docs.size - target)) {
     removePostings(doc);
     docs.delete(doc.id);
   }
@@ -224,6 +234,8 @@ function indexSummaries(summaries = []) {
       read: email.read,
       starred: email.starred,
       threadId: email.threadId,
+      // Undefined when the provider could not tell; keep what a body read found.
+      hasAttachments: typeof email.hasAttachments === 'boolean' ? email.hasAttachments : undefined,
     });
   }
 }
@@ -408,6 +420,7 @@ function toSummary(doc) {
     accountId: doc.accountId,
     snippet: doc.snippet,
     threadId: doc.threadId,
+    hasAttachments: !!doc.hasAttachments,
     fromIndex: true,
   };
 }

@@ -36,52 +36,150 @@ function getTrayIconPath() {
 // keychain (DPAPI / Keychain / libsecret), and handed to the backend in memory
 // at spawn. The key never touches disk unencrypted.
 
+// The file records how the key was stored, so a launch where the keychain is
+// temporarily unavailable can tell "sealed key I cannot open" apart from
+// "plaintext key" instead of treating ciphertext as the key.
+const KEY_PLAIN_PREFIX = 'plain:';
+
+class MasterKeyError extends Error {}
+
 function loadOrCreateMasterKey() {
   const keyFile = path.join(app.getPath('userData'), 'master.key');
 
   if (fs.existsSync(keyFile)) {
+    const stored = fs.readFileSync(keyFile);
+    const asText = stored.toString('utf8');
+    if (asText.startsWith(KEY_PLAIN_PREFIX)) return asText.slice(KEY_PLAIN_PREFIX.length).trim();
+    // A key written by an older build without a keychain: 64 hex characters.
+    if (/^[0-9a-f]{64}$/i.test(asText.trim())) return asText.trim();
+
+    // Otherwise it is sealed with the OS keychain. If that fails, STOP. This
+    // used to generate a fresh key and write it over the file, which made every
+    // stored password and OAuth token permanently unrecoverable — on Linux a
+    // keyring that simply had not unlocked yet was enough to trigger it.
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new MasterKeyError('The OS keychain is unavailable, so the stored credential key cannot be unlocked.');
+    }
     try {
-      const stored = fs.readFileSync(keyFile);
-      if (safeStorage.isEncryptionAvailable()) {
-        return safeStorage.decryptString(stored);
-      }
-      // No keychain on this system — the file holds the key in the clear and
-      // is the best we can do. Still better than credentials in accounts.json.
-      return stored.toString('utf8');
+      return safeStorage.decryptString(stored);
     } catch (err) {
-      console.error('Could not read the master key, generating a new one:', err.message);
+      // Keep a copy aside in case the user wants to restore it later, but never
+      // overwrite it.
+      try { fs.copyFileSync(keyFile, `${keyFile}.backup-${Date.now()}`); } catch { /* best effort */ }
+      throw new MasterKeyError(`The stored credential key could not be decrypted (${err.message}).`);
     }
   }
 
   const key = crypto.randomBytes(32).toString('hex');
-  try {
-    const payload = safeStorage.isEncryptionAvailable()
-      ? safeStorage.encryptString(key)
-      : Buffer.from(key, 'utf8');
-    fs.writeFileSync(keyFile, payload, { mode: 0o600 });
-  } catch (err) {
-    console.error('Could not persist the master key:', err.message);
-  }
+  const payload = safeStorage.isEncryptionAvailable()
+    ? safeStorage.encryptString(key)
+    // No keychain on this system — the file holds the key in the clear and
+    // is the best we can do. Still better than credentials in accounts.json.
+    : Buffer.from(KEY_PLAIN_PREFIX + key, 'utf8');
+  // 'wx' refuses to replace a file that appeared since the check above.
+  fs.writeFileSync(keyFile, payload, { mode: 0o600, flag: 'wx' });
   return key;
 }
+
+// Identifies the backend this process started. Without it, anything already
+// listening on port 3001 — a dev backend, another program — answered the
+// health check, and the window loaded a server this app did not start.
+const INSTANCE_ID = crypto.randomBytes(16).toString('hex');
 
 // Wait for the backend Express server to be ready
 function waitForBackend(maxRetries = 60) {
   return new Promise((resolve, reject) => {
     let attempts = 0;
+    let foreign = false;
     const check = () => {
       http.get(`http://127.0.0.1:${BACKEND_PORT}/api/health`, (res) => {
-        if (res.statusCode === 200) resolve();
-        else retry();
+        let body = '';
+        res.on('data', chunk => { body += chunk; });
+        res.on('end', () => {
+          let instance = null;
+          try { instance = JSON.parse(body).instance; } catch { /* not ours */ }
+          if (res.statusCode === 200 && instance === INSTANCE_ID) return resolve();
+          if (res.statusCode === 200) foreign = true;
+          retry();
+        });
       }).on('error', retry);
     };
     const retry = () => {
       attempts++;
-      if (attempts >= maxRetries) reject(new Error('Backend did not start in time'));
-      else setTimeout(check, 500);
+      if (attempts >= maxRetries) {
+        reject(new Error(foreign
+          ? `Port ${BACKEND_PORT} is already in use by another program. Close it and start Hermes again.`
+          : 'Backend did not start in time'));
+      } else setTimeout(check, 500);
     };
     check();
   });
+}
+
+// ─── Links ──────────────────────────────────────────────────────────────────
+// Links in mail are the sender's choice. shell.openExternal hands a URL to the
+// OS, which will launch whatever handles its scheme — file:, ms-msdt:, and
+// custom protocol handlers have all been routes to code execution. Only the
+// schemes a mail link legitimately needs go through.
+const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+
+function isAppUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:'
+      && (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost')
+      && Number(parsed.port) === BACKEND_PORT;
+  } catch {
+    return false;
+  }
+}
+
+function openExternalSafely(url) {
+  let parsed;
+  try { parsed = new URL(url); } catch { return; }
+  if (!EXTERNAL_SCHEMES.has(parsed.protocol)) {
+    console.warn(`Blocked opening a ${parsed.protocol} link`);
+    return;
+  }
+  shell.openExternal(parsed.toString()).catch(() => {});
+}
+
+// ─── Updates ────────────────────────────────────────────────────────────────
+// A mail client renders untrusted HTML all day; running a months-old Chromium
+// is the risk. Updates are checked for in packaged builds that know where to
+// look: a `publish` block in the build config, or HERMES_UPDATE_URL pointing
+// at a generic update server (the folder electron-builder's output is copied
+// to).
+function startAutoUpdates() {
+  if (!app.isPackaged) return;
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch {
+    return; // not bundled in this build
+  }
+  const feedUrl = process.env.HERMES_UPDATE_URL;
+  const hasBuiltInFeed = fs.existsSync(path.join(process.resourcesPath || '', 'app-update.yml'));
+  if (!feedUrl && !hasBuiltInFeed) return;
+  if (feedUrl) autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('error', err => console.warn('[update]', err?.message || err));
+  autoUpdater.on('update-downloaded', (info) => {
+    if (!Notification.isSupported()) return;
+    const note = new Notification({
+      title: 'Hermes update ready',
+      body: `Version ${info?.version || ''} will be installed when Hermes restarts. Click to restart now.`,
+      icon: getTrayIconPath(),
+    });
+    note.on('click', () => { quitting = true; autoUpdater.quitAndInstall(); });
+    note.show();
+  });
+
+  const check = () => autoUpdater.checkForUpdates().catch(err => console.warn('[update]', err?.message || err));
+  check();
+  setInterval(check, 6 * 60 * 60 * 1000).unref?.();
 }
 
 // ─── Backend process ────────────────────────────────────────────────────────
@@ -111,6 +209,8 @@ function startBackend(masterKey) {
       HERMES_SECRET_KEY: masterKey,
       API_TOKEN: SESSION_API_TOKEN,
       BIND_HOST: '127.0.0.1',
+      PORT: String(BACKEND_PORT),
+      HERMES_INSTANCE_ID: INSTANCE_ID,
     },
   });
 
@@ -301,11 +401,30 @@ function createWindow() {
     }
   });
 
-  // Open external links in the system browser, not inside Electron
+  // Open external links in the system browser, not inside Electron. A
+  // prefix check ("starts with http://127.0.0.1") also matched
+  // http://127.0.0.1.attacker.example, so the host is compared exactly. App
+  // windows opened this way get no preload bridge.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) return { action: 'allow' };
-    shell.openExternal(url);
+    if (isAppUrl(url)) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, preload: undefined },
+        },
+      };
+    }
+    openExternalSafely(url);
     return { action: 'deny' };
+  });
+
+  // The main window never navigates away from the app. A link without
+  // target=_blank would otherwise load a stranger's page into the window that
+  // holds the preload bridge.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isAppUrl(url)) return;
+    event.preventDefault();
+    openExternalSafely(url);
   });
 
   // Debounced so a drag-resize writes once, not once per frame.
@@ -380,8 +499,15 @@ if (!app.requestSingleInstanceLock()) {
       await waitForBackend();
       createTray();
       createWindow();
+      startAutoUpdates();
     } catch (err) {
       console.error('Failed to start Hermes:', err.message);
+      // Say why, rather than vanishing: both of these need the user to act.
+      const { dialog } = require('electron');
+      dialog.showErrorBox('Hermes could not start', err instanceof MasterKeyError
+        ? `${err.message}\n\nYour saved accounts are untouched. Make sure your system keychain is unlocked and start Hermes again.`
+        : err.message);
+      quitting = true;
       app.quit();
     }
   });

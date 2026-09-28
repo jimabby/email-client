@@ -2,8 +2,14 @@ const crypto = require('crypto');
 
 const MAX_AGE_MS = 10 * 60 * 1000;
 
+// With no configured secret, a random one per process. A fixed fallback string
+// was public (it is in this file), so anyone could mint a valid state and walk
+// a victim's browser through the callback with the attacker's own account —
+// login CSRF. A state only needs to outlive one sign-in, not a restart.
+const PROCESS_SECRET = crypto.randomBytes(32).toString('hex');
+
 function secret() {
-  return process.env.API_TOKEN || process.env.SESSION_SECRET || 'email-client-dev-secret';
+  return process.env.API_TOKEN || process.env.SESSION_SECRET || PROCESS_SECRET;
 }
 
 function signature(value) {

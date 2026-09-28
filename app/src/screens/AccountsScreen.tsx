@@ -138,6 +138,13 @@ export default function AccountsScreen({ navigation }: Props) {
           <View style={{ flex: 1 }}>
             <Text style={styles.name} numberOfLines={1}>{item.name || item.email}</Text>
             <Text style={styles.email} numberOfLines={1}>{item.email}</Text>
+            {item.authError && (
+              // Signing in again needs a browser and the OAuth app, which live
+              // on the desktop; the phone can only say that it is needed.
+              <Text style={styles.authError} numberOfLines={2}>
+                {item.type === 'imap' ? 'Password no longer accepted' : 'Sign-in expired'} — reconnect in the desktop app
+              </Text>
+            )}
           </View>
           {(unread[item.id]?.INBOX?.unread ?? 0) > 0 && (
             <View style={styles.badge}>
@@ -195,6 +202,7 @@ function makeStyles(t: Palette, ui: Ui) {
     avatarText: { color: '#fff', fontWeight: '600', fontSize: 15 },
     name: { ...ui.bodyStrong },
     email: { ...ui.secondary, marginTop: 2 },
+    authError: { color: t.swipeDelete, fontSize: 12, marginTop: 4 },
     badge: ui.badge,
     badgeText: ui.badgeText,
     chevron: { color: t.textFaint, fontSize: 24, fontWeight: '300' },

@@ -1,7 +1,7 @@
 {
   "name": "hermes",
   "version": "1.0.0",
-  "description": "Hermes \u2014 Desktop Email Client with AI",
+  "description": "Hermes — Desktop Email Client with AI",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"cd backend && npm run dev\" \"cd frontend && npm run dev\"",
@@ -13,31 +13,32 @@
     "test": "cd backend && npm test"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.37.0",
-    "@azure/msal-node": "^2.0.0",
+    "@anthropic-ai/sdk": "^0.128.0",
+    "@azure/msal-node": "^7.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.0.0",
-    "express": "^4.18.0",
-    "google-auth-library": "^9.15.1",
-    "googleapis": "^140.0.0",
-    "imapflow": "^1.0.0",
-    "mailparser": "^3.6.0",
+    "electron-updater": "^6.8.9",
+    "express": "^4.22.3",
+    "express-rate-limit": "^8.7.0",
+    "google-auth-library": "^11.1.0",
+    "googleapis": "^182.0.0",
+    "imapflow": "^2.1.1",
+    "mailparser": "^3.9.30",
     "node-cron": "^4.2.1",
-    "nodemailer": "^6.9.0",
-    "pdf-parse": "^1.1.1",
-    "uuid": "^9.0.0"
+    "nodemailer": "^10.0.12",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "concurrently": "^9.2.1",
-    "electron": "^30.5.1",
-    "electron-builder": "^24.0.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
     "png-to-ico": "^3.0.1"
   },
   "build": {
     "appId": "com.hermes.app",
     "productName": "Hermes",
-    "copyright": "Copyright \u00a9 2025 Hermes",
+    "copyright": "Copyright © 2025 Hermes",
     "asar": false,
     "directories": {
       "output": "dist-electron"
@@ -53,6 +54,8 @@
       "!backend/**/email-cache.json",
       "!backend/**/categories.json",
       "!backend/**/search-index.json",
+      "!backend/**/outbox.json",
+      "!backend/**/*.unreadable-*",
       "!backend/**/*.tmp",
       "!backend/test/**/*",
       "frontend/dist/**/*",

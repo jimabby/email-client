@@ -24,8 +24,11 @@ an emulator.
 The token is stored through Expo SecureStore (iOS Keychain / Android Keystore)
 and is sent as a Bearer token on every private API request.
 
-For local development, the LAN URL still works when the backend is running, and
-`API_TOKEN` may be left unset. Never expose that unauthenticated mode publicly.
+For local development against a backend on your LAN, start it with
+`BIND_HOST=0.0.0.0` **and** an `API_TOKEN` (the server refuses to listen beyond
+loopback without one), then enter `http://<lan-ip>:3001` and that token here.
+The packaged desktop app's own backend is loopback-only with a per-launch token,
+so the phone cannot use it.
 
 ## Screens
 
@@ -33,9 +36,11 @@ For local development, the LAN URL still works when the backend is running, and
 - **Accounts** - accounts stored by the cloud backend, plus **All inboxes**
 - **Folders** - every mailbox on an account, with live unread counts
 - **Inbox** - list with pull-to-refresh, infinite scroll, search, and swipe
-  actions (swipe right to archive, left to delete, long press to toggle read)
-- **Viewer** - full email, star, delete, archive, snooze, reply, and the AI
-  summary / smart replies when a key is configured on the server
+  actions (swipe right to archive, left to delete — with Undo). Long press to
+  select several, then archive, delete, or mark read/unread together
+- **Viewer** - full email with the earlier messages in its conversation, star,
+  delete, archive, snooze, reply, attachments, and the AI summary / smart
+  replies when a key is configured on the server
 - **Compose** - new message, reply, drafts, send later, and undo send
 
 ## Notifications

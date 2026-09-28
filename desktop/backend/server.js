@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const apiAuth = require('./middleware/apiAuth');
+const { hostGuard, isLoopbackHost } = require('./middleware/hostGuard');
 const { apiLimiter, webhookLimiter, aiLimiter, sendLimiter, isLoopback } = require('./middleware/rateLimit');
 const store = require('./store');
 
@@ -32,19 +33,43 @@ if (!LOOPBACK_HOSTS.has(BIND_HOST) && !process.env.API_TOKEN) {
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:3001')
-  .split(',')
-  .map(origin => origin.trim())
-  .filter(Boolean);
+// A loopback-bound server (the desktop app, `npm run dev`) only ever has a
+// legitimate caller that addresses it by a loopback name. Anything else is a
+// DNS-rebinding attempt — see middleware/hostGuard.js.
+if (LOOPBACK_HOSTS.has(BIND_HOST)) {
+  app.use(hostGuard({ extraHosts: (process.env.ALLOWED_HOSTS || '').split(',').map(h => h.trim()).filter(Boolean) }));
+}
+
+// The server's own origin is always allowed. The desktop window loads
+// http://127.0.0.1:<port>, and Vite marks the bundle's script and stylesheet
+// `crossorigin`, so even same-origin asset loads carry an Origin header. With
+// only localhost:3001 on the default list, 127.0.0.1 was rejected and the
+// window came up blank.
+const selfOrigins = [`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, `http://[::1]:${PORT}`];
+const allowedOrigins = Array.from(new Set([
+  ...selfOrigins,
+  ...(process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean),
+]));
 
 app.use(cors({
   origin(origin, callback) {
     // Native apps do not send Origin. Browsers must be explicitly allowed.
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error('Origin not allowed by CORS'));
+    return callback(Object.assign(new Error('Origin not allowed by CORS'), { status: 403 }));
   },
   credentials: true
 }));
+
+// A refused origin is a 403 with a JSON body, not Express's default 500 page.
+// The request still never reaches a route — that is what stops a web page
+// from firing a simple cross-site POST at this server.
+app.use((err, req, res, next) => {
+  if (err?.message === 'Origin not allowed by CORS') return res.status(403).json({ error: err.message });
+  return next(err);
+});
 
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
@@ -101,6 +126,7 @@ app.use('/api', (req, res, next) => {
   // bound to one attachment. It exists so the mobile app can hand a URL to the
   // OS viewer without putting the master token in a browser's history.
   if (req.path.startsWith('/emails/attachment-ticket/')) return next();
+  if (req.path.startsWith('/emails/export-ticket/') && req.method === 'GET') return next();
   return apiAuth(req, res, next);
 });
 
@@ -112,7 +138,10 @@ app.use('/api/webhooks', require('./routes/webhooks'));
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  // `instance` lets the Electron shell confirm it is talking to the backend it
+  // started, not whatever else happens to hold the port. It is a random
+  // per-launch value with no authority of its own.
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), instance: process.env.HERMES_INSTANCE_ID || null });
 });
 
 // Unlike /health, this endpoint verifies the mobile app's credentials.
@@ -143,7 +172,10 @@ if (fs.existsSync(frontendDist)) {
     // bootstraps the credential. So the token only ever goes to a caller on
     // this machine (the Electron window). Handing it to a remote visitor would
     // give anyone who can reach the port full access to every mailbox.
-    if (process.env.API_TOKEN && isLoopback(req)) {
+    // Both checks: the socket must be local AND the page must have been asked
+    // for by a loopback name. A rebinding page satisfies the first, never the
+    // second.
+    if (process.env.API_TOKEN && isLoopback(req) && isLoopbackHost(req.headers.host)) {
       const bootstrap = `<script nonce="${nonce}">window.__HERMES_TOKEN__=${JSON.stringify(process.env.API_TOKEN)}</script>`;
       html = html.replace('</head>', `${bootstrap}</head>`);
     }

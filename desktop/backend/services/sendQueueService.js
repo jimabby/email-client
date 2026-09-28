@@ -1,4 +1,4 @@
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('crypto');
 const store = require('../store');
 
 let intervalHandle = null;
@@ -90,6 +90,9 @@ function retryQueuedSend(jobId) {
   const job = store.getSendQueueItem(jobId);
   if (!job) throw new Error('Queued message not found');
   if (job.status === 'sent') throw new Error('Message has already been sent');
+  // Re-queueing a job mid-send would send it a second time on the next tick.
+  if (job.status === 'sending' || processingIds.has(jobId)) throw new Error('Message is already being sent');
+  if (!job.email) throw new Error('This message can no longer be retried');
   return store.updateSendQueueItem(jobId, {
     status: 'pending',
     nextAttemptAt: new Date().toISOString(),

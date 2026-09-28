@@ -35,6 +35,22 @@ export default function InboxScreen({ navigation, route }: Props) {
   const [searchResults, setSearchResults] = useState<EmailSummary[] | null>(null);
   const [snoozedIds, setSnoozedIds] = useState<Set<string>>(new Set());
   const [archiveFolder, setArchiveFolder] = useState('Archive');
+  // Multi-select. A long press starts it; while it is on, a tap toggles a row
+  // instead of opening it, and swipes are off so a stray gesture cannot act
+  // on one message while the user is choosing several.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const selecting = selected.size > 0;
+  const [bulkBusy, setBulkBusy] = useState(false);
+  // One pending undo, shown as a banner until it expires.
+  const [undo, setUndo] = useState<{ label: string; run: () => Promise<void> } | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const offerUndo = (label: string, run: () => Promise<void>) => {
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setUndo({ label, run });
+    undoTimer.current = setTimeout(() => setUndo(null), 7000);
+  };
+  useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
 
   // A returning screen must not silently throw away everything the user paged
   // in. `loaded` marks that we have a list; the focus listener below refreshes
@@ -113,7 +129,25 @@ export default function InboxScreen({ navigation, route }: Props) {
       .catch(() => {});
   }), [navigation, account.id, folder, unified]);
 
+  const data = (searchResults ?? emails).filter((e) => !snoozedIds.has(e.id));
+
   useLayoutEffect(() => {
+    if (selecting) {
+      navigation.setOptions({
+        title: `${selected.size} selected`,
+        headerRight: () => (
+          <View style={styles.headerActions}>
+            <TouchableOpacity onPress={() => setSelected(new Set(data.map((e) => e.id)))} hitSlop={8}>
+              <Text style={styles.headerAction}>All</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setSelected(new Set())} hitSlop={8}>
+              <Text style={styles.headerAction}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        ),
+      });
+      return;
+    }
     navigation.setOptions({
       title: unified ? 'All inboxes' : folder === 'INBOX' ? (account.name || account.email) : folder,
       headerRight: () => (
@@ -129,7 +163,8 @@ export default function InboxScreen({ navigation, route }: Props) {
         </View>
       ),
     });
-  }, [navigation, account, folder, unified, styles]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, account, folder, unified, styles, selecting, selected.size, data.length]);
 
   const loadMore = async () => {
     if (!nextToken || loadingMore || searchResults) return;
@@ -198,25 +233,76 @@ export default function InboxScreen({ navigation, route }: Props) {
   const deleteEmail = async (email: EmailSummary) => {
     removeLocally(email.id);
     try {
-      await api.delete(email.accountId, email.id, email.folder);
+      const { undoId } = await api.delete(email.accountId, email.id, email.folder);
+      if (undoId) {
+        offerUndo('Moved to Trash', async () => {
+          await api.untrash(email.accountId, undoId, email.folder || 'INBOX');
+          load();
+        });
+      }
     } catch (err) {
       setError(errorMessage(err));
       load();
     }
   };
 
-  const toggleRead = async (email: EmailSummary) => {
-    const next = !email.read;
-    setEmails((prev) => prev.map((e) => (e.id === email.id ? { ...e, read: next } : e)));
+  const toggleSelected = (id: string) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  /**
+   * Run one action over the selection. The bulk endpoints take one account and
+   * folder at a time, and a unified or search list mixes both, so the
+   * selection is grouped first.
+   */
+  const runBulk = async (action: 'delete' | 'read' | 'unread' | 'archive') => {
+    const chosen = (searchResults ?? emails).filter((e) => selected.has(e.id));
+    if (!chosen.length) return;
+    const groups = new Map<string, { accountId: string; folder: string; ids: string[] }>();
+    for (const email of chosen) {
+      const key = `${email.accountId}\u0000${email.folder}`;
+      if (!groups.has(key)) groups.set(key, { accountId: email.accountId, folder: email.folder, ids: [] });
+      groups.get(key)!.ids.push(email.id);
+    }
+
+    setBulkBusy(true);
+    const ids = new Set(chosen.map((e) => e.id));
+    if (action === 'delete' || action === 'archive') {
+      setEmails((prev) => prev.filter((e) => !ids.has(e.id)));
+      setSearchResults((prev) => prev && prev.filter((e) => !ids.has(e.id)));
+    } else {
+      const read = action === 'read';
+      setEmails((prev) => prev.map((e) => (ids.has(e.id) ? { ...e, read } : e)));
+      setSearchResults((prev) => prev && prev.map((e) => (ids.has(e.id) ? { ...e, read } : e)));
+    }
+    setSelected(new Set());
+
     try {
-      if (next) await api.markRead(email.accountId, email.id, email.folder);
-      else await api.markUnread(email.accountId, email.id, email.folder);
-    } catch {
-      setEmails((prev) => prev.map((e) => (e.id === email.id ? { ...e, read: !next } : e)));
+      let failed = 0;
+      for (const group of groups.values()) {
+        let result;
+        if (action === 'archive') {
+          // Each account keeps its own archive folder.
+          const target = unified || group.accountId !== account.id
+            ? resolveArchiveFolder(await api.getFolders(group.accountId).catch(() => []))
+            : archiveFolder;
+          result = await api.bulk('move', group.accountId, group.ids, group.folder, target);
+        } else {
+          result = await api.bulk(action, group.accountId, group.ids, group.folder);
+        }
+        failed += result.failed;
+      }
+      if (failed) setError(`${failed} message${failed === 1 ? '' : 's'} could not be updated`);
+    } catch (err) {
+      setError(errorMessage(err));
+      load();
+    } finally {
+      setBulkBusy(false);
     }
   };
 
-  const data = (searchResults ?? emails).filter((e) => !snoozedIds.has(e.id));
 
   /**
    * The action revealed behind a swiped row.
@@ -314,6 +400,7 @@ export default function InboxScreen({ navigation, route }: Props) {
           }
           renderItem={({ item }) => (
             <Swipeable
+              enabled={!selecting}
               renderLeftActions={(progress) => renderAction(item, 'left', progress)}
               renderRightActions={(progress) => renderAction(item, 'right', progress)}
               onSwipeableOpen={(direction) => {
@@ -326,25 +413,37 @@ export default function InboxScreen({ navigation, route }: Props) {
               overshootRight={false}
             >
               <TouchableOpacity
-                style={styles.row}
+                style={[styles.row, selected.has(item.id) && styles.rowSelected]}
                 activeOpacity={0.6}
-                onPress={() => openEmail(item)}
-                onLongPress={() => toggleRead(item)}
+                onPress={() => (selecting ? toggleSelected(item.id) : openEmail(item))}
+                onLongPress={() => toggleSelected(item.id)}
                 accessibilityRole="button"
+                accessibilityState={{ selected: selected.has(item.id) }}
                 accessibilityLabel={`${item.read ? '' : 'Unread. '}${senderName(item.from)}. ${item.subject || 'No subject'}`}
-                accessibilityHint="Swipe right to archive, left to delete. Long press to toggle read."
+                accessibilityHint={selecting
+                  ? 'Tap to select or deselect.'
+                  : 'Swipe right to archive, left to delete. Long press to select several.'}
               >
                 {/* Unread reads as a bar on the leading edge, matching the
                     desktop list — a trailing dot competed with the timestamp. */}
                 <View style={[styles.unreadBar, item.read && styles.unreadBarHidden]} />
-                <View style={[styles.avatar, { backgroundColor: avatarColor(item.from) }]}>
-                  <Text style={styles.avatarText}>{initials(item.from)}</Text>
-                </View>
+                {selecting ? (
+                  <View style={[styles.avatar, styles.check, selected.has(item.id) && styles.checkOn]}>
+                    <Text style={styles.checkGlyph}>{selected.has(item.id) ? '✓' : ''}</Text>
+                  </View>
+                ) : (
+                  <View style={[styles.avatar, { backgroundColor: avatarColor(item.from) }]}>
+                    <Text style={styles.avatarText}>{initials(item.from)}</Text>
+                  </View>
+                )}
                 <View style={{ flex: 1 }}>
                   <View style={styles.rowTop}>
                     <Text style={[styles.sender, !item.read && styles.senderUnread]} numberOfLines={1}>
                       {senderName(item.from)}
                     </Text>
+                    {item.hasAttachments && (
+                      <Text style={styles.clip} accessibilityLabel="Has attachments">📎</Text>
+                    )}
                     <Text style={[styles.date, !item.read && styles.dateUnread]}>{formatDate(item.date)}</Text>
                   </View>
                   <Text style={[styles.subject, !item.read && styles.subjectUnread]} numberOfLines={1}>
@@ -358,6 +457,43 @@ export default function InboxScreen({ navigation, route }: Props) {
             </Swipeable>
           )}
         />
+      )}
+
+      {selecting && (
+        <View style={styles.bulkBar}>
+          {([
+            ['archive', 'Archive'],
+            ['delete', 'Delete'],
+            ['read', 'Read'],
+            ['unread', 'Unread'],
+          ] as const).map(([action, label]) => (
+            <TouchableOpacity
+              key={action}
+              style={styles.bulkBtn}
+              disabled={bulkBusy}
+              onPress={() => runBulk(action)}
+              accessibilityRole="button"
+            >
+              <Text style={[styles.bulkText, action === 'delete' && styles.bulkDanger]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {undo && !selecting && (
+        <View style={styles.undoBar}>
+          <Text style={styles.undoText}>{undo.label}</Text>
+          <TouchableOpacity
+            onPress={() => {
+              const run = undo.run;
+              setUndo(null);
+              run().catch((err) => setError(errorMessage(err)));
+            }}
+            hitSlop={8}
+          >
+            <Text style={styles.undoAction}>Undo</Text>
+          </TouchableOpacity>
+        </View>
       )}
     </View>
   );
@@ -398,6 +534,34 @@ function makeStyles(t: Palette, ui: Ui) {
       // Opaque, so the swipe action behind it is hidden until it is revealed.
       backgroundColor: t.bg,
     },
+    rowSelected: { backgroundColor: t.bgInput },
+    check: { backgroundColor: 'transparent', borderWidth: 2, borderColor: t.border },
+    checkOn: { backgroundColor: t.accent, borderColor: t.accent },
+    checkGlyph: { color: '#fff', fontWeight: '700', fontSize: 18 },
+    clip: { fontSize: 11, color: t.textFaint },
+    bulkBar: {
+      flexDirection: 'row',
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: t.border,
+      backgroundColor: t.bg,
+      paddingVertical: space.sm,
+    },
+    bulkBtn: { flex: 1, alignItems: 'center', paddingVertical: space.sm },
+    bulkText: { color: t.accent, fontSize: 15, fontWeight: '600' },
+    bulkDanger: { color: t.swipeDelete },
+    undoBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginHorizontal: space.md,
+      marginBottom: space.md,
+      paddingHorizontal: space.lg,
+      paddingVertical: space.md,
+      borderRadius: radius.md,
+      backgroundColor: t.text,
+    },
+    undoText: { color: t.bg, fontSize: 14 },
+    undoAction: { color: t.accent, fontSize: 14, fontWeight: '700' },
     unreadBar: { width: 3, height: 22, borderRadius: 2, backgroundColor: t.unread },
     unreadBarHidden: { backgroundColor: 'transparent' },
 

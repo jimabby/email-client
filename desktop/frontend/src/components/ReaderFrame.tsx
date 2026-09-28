@@ -5,6 +5,8 @@ interface Props {
   /** Already sanitized body HTML. */
   html: string
   theme: 'light' | 'dark'
+  /** The reader chose "Show images": let the frame's policy load remote content. */
+  allowRemote?: boolean
 }
 
 /**
@@ -22,11 +24,11 @@ interface Props {
  * the content and not clip long messages). See the note on the iframe below for
  * why that second one is safe here.
  */
-export function ReaderFrame({ html, theme }: Props) {
+export function ReaderFrame({ html, theme, allowRemote = false }: Props) {
   const frameRef = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(320)
 
-  const srcDoc = useMemo(() => buildReaderDocument(html, theme), [html, theme])
+  const srcDoc = useMemo(() => buildReaderDocument(html, theme, allowRemote), [html, theme, allowRemote])
 
   // Measured from the parent, which is why the sandbox grants
   // `allow-same-origin` — see the note on the iframe below.

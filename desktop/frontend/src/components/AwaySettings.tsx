@@ -58,12 +58,49 @@ export function AwaySettings() {
     }
   }
 
-  const runExport = (accountId: string) => {
+  const runExport = async (accountId: string) => {
     setExporting(accountId)
-    // A large mailbox streams for a while, so hand the URL to the browser and
-    // let it show its own download progress rather than buffering it here.
-    window.location.href = emailsApi.exportUrl(accountId, 'INBOX')
-    window.setTimeout(() => setExporting(null), 3000)
+    try {
+      // A large mailbox streams for a while, so hand the URL to the browser and
+      // let it show its own download progress rather than buffering it here.
+      triggerDownload(await emailsApi.exportUrl(accountId, 'INBOX'))
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : 'Could not start the export')
+    } finally {
+      window.setTimeout(() => setExporting(null), 3000)
+    }
+  }
+
+  const [importing, setImporting] = useState(false)
+
+  const exportSettings = async () => {
+    try {
+      const data = await emailsApi.exportSettings()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      triggerDownload(url, `hermes-settings-${new Date().toISOString().slice(0, 10)}.json`)
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : 'Could not export settings')
+    }
+  }
+
+  const importSettings = async (file: File | undefined) => {
+    if (!file) return
+    setImporting(true)
+    try {
+      const data = JSON.parse(await file.text())
+      const { skipped } = await emailsApi.importSettings(data)
+      // The auto-responder is restored switched off; reload what is shown.
+      setSettings(await emailsApi.getVacation())
+      showNotification('success', skipped.length
+        ? `Settings restored. Skipped ${skipped.length} item${skipped.length === 1 ? '' : 's'} for accounts not added here.`
+        : 'Settings restored')
+    } catch (err) {
+      showNotification('error', err instanceof SyntaxError ? 'That file is not a Hermes settings backup' : (err instanceof Error ? err.message : 'Could not import settings'))
+    } finally {
+      setImporting(false)
+    }
   }
 
   if (loading) return <div className="text-[12.5px] text-ink-3">Loading…</div>
@@ -245,6 +282,42 @@ export function AwaySettings() {
           </div>
         )}
       </section>
+
+      <section className="border-t border-line pt-6">
+        <h3 className="text-[13px] font-semibold text-ink">Back up your settings</h3>
+        <p className="text-xs text-ink-2 mt-1 mb-3 max-w-md leading-relaxed">
+          Rules, templates, signatures, send-as addresses, and the auto-reply, as one
+          file. Passwords and sign-ins are never included — re-add accounts first,
+          then restore.
+        </p>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={exportSettings}
+            className="px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-line text-ink rounded-md hover:border-accent/60"
+          >
+            Download backup
+          </button>
+          <label className={`px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-line text-ink rounded-md hover:border-accent/60 cursor-pointer ${importing ? 'opacity-50 pointer-events-none' : ''}`}>
+            {importing ? 'Restoring…' : 'Restore from file…'}
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={e => { importSettings(e.target.files?.[0]); e.target.value = '' }}
+            />
+          </label>
+        </div>
+      </section>
     </div>
   )
+}
+
+/** Hand a URL to the browser's download manager. */
+function triggerDownload(url: string, filename?: string) {
+  const link = document.createElement('a')
+  link.href = url
+  if (filename) link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
 }
