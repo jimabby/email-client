@@ -31,9 +31,48 @@ function emitNewMail(accountId, payload = {}) {
 
 const seenIds = new Map(); // accountId -> Set of message ids already handled
 const inFlight = new Map(); // accountId -> Promise, so bursts collapse
+const rerunRequested = new Set(); // accountIds that saw an arrival mid-check
 
-async function handleNewMail(accountId, meta = {}) {
-  if (inFlight.has(accountId)) return inFlight.get(accountId);
+/** Where "archive" sends mail for this account: its Archive or All Mail folder. */
+async function archiveFolderFor(account) {
+  try {
+    const folders = await getService(account.type).getFolders(account);
+    const match = folders.find(f => /^archive$/i.test(f.name)) || folders.find(f => /all mail/i.test(f.name));
+    return match?.path || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Replies to a muted conversation are marked read and archived, so they never
+ * reach the inbox or interrupt. Returns the ids that were handled.
+ */
+async function applyMutes(account, emails) {
+  const muted = emails.filter(e => store.isThreadMuted(account.id, e.threadId));
+  if (!muted.length) return new Set();
+  const archiveFolder = await archiveFolderFor(account);
+  const handled = new Set();
+  for (const email of muted) {
+    try {
+      await rules.runAction(account, email, { type: 'markRead' });
+      await rules.runAction(account, email, { type: 'archive' }, archiveFolder);
+      handled.add(email.id);
+    } catch (err) {
+      console.warn(`[watch] Could not archive muted reply ${email.id}: ${err.message}`);
+    }
+  }
+  return handled;
+}
+
+function handleNewMail(accountId, meta = {}) {
+  if (inFlight.has(accountId)) {
+    // The running check may have listed the inbox before this arrival, so it
+    // would miss it — and the next check only happens on the next arrival.
+    // Ask for one more pass once it finishes.
+    rerunRequested.add(accountId);
+    return inFlight.get(accountId);
+  }
 
   const task = (async () => {
     const account = store.getAccount(accountId);
@@ -75,11 +114,9 @@ async function handleNewMail(accountId, meta = {}) {
         const archiveFolders = {};
         const needsArchive = store.getRules().some(r => r.enabled !== false && r.actions?.some(a => a.type === 'archive'));
         if (needsArchive) {
-          try {
-            const folders = await getService(account.type).getFolders(account);
-            const match = folders.find(f => /^archive$/i.test(f.name)) || folders.find(f => /all mail/i.test(f.name));
-            if (match) archiveFolders[account.id] = match.path;
-          } catch { /* archive rules fall back to "Archive" */ }
+          // Archive rules fall back to "Archive" when no folder is found.
+          const folder = await archiveFolderFor(account);
+          if (folder) archiveFolders[account.id] = folder;
         }
         applied = (await rules.applyRules(fresh, { archiveFolders })).applied || [];
       } catch (err) {
@@ -92,6 +129,14 @@ async function handleNewMail(accountId, meta = {}) {
       // spammer) defeats the rule. One a rule marked read is not news either.
       const removed = new Set(applied.filter(a => rules.TERMINAL_ACTIONS.has(a.action)).map(a => a.emailId));
       const markedRead = new Set(applied.filter(a => a.action === 'markRead').map(a => a.emailId));
+
+      // A muted conversation is handled the same way: out of the inbox, silent.
+      try {
+        for (const id of await applyMutes(account, fresh.filter(e => !removed.has(e.id)))) removed.add(id);
+      } catch (err) {
+        console.warn('[watch] Muting failed:', err.message);
+      }
+
       const kept = fresh.filter(e => !removed.has(e.id));
       const notable = kept.filter(e => !markedRead.has(e.id));
 
@@ -106,7 +151,12 @@ async function handleNewMail(accountId, meta = {}) {
     refreshBadge().catch(() => {});
     emitNewMail(accountId, { ...meta, count: fresh.length });
     return fresh;
-  })().finally(() => inFlight.delete(accountId));
+  })().finally(() => {
+    inFlight.delete(accountId);
+    if (rerunRequested.delete(accountId)) {
+      handleNewMail(accountId, { ...meta, source: `${meta.source || 'watch'}-rerun` }).catch(() => {});
+    }
+  });
 
   inFlight.set(accountId, task);
   return task;
@@ -373,6 +423,7 @@ function watchAll() {
 async function stopWatch(accountId) {
   const watcher = watchers.get(accountId);
   seenIds.delete(accountId);
+  rerunRequested.delete(accountId);
   invalidateCounts();
   if (!watcher) return;
   watchers.delete(accountId);

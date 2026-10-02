@@ -191,6 +191,28 @@ export default function ViewerScreen({ navigation, route }: Props) {
     }
   };
 
+  // Muting sends later replies in this conversation straight to the archive,
+  // silently, on the server — so it holds on every device.
+  const mute = () => {
+    const threadId = email.threadId;
+    if (!threadId) return;
+    Alert.alert('Mute this conversation?', 'New replies will skip the inbox and never notify. Unmute any time from the desktop settings.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Mute',
+        onPress: async () => {
+          try {
+            await api.mute(account.id, threadId, email.subject);
+            if ((email.folder || 'INBOX') === 'INBOX') await archive();
+            else navigation.goBack();
+          } catch (err) {
+            Alert.alert('Error', errorMessage(err));
+          }
+        },
+      },
+    ]);
+  };
+
   const applySnooze = async (until: Date) => {
     try {
       await api.snooze(account.id, email.id, until.toISOString(), email, email.folder);
@@ -220,6 +242,11 @@ export default function ViewerScreen({ navigation, route }: Props) {
           <TouchableOpacity onPress={markUnread} hitSlop={8} accessibilityLabel="Mark unread">
             <Text style={styles.headerIcon}>✉︎</Text>
           </TouchableOpacity>
+          {email.threadId ? (
+            <TouchableOpacity onPress={mute} hitSlop={8} accessibilityLabel="Mute conversation">
+              <Text style={styles.headerIcon}>🔕</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity onPress={remove} hitSlop={8} accessibilityLabel="Delete">
             <Text style={styles.trash}>🗑</Text>
           </TouchableOpacity>

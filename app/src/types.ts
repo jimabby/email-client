@@ -84,6 +84,46 @@ export interface UnifiedPage {
   errors: Array<{ accountId: string; email: string; error: string }>;
 }
 
+// ─── Rules (same shape the desktop editor and the server use) ───────────────
+
+export type RuleField = 'from' | 'fromAddress' | 'to' | 'subject' | 'snippet' | 'hasAttachment';
+export type RuleOp = 'contains' | 'notContains' | 'equals' | 'startsWith' | 'endsWith' | 'matches' | 'isTrue';
+export type RuleActionType = 'move' | 'archive' | 'markRead' | 'markUnread' | 'star' | 'spam' | 'delete';
+
+export interface MailRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  accountId?: string;
+  match: 'all' | 'any';
+  conditions: { field: RuleField; op: RuleOp; value: string; caseSensitive?: boolean }[];
+  actions: { type: RuleActionType; targetFolder?: string }[];
+  stopProcessing?: boolean;
+}
+
+// ─── Follow-ups and muting ──────────────────────────────────────────────────
+
+export interface Followup {
+  id: string;
+  accountId: string;
+  to: string;
+  subject: string;
+  sentAt: string;
+  dueAt: string;
+  status: 'waiting' | 'due' | 'replied';
+  repliedAt?: string;
+}
+
+export interface MutedThread {
+  accountId: string;
+  threadId: string;
+  subject: string;
+  mutedAt: string;
+}
+
+/** Draft-assist modes, the same set the desktop composer offers. */
+export type AiMode = 'improve' | 'concise' | 'grammar' | 'formal' | 'friendly' | 'reply';
+
 export interface ThreadSummary {
   summary: string;
   keyPoints: string[];

@@ -216,7 +216,14 @@ function startBackend(masterKey) {
 
   backendProcess.on('message', handleBackendMessage);
 
+  // The restart budget is for a crash loop, not a lifetime: a backend that has
+  // stayed up for a while earns its full budget back. Without this, five
+  // unrelated crashes over a week-long session left no restarts at all.
+  const healthyTimer = setTimeout(() => { backendRestarts = 0; }, 2 * 60 * 1000);
+  healthyTimer.unref?.();
+
   backendProcess.on('exit', (code) => {
+    clearTimeout(healthyTimer);
     if (quitting) return;
     console.error(`Backend exited with code ${code}`);
     // Restart, but give up rather than spinning if it dies immediately.

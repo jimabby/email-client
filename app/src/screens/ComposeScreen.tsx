@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   View, Text, TextInput, StyleSheet, TouchableOpacity, ActivityIndicator,
   KeyboardAvoidingView, Platform, ScrollView, Alert,
@@ -11,8 +11,25 @@ import type { Ui } from '../ui';
 import { ActionSheet } from '../components/ActionSheet';
 import { senderName, stripHtml } from '../utils';
 import type { RootStackParamList } from '../navigation';
+import type { AiMode } from '../types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Compose'>;
+
+const AI_MODES: { mode: AiMode; label: string; needsText: boolean }[] = [
+  { mode: 'reply', label: 'Draft a reply', needsText: false },
+  { mode: 'improve', label: 'Improve writing', needsText: true },
+  { mode: 'concise', label: 'Make it shorter', needsText: true },
+  { mode: 'grammar', label: 'Fix grammar', needsText: true },
+  { mode: 'formal', label: 'More formal', needsText: true },
+  { mode: 'friendly', label: 'More friendly', needsText: true },
+];
+
+const FOLLOW_UP_CHOICES = [
+  { days: 0, label: 'No reminder' },
+  { days: 1, label: 'If no reply in 1 day' },
+  { days: 3, label: 'If no reply in 3 days' },
+  { days: 7, label: 'If no reply in 1 week' },
+];
 
 export default function ComposeScreen({ navigation, route }: Props) {
   const { account, replyTo, prefill } = route.params;
@@ -30,6 +47,41 @@ export default function ComposeScreen({ navigation, route }: Props) {
   const [sending, setSending] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [laterOpen, setLaterOpen] = useState(false);
+
+  const [followUpDays, setFollowUpDays] = useState(0);
+  const [followUpOpen, setFollowUpOpen] = useState(false);
+
+  // Draft help. The previous text is kept so one tap puts it back.
+  const [aiAvailable, setAiAvailable] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [beforeAi, setBeforeAi] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.aiSettings().then(s => setAiAvailable(s.configured)).catch(() => setAiAvailable(false));
+  }, []);
+
+  const runAi = async (mode: AiMode) => {
+    setAiBusy(true);
+    try {
+      const suggestion = await api.suggest({
+        mode,
+        subject,
+        body: text,
+        replyTo: replyTo
+          ? { from: replyTo.from, subject: replyTo.subject, body: replyTo.snippet || '' }
+          : undefined,
+      });
+      if (suggestion.trim()) {
+        setBeforeAi(text);
+        setText(suggestion.trim());
+      }
+    } catch (err) {
+      Alert.alert('AI could not help', errorMessage(err));
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   const bodyHtml = () => `<p>${text.replace(/\n/g, '<br>')}</p>`;
   const isEmpty = () => !to.trim() && !cc.trim() && !bcc.trim() && !subject.trim() && !text.trim();
@@ -78,6 +130,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
         replyToFolder: replyTo?.folder,
         sendAt: sendAt?.toISOString(),
         undoWindowSec: sendAt ? 0 : UNDO_WINDOW_SEC,
+        followUpDays: followUpDays || undefined,
       });
 
       const when = sendAt
@@ -147,7 +200,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
           </View>
         ),
     });
-  }, [navigation, to, cc, bcc, subject, text, sending, styles, t]);
+  }, [navigation, to, cc, bcc, subject, text, sending, followUpDays, styles, t]);
 
   return (
     <KeyboardAvoidingView
@@ -215,6 +268,26 @@ export default function ComposeScreen({ navigation, route }: Props) {
           />
         </View>
 
+        <View style={styles.toolRow}>
+          {aiAvailable && (
+            <TouchableOpacity style={styles.tool} onPress={() => setAiOpen(true)} disabled={aiBusy}>
+              {aiBusy
+                ? <ActivityIndicator color={t.ai} size="small" />
+                : <Text style={styles.toolAi}>✦ AI help</Text>}
+            </TouchableOpacity>
+          )}
+          {beforeAi !== null && !aiBusy && (
+            <TouchableOpacity style={styles.tool} onPress={() => { setText(beforeAi); setBeforeAi(null); }}>
+              <Text style={styles.toolText}>Undo AI</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.tool} onPress={() => setFollowUpOpen(true)}>
+            <Text style={followUpDays ? styles.toolActive : styles.toolText}>
+              {followUpDays ? `Remind in ${followUpDays}d if no reply` : 'Follow-up reminder'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         <TextInput
           value={text}
           onChangeText={setText}
@@ -253,6 +326,36 @@ export default function ComposeScreen({ navigation, route }: Props) {
           onPress: () => dispatch(choice.at),
         }))}
       />
+
+      <ActionSheet
+        visible={aiOpen}
+        title="AI help"
+        onClose={() => setAiOpen(false)}
+        options={AI_MODES
+          .filter(m => (m.mode === 'reply' ? !!replyTo : true))
+          .map((m) => ({
+            label: m.label,
+            detail: m.needsText && !text.trim() ? 'write something first' : undefined,
+            onPress: () => {
+              if (m.needsText && !text.trim()) {
+                Alert.alert('Nothing to rewrite', 'Write a draft first, then ask AI to improve it.');
+                return;
+              }
+              runAi(m.mode);
+            },
+          }))}
+      />
+
+      <ActionSheet
+        visible={followUpOpen}
+        title="Remind me"
+        onClose={() => setFollowUpOpen(false)}
+        options={FOLLOW_UP_CHOICES.map((choice) => ({
+          label: choice.label,
+          detail: choice.days === followUpDays ? '✓' : undefined,
+          onPress: () => setFollowUpDays(choice.days),
+        }))}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -283,6 +386,17 @@ function makeStyles(t: Palette, ui: Ui) {
       marginBottom: space.xl,
     },
     draftText: ui.btnSecondaryText,
+    toolRow: {
+      flexDirection: 'row', flexWrap: 'wrap', gap: space.sm,
+      paddingHorizontal: space.lg, paddingTop: space.md,
+    },
+    tool: {
+      paddingHorizontal: space.md, paddingVertical: 6, borderRadius: radius.pill,
+      backgroundColor: t.bgInput, minHeight: 30, justifyContent: 'center',
+    },
+    toolText: { color: t.textMuted, fontSize: 13, fontWeight: '600' },
+    toolActive: { color: t.accent, fontSize: 13, fontWeight: '600' },
+    toolAi: { color: t.ai, fontSize: 13, fontWeight: '600' },
     bodyInput: {
       color: t.text,
       fontSize: 15,

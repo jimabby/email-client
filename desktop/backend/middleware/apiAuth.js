@@ -10,7 +10,7 @@ function safeEqual(actual, expected) {
 // EventSource cannot set request headers, so SSE endpoints accept the same
 // token as a query parameter. Everything else must use the Authorization
 // header, which never lands in server logs or the browser history.
-const QUERY_TOKEN_PATHS = [/^\/emails\/stream\//];
+const QUERY_TOKEN_PATHS = [/^\/emails\/stream(\/|$)/];
 
 function extractToken(req) {
   const header = req.get('authorization') || '';

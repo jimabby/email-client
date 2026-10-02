@@ -228,7 +228,63 @@ export interface OutboxItem {
   hasAttachments?: boolean;
 }
 
-export type AiMode = 'improve' | 'concise' | 'complete' | 'grammar' | 'formal' | 'friendly' | 'subject' | 'reply' | 'custom';
+// ─── Follow-ups, muting, notification preferences ───────────────────────────
+
+export type FollowupStatus = 'waiting' | 'due' | 'replied';
+
+/** "Remind me if nobody replies" for one sent message. */
+export interface Followup {
+  id: string;
+  accountId: string;
+  jobId: string | null;
+  to: string;
+  recipients: string[];
+  subject: string;
+  threadId: string | null;
+  sentAt: string;
+  dueAt: string;
+  status: FollowupStatus;
+  createdAt: string;
+  firedAt?: string | null;
+  repliedAt?: string;
+  replyId?: string;
+}
+
+export interface MutedThread {
+  accountId: string;
+  threadId: string;
+  subject: string;
+  mutedAt: string;
+}
+
+export interface NotificationSettings {
+  /** Only senders on the VIP list raise a notification. */
+  vipOnly: boolean;
+  /** Full addresses, or "@domain" for a whole domain. */
+  vips: string[];
+  /** IANA zone the quiet window is read in. */
+  timeZone: string | null;
+  quietHours: { enabled: boolean; start: string; end: string; allowVips: boolean };
+}
+
+export interface ImportResult {
+  success: boolean;
+  folder: string;
+  total: number;
+  imported: number;
+  failed: number;
+  skipped: number;
+  errors: string[];
+}
+
+export type AiProvider = 'claude' | 'openai' | 'gemini';
+
+export interface AiModelChoices {
+  choices: Record<AiProvider, { id: string; label: string }[]>;
+  defaults: Record<AiProvider, string>;
+}
+
+export type AiMode ='improve' | 'concise' | 'complete' | 'grammar' | 'formal' | 'friendly' | 'subject' | 'reply' | 'custom';
 
 export type EmailCategory = 'All' | 'Primary' | 'Social' | 'Jobs' | 'Promotions' | 'Receipts';
 export const EMAIL_CATEGORIES: EmailCategory[] = ['All', 'Primary', 'Social', 'Jobs', 'Promotions', 'Receipts'];

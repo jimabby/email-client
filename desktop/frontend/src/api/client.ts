@@ -3,6 +3,7 @@ import type {
   Account, EmailSummary, EmailBody, Folder, SnoozeItem, ServerDraftRef,
   MailRule, MailTemplate, Alias, OutboxItem, UnreadCounts,
   Contact, VacationSettings, SignatureMap, UnifiedPage,
+  Followup, MutedThread, NotificationSettings, ImportResult, AiModelChoices,
 } from '../types/email'
 
 // When the backend runs with an API_TOKEN it injects the value into the served
@@ -301,13 +302,44 @@ export const emailsApi = {
     threadId?: string
     replyToEmailId?: string
     replyToFolder?: string
+    /** Remind me if nobody has replied after this many days. */
+    followUpDays?: number
   }) => api.post<{
     success: boolean
     queued?: boolean
     jobId?: string
     sendAt?: string
     canUndoUntil?: string | null
+    followupId?: string | null
   }>(`/emails/${accountId}/send`, data).then(r => r.data),
+
+  // ─── Follow-up reminders ─────────────────────────────────────────────────
+  getFollowups: () => api.get<Followup[]>('/emails/followups').then(r => r.data),
+  createFollowup: (data: { accountId: string; to: string; cc?: string; subject: string; threadId?: string | null; sentAt?: string; days: number }) =>
+    api.post<Followup>('/emails/followups', data).then(r => r.data),
+  remindFollowupAgain: (id: string, days: number) =>
+    api.post<Followup>(`/emails/followups/${id}/remind`, { days }).then(r => r.data),
+  dismissFollowup: (id: string) => api.delete(`/emails/followups/${id}`).then(r => r.data),
+
+  // ─── Muted conversations ─────────────────────────────────────────────────
+  getMuted: () => api.get<MutedThread[]>('/emails/muted').then(r => r.data),
+  muteThread: (accountId: string, threadId: string, subject?: string) =>
+    api.post(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}/mute`, { subject }).then(r => r.data),
+  unmuteThread: (accountId: string, threadId: string) =>
+    api.delete(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}/mute`).then(r => r.data),
+
+  // ─── Notification preferences ────────────────────────────────────────────
+  getNotificationSettings: () => api.get<NotificationSettings>('/emails/notification-settings').then(r => r.data),
+  saveNotificationSettings: (settings: NotificationSettings) =>
+    api.put<NotificationSettings>('/emails/notification-settings', settings).then(r => r.data),
+
+  /** Upload an .mbox or .eml file into a folder. Large files take a while. */
+  importMailbox: (accountId: string, file: Blob, folder = 'INBOX') =>
+    api.post<ImportResult>(`/emails/${accountId}/import`, file, {
+      params: { folder },
+      headers: { 'Content-Type': 'application/octet-stream' },
+      timeout: 0,
+    }).then(r => r.data),
 
   cancelQueuedSend: (accountId: string, jobId: string) =>
     api.post(`/emails/${accountId}/send-queue/${jobId}/cancel`).then(r => r.data),
@@ -423,7 +455,13 @@ export const emailsApi = {
 
 export const aiApi = {
   getSettings: () =>
-    api.get<{ provider: 'claude' | 'openai' | 'gemini' | null; configured: boolean }>('/ai/settings').then(r => r.data),
+    api.get<{ provider: 'claude' | 'openai' | 'gemini' | null; configured: boolean; model: string | null }>('/ai/settings').then(r => r.data),
+
+  /** The model picker's choices and each provider's default. */
+  getModels: () => api.get<AiModelChoices>('/ai/models').then(r => r.data),
+  /** Pick a model for the saved provider; null returns to the default. */
+  setModel: (model: string | null) =>
+    api.put<{ success: boolean; model: string }>('/ai/model', { model }).then(r => r.data),
 
   saveSettings: (provider: 'claude' | 'openai' | 'gemini', apiKey: string) =>
     api.post('/ai/settings', { provider, apiKey }).then(r => r.data),

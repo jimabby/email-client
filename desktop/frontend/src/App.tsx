@@ -18,6 +18,8 @@ const DailyReportModal = lazy(() => import('./components/DailyReportModal').then
 const DraftsModal = lazy(() => import('./components/DraftsModal').then(m => ({ default: m.DraftsModal })))
 const OutboxModal = lazy(() => import('./components/OutboxModal').then(m => ({ default: m.OutboxModal })))
 const RulesModal = lazy(() => import('./components/RulesModal').then(m => ({ default: m.RulesModal })))
+const FollowupsModal = lazy(() => import('./components/FollowupsModal').then(m => ({ default: m.FollowupsModal })))
+const CommandPalette = lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
 
 // Bridge exposed by the Electron preload script. Absent when running in a
 // plain browser, so every use is optional.
@@ -133,6 +135,19 @@ function TopBar() {
       <div className="flex-1" />
 
       <button
+        onClick={() => useEmailStore.getState().setShowCommandPalette(true)}
+        title="Command palette (Ctrl+K)"
+        aria-label="Open command palette"
+        className="h-8 px-2.5 rounded-[10px] flex items-center gap-2 btn-ghost text-[12px] text-ink-3"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+          <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5"/>
+          <path d="M11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        </svg>
+        <kbd className="text-[10px] font-medium">Ctrl K</kbd>
+      </button>
+
+      <button
         onClick={toggleChat}
         title="AI Assistant"
         aria-label={isChatOpen ? 'Close AI Assistant' : 'Open AI Assistant'}
@@ -237,6 +252,7 @@ const CHAT_PANE_KEY = 'hermes-pane-chat'
 // ─── Keyboard Shortcuts Help ─────────────────────────────────────────────────
 function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
   const shortcuts = [
+    { key: 'Ctrl+K', desc: 'Command palette' },
     { key: 'Ctrl+N', desc: 'New message' },
     { key: '/', desc: 'Search' },
     { key: 'r', desc: 'Reply' },
@@ -283,7 +299,16 @@ function useKeyboardShortcuts() {
       const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
 
       // Global shortcuts (work even in inputs)
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        const state = useEmailStore.getState()
+        state.setShowCommandPalette(!state.showCommandPalette)
+        return
+      }
+
       if (e.key === 'Escape') {
+        // The palette closes itself; it owns Escape while it is open.
+        if (useEmailStore.getState().showCommandPalette) return
         // The shortcuts sheet is the topmost surface when it is open, so it
         // takes Escape before anything below it does.
         if (document.querySelector('[data-hermes-shortcuts]')) {
@@ -387,7 +412,7 @@ export default function App() {
   const {
     isComposeOpen, composeNonce, showAccountModal, showDraftsModal, showOutboxModal, showRulesModal,
     setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport,
-    setSnoozes, isChatOpen,
+    setSnoozes, isChatOpen, showFollowupsModal, showCommandPalette, setFollowups, setMutedThreads,
   } = useEmailStore()
   useKeyboardShortcuts()
   const [showShortcuts, setShowShortcuts] = useState(false)
@@ -507,13 +532,22 @@ export default function App() {
     refreshSnoozes()
     const snoozePoll = setInterval(refreshSnoozes, 30_000)
 
+    // Follow-ups come due on the server; the sidebar badge reads this list.
+    const refreshFollowups = () => {
+      emailsApi.getFollowups().then(setFollowups).catch(() => {})
+    }
+    refreshFollowups()
+    const followupPoll = setInterval(refreshFollowups, 60_000)
+
+    emailsApi.getMuted().then(setMutedThreads).catch(() => {})
+
     // Messages composed while the backend was unreachable are held in the
     // renderer and handed over as soon as it answers again.
     const stopFlush = startFlushLoop((sent) => {
       showNotification('success', `Sent ${sent} message${sent === 1 ? '' : 's'} that were waiting to go out`)
     })
 
-    return () => { clearInterval(reportPoll); clearInterval(snoozePoll); stopFlush() }
+    return () => { clearInterval(reportPoll); clearInterval(snoozePoll); clearInterval(followupPoll); stopFlush() }
   }, [])
 
   // Desktop shell events: a clicked notification should open that exact
@@ -526,6 +560,7 @@ export default function App() {
       const target = payload as { accountId?: string; emailId?: string; folder?: string; view?: string } | undefined
       if (!target) return
       if (target.view === 'outbox') { useEmailStore.getState().setShowOutboxModal(true); return }
+      if (target.view === 'followups') { useEmailStore.getState().setShowFollowupsModal(true); return }
       if (!target.accountId) return
 
       const store = useEmailStore.getState()
@@ -632,6 +667,8 @@ export default function App() {
           {showDraftsModal && <DraftsModal />}
           {showOutboxModal && <OutboxModal />}
           {showRulesModal && <RulesModal />}
+          {showFollowupsModal && <FollowupsModal />}
+          {showCommandPalette && <CommandPalette />}
           <DailyReportModal />
         </Suspense>
         <Notification />

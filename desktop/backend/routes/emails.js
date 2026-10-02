@@ -13,6 +13,8 @@ const exportService = require('../services/exportService');
 const calendarService = require('../services/calendarService');
 const downloadTickets = require('../services/downloadTicketService');
 const pushService = require('../services/pushService');
+const followupService = require('../services/followupService');
+const importService = require('../services/importService');
 const { randomUUID: uuidv4 } = require('crypto');
 
 function getService(accountType) {
@@ -61,6 +63,26 @@ function recomposeId(account, previousId, moveResult) {
   const previousProviderId = gmailOrOutlookId(previousId);
   if (moveResult.id === previousProviderId) return null;
   return `${account.id}-${moveResult.id}`;
+}
+
+/**
+ * The id an Undo must address after a move, or null when undo is impossible.
+ *
+ * Gmail keeps ids across moves, so the original id is a correct fallback
+ * there. IMAP never does: a UID is only meaningful in its own mailbox, so the
+ * old id read against Trash or Junk names some *other* message — an Undo of a
+ * spam report then rescued an unrelated message from Junk.
+ */
+function undoIdAfterMove(account, previousId, moveResult) {
+  const recomposed = recomposeId(account, previousId, moveResult);
+  if (recomposed) return recomposed;
+  if (account.type === 'imap') return null;
+  return previousId;
+}
+
+/** Drop a snooze whose message has left the folder it was snoozed in. */
+function forgetSnooze(emailId) {
+  try { store.removeSnooze(emailId); } catch { /* nothing snoozed */ }
 }
 
 // Attachment entries carry provider handles used only by the download
@@ -135,22 +157,28 @@ async function loadAttachment(account, emailId, index, folder) {
 // Everything with a fixed first segment MUST be declared before the
 // '/:accountId' wildcard below, or Express matches the literal as an account id.
 
-// GET /api/emails/stream/:accountId (SSE for near real-time updates)
-router.get('/stream/:accountId', (req, res) => {
-  const account = store.getAccount(req.params.accountId);
-  if (!account) return res.status(404).json({ error: 'Account not found' });
-
-  ensureWatch(account);
+/**
+ * Server-sent events for one account, or for every account when `accountId`
+ * is null.
+ *
+ * The all-accounts form exists because a browser allows only six HTTP/1.1
+ * connections per origin and each open EventSource holds one forever. One
+ * stream per account meant a user with six accounts had none left for API
+ * calls, and the whole app stalled.
+ */
+function openStream(req, res, accountId) {
+  if (accountId) ensureWatch(accountId);
+  else for (const account of store.getAccounts()) ensureWatch(account);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
 
-  res.write(`data: ${JSON.stringify({ type: 'ready', accountId: account.id })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'ready', accountId })}\n\n`);
 
   const unsubscribe = subscribe((evt) => {
-    if (evt.accountId !== account.id) return;
+    if (accountId && evt.accountId !== accountId) return;
     res.write(`data: ${JSON.stringify({ type: 'new-mail', ...evt })}\n\n`);
   });
 
@@ -162,6 +190,16 @@ router.get('/stream/:accountId', (req, res) => {
     clearInterval(heartbeat);
     unsubscribe();
   });
+}
+
+// GET /api/emails/stream — every account on one connection.
+router.get('/stream', (req, res) => openStream(req, res, null));
+
+// GET /api/emails/stream/:accountId (SSE for near real-time updates)
+router.get('/stream/:accountId', (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  openStream(req, res, account.id);
 });
 
 // GET /api/emails/unread-counts?folders=INBOX,Sent
@@ -349,8 +387,10 @@ router.put('/templates', (req, res) => {
 
 // POST /api/emails/categorize
 router.post('/categorize', async (req, res) => {
-  const { emails } = req.body;
-  if (!Array.isArray(emails)) return res.status(400).json({ error: 'emails array required' });
+  if (!Array.isArray(req.body?.emails)) return res.status(400).json({ error: 'emails array required' });
+  // Every uncached message is sent to the paid AI provider, so a request is
+  // bounded the same way /api/ai/priority is.
+  const emails = req.body.emails.slice(0, 200);
 
   const cached = store.getEmailCategories();
   const uncached = emails.filter(e => !cached[e.id] || !VALID_CATEGORIES.has(cached[e.id]));
@@ -497,7 +537,10 @@ router.get('/unified', async (req, res) => {
     return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta);
   });
 
-  res.json({ emails: merged.slice(0, limit), nextTokens, errors });
+  // Everything fetched is returned. Trimming the merge to `limit` dropped the
+  // tail of every account's page while its token still advanced past it, so
+  // with three accounts two thirds of each "load more" was never seen again.
+  res.json({ emails: merged, nextTokens, errors });
 });
 
 // ─── Vacation auto-responder ────────────────────────────────────────────────
@@ -551,6 +594,70 @@ router.put('/signatures', (req, res) => {
   res.json(store.saveSignatures(out));
 });
 
+// ─── Follow-up reminders ────────────────────────────────────────────────────
+
+router.get('/followups', (req, res) => {
+  const order = { due: 0, waiting: 1, replied: 2 };
+  const list = [...store.getFollowups()].sort((a, b) =>
+    (order[a.status] ?? 3) - (order[b.status] ?? 3) || Date.parse(a.dueAt) - Date.parse(b.dueAt));
+  res.json(list);
+});
+
+// POST /api/emails/followups  Body: { accountId, to, cc?, subject, threadId?, sentAt?, days }
+// For a message already sent; the composer sets one up through /send instead.
+router.post('/followups', (req, res) => {
+  const account = store.getAccount(req.body?.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  try {
+    res.json(followupService.createFollowup({ ...req.body, accountId: account.id }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/followups/:id/remind', (req, res) => {
+  try {
+    res.json(followupService.remindAgain(req.params.id, req.body?.days));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.delete('/followups/:id', (req, res) => {
+  res.json({ success: store.removeFollowup(req.params.id) });
+});
+
+// ─── Muted conversations ────────────────────────────────────────────────────
+
+router.get('/muted', (req, res) => res.json(store.getMutedThreads()));
+
+// ─── Notification preferences ───────────────────────────────────────────────
+
+router.get('/notification-settings', (req, res) => res.json(store.getNotificationSettings()));
+
+router.put('/notification-settings', (req, res) => {
+  const body = req.body || {};
+  const time = (value, fallback) => (/^\d{1,2}:\d{2}$/.test(String(value || '')) ? String(value) : fallback);
+  let timeZone = null;
+  if (typeof body.timeZone === 'string' && body.timeZone) {
+    try { new Intl.DateTimeFormat('en-US', { timeZone: body.timeZone }); timeZone = body.timeZone.slice(0, 64); } catch { /* unknown zone */ }
+  }
+  res.json(store.saveNotificationSettings({
+    vipOnly: body.vipOnly === true,
+    vips: (Array.isArray(body.vips) ? body.vips : [])
+      .map(v => String(v || '').trim().toLowerCase().slice(0, 200))
+      .filter(v => /^@?[^\s@]+(@[^\s@]+)?\.[^\s@]+$/.test(v))
+      .slice(0, 200),
+    timeZone,
+    quietHours: {
+      enabled: body.quietHours?.enabled === true,
+      start: time(body.quietHours?.start, '22:00'),
+      end: time(body.quietHours?.end, '07:00'),
+      allowVips: body.quietHours?.allowVips !== false,
+    },
+  }));
+});
+
 // ─── Settings backup ────────────────────────────────────────────────────────
 // Rules, templates, signatures, aliases, and the auto-responder, as one JSON
 // file. Credentials are deliberately not part of it: a settings backup is
@@ -583,6 +690,7 @@ router.get('/settings-export', (req, res) => {
       enabled, subject, message, startAt, endAt, knownContactsOnly, cooldownDays,
       accountEmails: (accountIds || []).map(byEmail).filter(Boolean),
     },
+    notifications: store.getNotificationSettings(),
   });
 });
 
@@ -647,6 +755,22 @@ router.post('/settings-import', (req, res) => {
       accountIds: (v.accountEmails || []).map(lookup).filter(Boolean),
       knownContactsOnly: v.knownContactsOnly === true,
       cooldownDays: Math.min(Math.max(Number(v.cooldownDays) || 4, 1), 30),
+    });
+  }
+
+  if (data.notifications && typeof data.notifications === 'object') {
+    const n = data.notifications;
+    const time = (value, fallback) => (/^\d{1,2}:\d{2}$/.test(String(value || '')) ? String(value) : fallback);
+    store.saveNotificationSettings({
+      vipOnly: n.vipOnly === true,
+      vips: (Array.isArray(n.vips) ? n.vips : []).map(v => String(v || '').trim().toLowerCase().slice(0, 200)).filter(Boolean).slice(0, 200),
+      timeZone: typeof n.timeZone === 'string' ? n.timeZone.slice(0, 64) : null,
+      quietHours: {
+        enabled: n.quietHours?.enabled === true,
+        start: time(n.quietHours?.start, '22:00'),
+        end: time(n.quietHours?.end, '07:00'),
+        allowVips: n.quietHours?.allowVips !== false,
+      },
     });
   }
 
@@ -984,6 +1108,46 @@ router.post('/:accountId/message/:emailId/unsubscribe', async (req, res) => {
   }
 });
 
+// POST/DELETE /api/emails/:accountId/thread/:threadId/mute
+// Body (POST): { subject? } — kept only so the muted list can be read.
+router.post('/:accountId/thread/:threadId/mute', (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  const item = store.muteThread({
+    accountId: account.id,
+    threadId: req.params.threadId,
+    subject: String(req.body?.subject || '').slice(0, 300),
+    mutedAt: new Date().toISOString(),
+  });
+  res.json({ success: true, muted: item });
+});
+
+router.delete('/:accountId/thread/:threadId/mute', (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  res.json({ success: store.unmuteThread(account.id, req.params.threadId) });
+});
+
+// POST /api/emails/:accountId/import?folder=INBOX
+// Body: the raw .mbox or .eml file (application/octet-stream).
+router.post('/:accountId/import', express.raw({ type: () => true, limit: '200mb' }), async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Upload an .mbox or .eml file' });
+
+  const folder = String(req.query.folder || 'INBOX');
+  try {
+    const result = await importService.importInto(account, req.body, folder);
+    if (!result.total) return res.status(400).json({ error: 'No messages were found in that file' });
+    invalidateCounts();
+    console.log(`[import] ${account.email}/${folder}: ${result.imported} of ${result.total} imported`);
+    res.json({ success: result.failed === 0 && !result.skipped, folder, ...result });
+  } catch (err) {
+    console.error('Import error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/:accountId/folders', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
@@ -995,7 +1159,9 @@ router.post('/:accountId/folders', async (req, res) => {
 router.patch('/:accountId/folders/:folderId', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
-  try { res.json(await getService(account.type).renameFolder(account, req.params.folderId, String(req.body.name || '').trim())); }
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Folder name is required' });
+  try { res.json(await getService(account.type).renameFolder(account, req.params.folderId, name)); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1009,9 +1175,15 @@ router.post('/:accountId/send', async (req, res) => {
 
   const {
     to, cc, bcc, subject, text, html, attachments, sendAt, undoWindowSec,
-    inReplyTo, references, threadId, replyToEmailId, replyToFolder, sendAs,
+    inReplyTo, references, threadId, replyToEmailId, replyToFolder, sendAs, followUpDays,
   } = req.body;
   if (!to || !subject) return res.status(400).json({ error: 'to and subject are required' });
+  if (followUpDays !== undefined && followUpDays !== null) {
+    const days = Number(followUpDays);
+    if (!Number.isFinite(days) || days <= 0 || days > 60) {
+      return res.status(400).json({ error: 'followUpDays must be between 1 hour and 60 days' });
+    }
+  }
 
   // A send-as address must be one the account actually registered, or the
   // provider will reject the message (or silently rewrite the From).
@@ -1053,12 +1225,31 @@ router.post('/:accountId/send', async (req, res) => {
       undoWindowSec: Number(undoWindowSec) || 0,
     });
 
+    // "Remind me if no reply": the clock starts when the message actually
+    // goes, and an undone send drops the reminder with it.
+    let followup = null;
+    if (followUpDays) {
+      try {
+        followup = followupService.createFollowup({
+          accountId: account.id,
+          jobId: queued.id,
+          to, cc, subject,
+          threadId: email.threadId || null,
+          sentAt: queued.sendAt,
+          days: Number(followUpDays),
+        });
+      } catch (err) {
+        console.warn('[followup] Not created:', err.message);
+      }
+    }
+
     return res.json({
       success: true,
       queued: true,
       jobId: queued.id,
       sendAt: queued.sendAt,
       canUndoUntil: queued.canUndoUntil,
+      followupId: followup?.id || null,
     });
   } catch (err) {
     console.error('Send email error:', err);
@@ -1120,7 +1311,7 @@ router.get('/:accountId/search-attachments', async (req, res) => {
   const query = req.query.q || '';
   const type = req.query.type || '';
   const folder = req.query.folder || 'INBOX';
-  const limit = parseInt(req.query.limit) || 50;
+  const limit = pageSize(req.query.limit);
 
   try {
     const service = getService(account.type);
@@ -1171,7 +1362,7 @@ router.delete('/:accountId/message/:emailId', async (req, res) => {
     invalidateCounts();
     // `undoId` addresses the message in Trash. Absent means the delete was
     // permanent (already in Trash, or an IMAP server with no Trash / UIDPLUS).
-    const undoId = result?.permanent ? null : (recomposeId(account, req.params.emailId, result) || req.params.emailId);
+    const undoId = result?.permanent ? null : undoIdAfterMove(account, req.params.emailId, result);
     res.json({ success: true, permanent: !!result?.permanent, undoId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1263,9 +1454,10 @@ router.post('/:accountId/message/:emailId/spam', async (req, res) => {
     const folder = account.type === 'imap' ? imapFolder(req.params.emailId, req.query.folder) : (req.query.folder || 'INBOX');
     const result = await service.reportSpam(account, id, folder);
     searchIndex.remove(req.params.emailId);
+    forgetSnooze(req.params.emailId);
     invalidateCounts();
     // `undoId` is what an Undo must address; absent means undo is unavailable.
-    res.json({ success: true, undoId: recomposeId(account, req.params.emailId, result) || req.params.emailId });
+    res.json({ success: true, undoId: undoIdAfterMove(account, req.params.emailId, result) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1324,6 +1516,7 @@ router.post('/:accountId/message/:emailId/block', async (req, res) => {
     const folder = account.type === 'imap' ? imapFolder(req.params.emailId, req.query.folder) : (req.query.folder || 'INBOX');
     await service.reportSpam(account, id, folder);
     searchIndex.remove(req.params.emailId);
+    forgetSnooze(req.params.emailId);
     invalidateCounts();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1375,6 +1568,7 @@ router.post('/:accountId/message/:emailId/move', async (req, res) => {
     // The message still exists, just elsewhere — drop it from the index so a
     // stale folder isn't reported, and let the next fetch re-index it.
     searchIndex.remove(req.params.emailId);
+    forgetSnooze(req.params.emailId);
     invalidateCounts();
     // The id to use when moving it back. An IMAP server that does not report
     // COPYUID leaves this null, and the client hides Undo rather than offering
@@ -1591,6 +1785,7 @@ router.post('/:accountId/bulk/move', async (req, res) => {
     else if (account.type === 'gmail') await service.moveEmail(account, gmailOrOutlookId(emailId), sourceFolder, toFolder);
     else await service.moveEmail(account, gmailOrOutlookId(emailId), toFolder);
     searchIndex.remove(emailId);
+    forgetSnooze(emailId);
   }, account.type);
 
   invalidateCounts();

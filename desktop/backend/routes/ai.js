@@ -1,6 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { streamSuggestion, streamChat, listGeminiModels, rankEmailsWithAI, summarizeThreadWithAI, generateSmartReplies, extractActionsWithAI, summarizeAttachmentWithAI } = require('../services/aiService');
+const {
+  streamSuggestion, suggestText, streamChat, listGeminiModels, rankEmailsWithAI, summarizeThreadWithAI,
+  generateSmartReplies, extractActionsWithAI, summarizeAttachmentWithAI, MODEL_CHOICES, DEFAULT_MODELS, modelFor,
+} = require('../services/aiService');
+
+// Model ids are passed straight to a provider API; keep them to the characters
+// real ids use.
+const MODEL_ID = /^[A-Za-z0-9._:\-/]{1,100}$/;
 const store = require('../store');
 const searchIndex = require('../services/searchIndexService');
 
@@ -20,23 +27,40 @@ function hasAiKey() {
 router.get('/settings', (req, res) => {
   const { provider, apiKey } = store.getAiSettings();
   const envFallback = (!provider || provider === 'claude') && !!process.env.ANTHROPIC_API_KEY;
+  const effective = provider || (envFallback ? 'claude' : null);
   res.json({
-    provider: provider || (envFallback ? 'claude' : null),
-    configured: !!apiKey || envFallback
+    provider: effective,
+    configured: !!apiKey || envFallback,
+    model: effective ? modelFor(effective) : null,
   });
+});
+
+// GET /api/ai/models — the picker's choices for every provider.
+router.get('/models', (req, res) => {
+  res.json({ choices: MODEL_CHOICES, defaults: DEFAULT_MODELS });
+});
+
+// PUT /api/ai/model  Body: { model } — null/empty returns to the default.
+router.put('/model', (req, res) => {
+  const model = req.body?.model ? String(req.body.model).trim() : null;
+  if (model && !MODEL_ID.test(model)) return res.status(400).json({ error: 'That is not a valid model id' });
+  store.saveAiModel(model);
+  const { provider } = store.getAiSettings();
+  res.json({ success: true, model: modelFor(provider || 'claude') });
 });
 
 // POST /api/ai/settings — save provider + API key
 router.post('/settings', (req, res) => {
-  const { provider, apiKey } = req.body;
+  const { provider, apiKey, model } = req.body;
   if (!provider || !['claude', 'openai', 'gemini'].includes(provider)) {
     return res.status(400).json({ error: 'provider must be "claude", "openai", or "gemini"' });
   }
   if (!apiKey || !apiKey.trim()) {
     return res.status(400).json({ error: 'apiKey is required' });
   }
-  store.saveAiSettings({ provider, apiKey: apiKey.trim() });
-  res.json({ success: true, provider });
+  if (model && !MODEL_ID.test(String(model))) return res.status(400).json({ error: 'That is not a valid model id' });
+  store.saveAiSettings({ provider, apiKey: apiKey.trim(), model: model ? String(model).trim() : null });
+  res.json({ success: true, provider, model: modelFor(provider) });
 });
 
 // DELETE /api/ai/settings — clear AI config
@@ -74,6 +98,23 @@ router.post('/suggest', async (req, res) => {
   }
 
   await streamSuggestion(res, { subject, body, mode, customPrompt, replyTo });
+});
+
+// POST /api/ai/suggest-text — the same as /suggest, answered in one response
+// for clients that cannot read a stream (the mobile app).
+router.post('/suggest-text', async (req, res) => {
+  if (!hasAiKey()) {
+    return res.status(400).json({ error: 'No AI configured. Open Settings → AI and enter your API key.' });
+  }
+  const { subject, body, mode = 'improve', customPrompt, replyTo } = req.body || {};
+  if (mode === 'custom' && !customPrompt) {
+    return res.status(400).json({ error: 'customPrompt is required for custom mode' });
+  }
+  try {
+    res.json({ text: await suggestText({ subject, body, mode, customPrompt, replyTo }) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/ai/chat

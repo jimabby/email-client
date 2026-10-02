@@ -16,4 +16,8 @@ export type RootStackParamList = {
   };
   Settings: undefined;
   Outbox: undefined;
+  /** With `reconnect`, fixes an account whose credentials stopped working. */
+  AddAccount: { reconnect?: Account } | undefined;
+  Rules: undefined;
+  Followups: undefined;
 };

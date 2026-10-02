@@ -215,6 +215,7 @@ module.exports = {
   sanitizeRules,
   ruleMatches,
   applyRules,
+  runAction,
   previewRule,
   senderAddress,
   TERMINAL_ACTIONS,

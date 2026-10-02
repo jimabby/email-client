@@ -172,12 +172,23 @@ async function notifySnoozeWake(accountId, email, { folder } = {}) {
   });
 }
 
+/** A sent message that has had no reply by its follow-up date. */
+async function notifyFollowup(followup) {
+  const recipient = String(followup.to || '').split(',')[0].trim();
+  return send(followup.accountId, {
+    title: `No reply from ${senderName(recipient) || 'your recipient'}`,
+    body: followup.subject || '(no subject)',
+    data: { accountId: followup.accountId, reason: 'followup', followupId: followup.id },
+  });
+}
+
 module.exports = {
   registerDevice,
   unregisterDevice,
   listDevices,
   notifyNewMail,
   notifySnoozeWake,
+  notifyFollowup,
   send,
   isExpoPushToken,
 };

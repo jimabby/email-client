@@ -78,6 +78,14 @@ router.post('/accounts/imap', async (req, res) => {
     return res.status(400).json({ error: 'email, password, imapHost, and smtpHost are required' });
   }
 
+  // A second copy of the same mailbox doubles every notification and rule run.
+  const duplicate = store.getAccounts().find(a => a.type === 'imap'
+    && String(a.email).toLowerCase() === String(email).toLowerCase()
+    && String(a.imapHost).toLowerCase() === String(imapHost).toLowerCase());
+  if (duplicate) {
+    return res.status(409).json({ error: `${email} is already connected. Use Reconnect to update its password.` });
+  }
+
   // Test connection
   try {
     const imapService = require('../services/imapService');

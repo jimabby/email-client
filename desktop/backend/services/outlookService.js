@@ -536,8 +536,68 @@ async function moveEmail(account, outlookId, toFolder) {
   return { id: moved?.id || outlookId };
 }
 
+// Graph will take raw MIME, but a message created that way is a permanent
+// draft. Creating it from JSON instead lets PR_MESSAGE_FLAGS (0x0E07) mark it
+// as an ordinary received message, and the delivery/submit times (0x0E06,
+// 0x0039) carry its original date.
+const IMPORT_ATTACHMENT_BUDGET = 3 * 1024 * 1024; // Graph's inline request ceiling is 4 MB
+
+function graphAddress(value) {
+  const first = Array.isArray(value?.value) ? value.value[0] : null;
+  return first?.address ? { emailAddress: { address: first.address, name: first.name || undefined } } : undefined;
+}
+
+function graphAddressList(value) {
+  const list = Array.isArray(value) ? value.flatMap(v => v?.value || []) : (value?.value || []);
+  return list.filter(a => a?.address).map(a => ({ emailAddress: { address: a.address, name: a.name || undefined } }));
+}
+
+async function importMessage(account, raw, folder = 'INBOX') {
+  const { simpleParser } = require('mailparser');
+  const parsed = await simpleParser(Buffer.from(raw));
+  const when = (parsed.date instanceof Date && !Number.isNaN(parsed.date.getTime()) ? parsed.date : new Date()).toISOString();
+
+  let budget = IMPORT_ATTACHMENT_BUDGET;
+  const attachments = [];
+  for (const att of parsed.attachments || []) {
+    if (!att.content || att.content.length > budget) continue;
+    budget -= att.content.length;
+    attachments.push({
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: att.filename || 'attachment',
+      contentType: att.contentType || 'application/octet-stream',
+      contentBytes: att.content.toString('base64'),
+      isInline: att.contentDisposition === 'inline',
+      contentId: att.cid || undefined,
+    });
+  }
+
+  const message = {
+    subject: parsed.subject || '',
+    body: parsed.html
+      ? { contentType: 'html', content: parsed.html }
+      : { contentType: 'text', content: parsed.text || '' },
+    from: graphAddress(parsed.from),
+    toRecipients: graphAddressList(parsed.to),
+    ccRecipients: graphAddressList(parsed.cc),
+    internetMessageId: parsed.messageId || undefined,
+    isRead: true,
+    attachments,
+    singleValueExtendedProperties: [
+      { id: 'Integer 0x0E07', value: '1' },
+      { id: 'SystemTime 0x0E06', value: when },
+      { id: 'SystemTime 0x0039', value: when },
+    ],
+  };
+
+  const folderPath = FOLDER_MAP[folder] || folder;
+  const created = await graphRequestWithRefresh(account, `/me/mailFolders/${encodeURIComponent(folderPath)}/messages`, 'POST', message);
+  return { id: created?.id || null };
+}
+
 module.exports = {
   _internals: { graphUrl, formatSender },
+  importMessage,
   getHeaders,
   getAuthUrl,
   handleCallback,

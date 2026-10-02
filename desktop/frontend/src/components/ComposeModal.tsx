@@ -246,6 +246,8 @@ export function ComposeModal() {
   const [sendAs, setSendAs] = useState(composeData?.sendAs || '')
   const [aliases, setAliasOptions] = useState<Alias[]>([])
   const [undoWindowSec, setUndoWindowSec] = useState(60)
+  // "Remind me if nobody replies" — 0 is off.
+  const [followUpDays, setFollowUpDays] = useState(0)
   const [showSchedule, setShowSchedule] = useState(false)
   const [scheduledAt, setScheduledAt] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -445,6 +447,7 @@ export function ComposeModal() {
         threadId: ownsOriginal ? r?.threadId || undefined : undefined,
         replyToEmailId: ownsOriginal ? r?.id : undefined,
         replyToFolder: ownsOriginal ? r?.folder : undefined,
+        followUpDays: followUpDays > 0 ? followUpDays : undefined,
       }
 
       let sendResult
@@ -887,6 +890,19 @@ export function ComposeModal() {
         <option value={0}>Undo off</option>
         <option value={60}>Undo 1 min</option>
         <option value={120}>Undo 2 min</option>
+      </select>
+      <select
+        value={followUpDays}
+        onChange={e => setFollowUpDays(Number(e.target.value))}
+        title="Remind me if nobody replies"
+        aria-label="Follow-up reminder"
+        className={`field text-[12px] px-2 py-1.5 !rounded-xl ${followUpDays ? 'text-accent-ink' : 'text-ink-2'}`}
+      >
+        <option value={0}>No follow-up</option>
+        <option value={1}>Remind if no reply in 1 day</option>
+        <option value={3}>Remind if no reply in 3 days</option>
+        <option value={7}>Remind if no reply in 1 week</option>
+        <option value={14}>Remind if no reply in 2 weeks</option>
       </select>
       <div className="flex-1">
         <span className="text-[10px] text-ink-3 hidden sm:inline">Ctrl+Enter to send</span>

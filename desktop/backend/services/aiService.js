@@ -50,16 +50,63 @@ function buildUserMessage({ subject, body, mode, customPrompt, replyTo }) {
   return msg;
 }
 
+// ─── Model choice ─────────────────────────────────────────────────────────────
+// Every call here is per message (categorise, rank, summarise, draft), so the
+// default is the fastest, cheapest model of each provider. The user can pick
+// another in Settings → AI; a free-text id is accepted for anything not listed.
+
+const DEFAULT_MODELS = {
+  claude: 'claude-haiku-4-5-20251001',
+  openai: 'gpt-4o-mini',
+  gemini: 'gemini-2.5-flash',
+};
+
+const MODEL_CHOICES = {
+  claude: [
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 — fastest, lowest cost (default)' },
+    { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — stronger writing and summaries' },
+    { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 — most capable, highest cost' },
+  ],
+  openai: [
+    { id: 'gpt-4o-mini', label: 'GPT-4o mini — fastest, lowest cost (default)' },
+    { id: 'gpt-4o', label: 'GPT-4o' },
+  ],
+  gemini: [
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (default)' },
+    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — lowest cost' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — most capable' },
+  ],
+};
+
+/** The model saved for `provider`, or null to use the default. */
+function chosenModel(provider) {
+  const settings = store.getAiSettings();
+  const savedProvider = settings.provider || 'claude';
+  return settings.model && savedProvider === provider ? settings.model : null;
+}
+
+function modelFor(provider) {
+  return chosenModel(provider) || DEFAULT_MODELS[provider];
+}
+
+/**
+ * Request parameters for the chosen Claude model. Haiku keeps the original
+ * shape. The 5.5 models think adaptively by default, which would eat a 1024
+ * token cap and return no text, so they get room for that and run at low
+ * effort — these are short, per-message tasks.
+ */
+function claudeParams(systemPrompt, userMessage) {
+  const model = modelFor('claude');
+  const base = { model, system: systemPrompt, messages: [{ role: 'user', content: userMessage }] };
+  if (/haiku/i.test(model)) return { ...base, max_tokens: 1024 };
+  return { ...base, max_tokens: 8000, output_config: { effort: 'low' } };
+}
+
 // ─── Claude (Anthropic) ───────────────────────────────────────────────────────
 
 async function streamClaude(apiKey, systemPrompt, userMessage, res) {
   const client = new Anthropic({ apiKey });
-  const stream = client.messages.stream({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1024,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userMessage }]
-  });
+  const stream = client.messages.stream(claudeParams(systemPrompt, userMessage));
 
   for await (const event of stream) {
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -70,11 +117,11 @@ async function streamClaude(apiKey, systemPrompt, userMessage, res) {
 
 // ─── Google Gemini ────────────────────────────────────────────────────────────
 
-// Flash models first — fastest latency; pro models as fallback
+// Flash models first — fastest latency; pro as fallback. The 1.5 and 2.0
+// families are retired, so trying them first only cost a failed request each
+// session before reaching a model that answers.
 const GEMINI_MODEL_PREFERENCE = [
-  'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b',
-  'gemini-2.0-flash-lite', 'gemini-2.5-flash',
-  'gemini-flash-latest', 'gemini-1.5-pro', 'gemini-2.5-pro',
+  'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-2.5-pro',
 ];
 
 let cachedGeminiModel = null;
@@ -88,6 +135,9 @@ function markGeminiModelFailed(model) {
 
 // Pick the next untried model from the preference list — no API call needed
 function getGeminiModel() {
+  // A model the user picked is always tried first.
+  const chosen = chosenModel('gemini');
+  if (chosen && !_failedGeminiModels.has(chosen)) return chosen;
   if (cachedGeminiModel && !_failedGeminiModels.has(cachedGeminiModel)) return cachedGeminiModel;
   for (const model of GEMINI_MODEL_PREFERENCE) {
     if (!_failedGeminiModels.has(model)) {
@@ -211,7 +261,7 @@ async function streamGemini(apiKey, systemPrompt, userMessage, res) {
 function streamOpenAI(apiKey, systemPrompt, userMessage, res) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: modelFor('openai'),
       stream: true,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -274,12 +324,7 @@ function streamOpenAI(apiKey, systemPrompt, userMessage, res) {
 
 async function callClaude(apiKey, systemPrompt, userMessage) {
   const client = new Anthropic({ apiKey });
-  const msg = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1024,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userMessage }]
-  });
+  const msg = await client.messages.create(claudeParams(systemPrompt, userMessage));
   // Concatenate the text blocks rather than assuming content[0] is one.
   return (msg.content || [])
     .filter(block => block.type === 'text')
@@ -290,7 +335,7 @@ async function callClaude(apiKey, systemPrompt, userMessage) {
 function callOpenAI(apiKey, systemPrompt, userMessage) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: modelFor('openai'),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage }
@@ -654,7 +699,26 @@ async function streamSuggestion(res, params) {
   }
 }
 
+/**
+ * Non-streaming draft help for clients that cannot read a stream (the mobile
+ * app). Same prompts as streamSuggestion.
+ * @returns {Promise<string>}
+ */
+async function suggestText(params) {
+  const { mode, customPrompt, replyTo } = params;
+  const base = mode === 'custom' ? customPrompt : PROMPTS[mode];
+  if (!base) throw new Error(`Unknown mode: ${mode}`);
+  const systemPrompt = replyTo ? `${base}\n\n${UNTRUSTED_NOTE}` : base;
+  const text = await callEffective(systemPrompt, buildUserMessage(params));
+  if (text === null) throw new Error('No AI provider configured');
+  return text;
+}
+
 module.exports = {
+  DEFAULT_MODELS,
+  MODEL_CHOICES,
+  modelFor,
+  suggestText,
   streamSuggestion,
   streamChat,
   listGeminiModels,

@@ -41,6 +41,23 @@ export function formatFullDate(dateStr: string): string {
   });
 }
 
+/** "3 days ago" / "in 2 hours", coarse enough for reminders and send times. */
+export function relativeTime(dateStr?: string | null): string {
+  if (!dateStr) return '';
+  const ms = new Date(dateStr).getTime() - Date.now();
+  if (Number.isNaN(ms)) return '';
+  const abs = Math.abs(ms);
+  const units: [number, string][] = [[86400000, 'day'], [3600000, 'hour'], [60000, 'minute']];
+  for (const [size, unit] of units) {
+    if (abs >= size) {
+      const n = Math.round(abs / size);
+      const label = `${n} ${unit}${n === 1 ? '' : 's'}`;
+      return ms < 0 ? `${label} ago` : `in ${label}`;
+    }
+  }
+  return ms < 0 ? 'just now' : 'in a moment';
+}
+
 export function stripHtml(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')

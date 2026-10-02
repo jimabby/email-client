@@ -53,14 +53,29 @@ export function ReaderFrame({ html, theme, allowRemote = false }: Props) {
       }
     }
 
-    frame.addEventListener('load', measure)
-    // Images and webfonts settle after load, so re-measure a few times rather
-    // than leaving the message clipped.
+    // Images and webfonts settle after load — on a slow connection, long after
+    // any fixed delay — so the body is observed and re-measured whenever it
+    // changes size. The timers stay as a fallback where ResizeObserver cannot
+    // reach into the frame.
+    let observer: ResizeObserver | null = null
+    const observe = () => {
+      measure()
+      try {
+        const body = frame.contentDocument?.body
+        if (!body || typeof ResizeObserver === 'undefined') return
+        observer?.disconnect()
+        observer = new ResizeObserver(measure)
+        observer.observe(body)
+      } catch { /* the timers below still run */ }
+    }
+
+    frame.addEventListener('load', observe)
     const timers = [80, 300, 900, 2000].map(delay => window.setTimeout(measure, delay))
 
     return () => {
       cancelled = true
-      frame.removeEventListener('load', measure)
+      frame.removeEventListener('load', observe)
+      observer?.disconnect()
       timers.forEach(window.clearTimeout)
     }
   }, [srcDoc])

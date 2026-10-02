@@ -368,16 +368,26 @@ export function EmailList() {
     setRecentSearches(readJson<SearchEntry[]>(RECENT_KEY, []))
   }, [])
 
+  // Clicking through the list fires overlapping body fetches. Only the latest
+  // may land, or a slow earlier response shows one message's body under
+  // another's header.
+  const bodyRequestRef = useRef(0)
+
   const handleSelectEmail = async (email: EmailSummary) => {
+    const request = ++bodyRequestRef.current
     setSelectedEmail(email)
     markEmailRead(email.id)
     setLoadingBody(true)
     try {
       // Use the email's own account — search across all accounts can surface
       // results that don't belong to the currently selected account.
-      setSelectedEmailBody(await emailsApi.getBody(email.accountId, email.id, email.folder))
-    } catch { setSelectedEmailBody(null) }
-    finally { setLoadingBody(false) }
+      const body = await emailsApi.getBody(email.accountId, email.id, email.folder)
+      if (request === bodyRequestRef.current) setSelectedEmailBody(body)
+    } catch {
+      if (request === bodyRequestRef.current) setSelectedEmailBody(null)
+    } finally {
+      if (request === bodyRequestRef.current) setLoadingBody(false)
+    }
   }
 
   const handleStar = async (email: EmailSummary, e: React.MouseEvent) => {
@@ -426,9 +436,15 @@ export function EmailList() {
     }
   }, [])
 
-  // One stream per account, not just the selected one. Watching only the
-  // current account meant mail arriving on any other account never refreshed
-  // anything — and in the unified view that is most of the mailbox.
+  // What the stream below needs to know about the current view. Read through a
+  // ref so switching folders or accounts does not tear the connection down.
+  const liveViewRef = useRef({ currentFolder, currentAccountId, unifiedView, handleRefresh })
+  liveViewRef.current = { currentFolder, currentAccountId, unifiedView, handleRefresh }
+
+  // One stream for every account. It used to be one EventSource per account,
+  // but a browser allows six HTTP/1.1 connections per origin and each stream
+  // holds one for good — with six accounts no API request could get through,
+  // and the app hung. The backend multiplexes every account onto this one.
   useEffect(() => {
     if (!accounts.length) return
 
@@ -436,41 +452,40 @@ export function EmailList() {
       if (liveRefreshTimerRef.current) return
       liveRefreshTimerRef.current = window.setTimeout(() => {
         liveRefreshTimerRef.current = null
-        handleRefresh().catch(() => {})
+        liveViewRef.current.handleRefresh().catch(() => {})
       }, 1200)
     }
 
     // EventSource can't send an Authorization header, so the token rides along
     // as a query parameter (the backend accepts it for stream routes only).
-    const streams = accounts.map(account => {
-      const es = new EventSource(withToken(`/api/emails/stream/${account.id}`))
-      es.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data)
-          if (msg.type !== 'new-mail') return
-          // In the unified view every account is on screen; otherwise only the
-          // selected account's inbox is worth reloading for.
-          if (currentFolder !== 'INBOX') return
-          if (!unifiedView && msg.accountId !== currentAccountId) return
-          scheduleRefresh()
-        } catch {
-          // Ignore malformed SSE payloads.
-        }
+    const es = new EventSource(withToken('/api/emails/stream'))
+    es.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data)
+        if (msg.type !== 'new-mail') return
+        const view = liveViewRef.current
+        // In the unified view every account is on screen; otherwise only the
+        // selected account's inbox is worth reloading for.
+        if (view.currentFolder !== 'INBOX') return
+        if (!view.unifiedView && msg.accountId !== view.currentAccountId) return
+        scheduleRefresh()
+      } catch {
+        // Ignore malformed SSE payloads.
       }
-      // The browser reconnects an EventSource on its own; nothing to do here
-      // beyond keeping the error off the console.
-      es.onerror = () => {}
-      return es
-    })
+    }
+    // The browser reconnects an EventSource on its own; nothing to do here
+    // beyond keeping the error off the console.
+    es.onerror = () => {}
 
     return () => {
       if (liveRefreshTimerRef.current) {
         window.clearTimeout(liveRefreshTimerRef.current)
         liveRefreshTimerRef.current = null
       }
-      streams.forEach(es => es.close())
+      es.close()
     }
-  }, [accounts, currentAccountId, currentFolder, unifiedView, handleRefresh])
+    // A new account needs its watcher started, which reopening does.
+  }, [accounts.length])
 
   // An undo elsewhere in the app (archive, delete) needs the list to catch up.
   useEffect(() => {
@@ -632,7 +647,7 @@ export function EmailList() {
     const selected = getSelectedEmails()
     if (!selected.length) { clearEmailSelection(); return }
     try {
-      await Promise.all(selected.map(e => emailsApi.markUnread(e.accountId, e.id, e.folder)))
+      await Promise.all(groupSelection(selected).map(g => emailsApi.bulkMarkUnread(g.accountId, g.ids, g.folder)))
       const ids = selected.map(e => e.id)
       markEmailsUnread(ids)
       if (searchResults) setSearchResults(searchResults.map(e => ids.includes(e.id) ? { ...e, read: false } : e))
@@ -685,18 +700,20 @@ export function EmailList() {
   const isStarred = currentFolder === '__starred__'
   const isSnoozed = currentFolder === '__snoozed__'
 
-  // Emails snoozed for the current account are hidden everywhere except the
-  // Snoozed view (the message physically stays in its folder until it wakes).
+  // Snoozed emails are hidden everywhere except the Snoozed view (the message
+  // physically stays in its folder until it wakes). The unified view shows
+  // every account, so it hides every account's snoozes — scoping this to the
+  // current account let other accounts' snoozed mail show there.
   const snoozedIdSet = useMemo(
-    () => new Set(snoozes.filter(s => s.accountId === currentAccountId).map(s => s.emailId)),
-    [snoozes, currentAccountId]
+    () => new Set(snoozes.filter(s => unifiedView || s.accountId === currentAccountId).map(s => s.emailId)),
+    [snoozes, currentAccountId, unifiedView]
   )
   const snoozedEmails = useMemo(
     () => snoozes
-      .filter(s => s.accountId === currentAccountId && s.email)
+      .filter(s => (unifiedView || s.accountId === currentAccountId) && s.email)
       .sort((a, b) => Date.parse(a.until) - Date.parse(b.until))
       .map(s => s.email as EmailSummary),
-    [snoozes, currentAccountId]
+    [snoozes, currentAccountId, unifiedView]
   )
 
   // Starred, from the local index — not just whatever page is loaded.
@@ -776,6 +793,18 @@ export function EmailList() {
     })
     setShowSavedMenu(false)
   }
+
+  // The command palette runs saved (and typed) searches through here.
+  const applySearchRef = useRef(applySavedSearch)
+  applySearchRef.current = applySavedSearch
+  useEffect(() => {
+    const onRun = (event: Event) => {
+      const entry = (event as CustomEvent<SearchEntry>).detail
+      if (entry?.query) applySearchRef.current(entry).catch(() => {})
+    }
+    window.addEventListener('hermes:run-search', onRun)
+    return () => window.removeEventListener('hermes:run-search', onRun)
+  }, [])
 
   const deleteSavedSearch = (id: string) => {
     persistSavedSearches(savedSearches.filter(s => s.id !== id))

@@ -19,6 +19,11 @@ const CATEGORIES_FILE = path.join(DATA_DIR, 'categories.json');
 // 30 MB. It used to live in accounts.json, so every token refresh or rule run
 // rewrote — and re-sealed — tens of megabytes alongside the credentials.
 const OUTBOX_FILE = path.join(DATA_DIR, 'outbox.json');
+// Bookkeeping that changes on nearly every arrival: which messages the rule
+// engine has handled and who has had an auto-reply. It used to live in
+// accounts.json, so each arrival re-sealed every credential just to record a
+// timestamp.
+const STATE_FILE = path.join(DATA_DIR, 'state.json');
 
 // A fresh install has no accounts to seed, so nothing is ever copied in from
 // the bundle. An earlier version seeded from a developer's own accounts.json
@@ -108,22 +113,28 @@ const emailCache = readSealedJson(CACHE_FILE, {});
 const categories = readJson(CATEGORIES_FILE, {});
 const outbox = readSealedJson(OUTBOX_FILE, { items: [] });
 if (!Array.isArray(outbox.items)) outbox.items = [];
+const state = readSealedJson(STATE_FILE, {});
+if (!state.ruleRuns || typeof state.ruleRuns !== 'object') state.ruleRuns = {};
+if (!state.autoReplies || typeof state.autoReplies !== 'object') state.autoReplies = {};
 
 const storeWriter = makeWriter(STORE_FILE, () => JSON.stringify(secrets.sealObject(store), null, 2));
 const cacheWriter = makeWriter(CACHE_FILE, () => secrets.sealText(JSON.stringify(emailCache)));
 const categoriesWriter = makeWriter(CATEGORIES_FILE, () => JSON.stringify(categories));
 const outboxWriter = makeWriter(OUTBOX_FILE, () => secrets.sealText(JSON.stringify(outbox)));
+const stateWriter = makeWriter(STATE_FILE, () => secrets.sealText(JSON.stringify(state)));
 
 const saveStore = () => storeWriter.schedule();
 const saveCache = () => cacheWriter.schedule();
 const saveCategories = () => categoriesWriter.schedule();
 const saveOutbox = () => outboxWriter.schedule();
+const saveState = () => stateWriter.schedule();
 
 function flushAll() {
   storeWriter.flush();
   cacheWriter.flush();
   categoriesWriter.flush();
   outboxWriter.flush();
+  stateWriter.flush();
 }
 
 // Never lose the last few mutations when the process goes away.
@@ -157,6 +168,16 @@ if (Array.isArray(store.sendQueue)) {
   delete store.sendQueue;
   saveOutbox();
   saveStore();
+}
+
+// Older builds kept the rule-run and auto-reply logs inside accounts.json.
+for (const key of ['ruleRuns', 'autoReplies']) {
+  if (store[key] && typeof store[key] === 'object') {
+    state[key] = { ...store[key], ...state[key] };
+    delete store[key];
+    saveState();
+    saveStore();
+  }
 }
 
 // IMAP ids gained their folder ("acc::uid" -> "acc::INBOX::uid"). A snooze
@@ -252,8 +273,14 @@ module.exports = {
     return store.aiSettings || {};
   },
 
-  saveAiSettings({ provider, apiKey }) {
-    store.aiSettings = { provider, apiKey };
+  saveAiSettings({ provider, apiKey, model }) {
+    store.aiSettings = { provider, apiKey, model: model || null };
+    saveStore();
+  },
+
+  /** Change only the model, keeping the saved provider and key. */
+  saveAiModel(model) {
+    store.aiSettings = { ...(store.aiSettings || {}), model: model || null };
     saveStore();
   },
 
@@ -266,15 +293,14 @@ module.exports = {
   // Ids of messages the rule engine has already processed, so re-listing a
   // folder never re-applies destructive actions to the same message.
   hasRuleRun(emailId) {
-    return !!(store.ruleRuns && store.ruleRuns[emailId]);
+    return !!state.ruleRuns[emailId];
   },
 
   markRuleRun(emailId) {
-    if (!store.ruleRuns) store.ruleRuns = {};
-    store.ruleRuns[emailId] = Date.now();
-    const keys = Object.keys(store.ruleRuns);
-    if (keys.length > 5000) for (const k of keys.slice(0, keys.length - 5000)) delete store.ruleRuns[k];
-    saveStore();
+    state.ruleRuns[emailId] = Date.now();
+    const keys = Object.keys(state.ruleRuns);
+    if (keys.length > 5000) for (const k of keys.slice(0, keys.length - 5000)) delete state.ruleRuns[k];
+    saveState();
   },
 
   getEmailCache(key) { return emailCache[key] || null; },
@@ -434,27 +460,115 @@ module.exports = {
   /** ISO timestamp of the last auto-reply sent to `email`, or null. */
   lastAutoReplyTo(email) {
     const key = String(email || '').toLowerCase();
-    return store.autoReplies?.[key] || null;
+    return state.autoReplies[key] || null;
   },
 
   recordAutoReply(email) {
-    if (!store.autoReplies) store.autoReplies = {};
     const key = String(email || '').toLowerCase();
-    store.autoReplies[key] = new Date().toISOString();
+    state.autoReplies[key] = new Date().toISOString();
 
     // Bound the log. Oldest entries go first, which is also the least useful
     // half — a sender not written to in months should get a fresh reply anyway.
-    const keys = Object.keys(store.autoReplies);
+    const keys = Object.keys(state.autoReplies);
     if (keys.length > 2000) {
-      const sorted = keys.sort((a, b) => String(store.autoReplies[a]).localeCompare(String(store.autoReplies[b])));
-      for (const stale of sorted.slice(0, keys.length - 2000)) delete store.autoReplies[stale];
+      const sorted = keys.sort((a, b) => String(state.autoReplies[a]).localeCompare(String(state.autoReplies[b])));
+      for (const stale of sorted.slice(0, keys.length - 2000)) delete state.autoReplies[stale];
     }
-    saveStore();
+    saveState();
   },
 
   clearAutoReplyLog() {
-    store.autoReplies = {};
+    state.autoReplies = {};
+    saveState();
+  },
+
+  // ─── Follow-up reminders ──────────────────────────────────────────────────
+  // "Remind me if nobody replies": one entry per sent message being watched.
+  getFollowups() {
+    if (!Array.isArray(store.followups)) store.followups = [];
+    return store.followups;
+  },
+
+  addFollowup(item) {
+    const list = this.getFollowups();
+    list.push(item);
+    if (list.length > 500) list.splice(0, list.length - 500);
     saveStore();
+    return item;
+  },
+
+  updateFollowup(id, updates) {
+    const list = this.getFollowups();
+    const idx = list.findIndex(f => f.id === id);
+    if (idx === -1) return null;
+    list[idx] = { ...list[idx], ...updates };
+    saveStore();
+    return list[idx];
+  },
+
+  removeFollowup(id) {
+    const list = this.getFollowups();
+    const idx = list.findIndex(f => f.id === id);
+    if (idx === -1) return false;
+    list.splice(idx, 1);
+    saveStore();
+    return true;
+  },
+
+  // ─── Muted conversations ──────────────────────────────────────────────────
+  // New replies to a muted thread skip the inbox and never notify.
+  getMutedThreads() {
+    if (!Array.isArray(store.mutedThreads)) store.mutedThreads = [];
+    return store.mutedThreads;
+  },
+
+  isThreadMuted(accountId, threadId) {
+    if (!threadId) return false;
+    return this.getMutedThreads().some(m => m.accountId === accountId && m.threadId === threadId);
+  },
+
+  muteThread(item) {
+    const list = this.getMutedThreads();
+    if (!list.some(m => m.accountId === item.accountId && m.threadId === item.threadId)) {
+      list.push(item);
+      if (list.length > 1000) list.splice(0, list.length - 1000);
+      saveStore();
+    }
+    return item;
+  },
+
+  unmuteThread(accountId, threadId) {
+    const list = this.getMutedThreads();
+    const idx = list.findIndex(m => m.accountId === accountId && m.threadId === threadId);
+    if (idx === -1) return false;
+    list.splice(idx, 1);
+    saveStore();
+    return true;
+  },
+
+  // ─── Notification preferences ─────────────────────────────────────────────
+  // VIP-only alerts and quiet hours. Mail still arrives and is badged; these
+  // only decide whether it interrupts.
+  getNotificationSettings() {
+    const raw = store.notificationSettings || {};
+    return {
+      vipOnly: raw.vipOnly === true,
+      vips: Array.isArray(raw.vips) ? raw.vips : [],
+      // The zone quiet hours are read in; the cloud server's own clock is UTC.
+      timeZone: typeof raw.timeZone === 'string' && raw.timeZone ? raw.timeZone : null,
+      quietHours: {
+        enabled: raw.quietHours?.enabled === true,
+        start: typeof raw.quietHours?.start === 'string' ? raw.quietHours.start : '22:00',
+        end: typeof raw.quietHours?.end === 'string' ? raw.quietHours.end : '07:00',
+        allowVips: raw.quietHours?.allowVips !== false,
+      },
+    };
+  },
+
+  saveNotificationSettings(settings) {
+    store.notificationSettings = settings;
+    saveStore();
+    return this.getNotificationSettings();
   },
 
   // ─── Registered mobile devices ────────────────────────────────────────────

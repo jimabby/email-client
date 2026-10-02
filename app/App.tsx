@@ -22,6 +22,9 @@ import InboxScreen from './src/screens/InboxScreen';
 import ViewerScreen from './src/screens/ViewerScreen';
 import ComposeScreen from './src/screens/ComposeScreen';
 import OutboxScreen from './src/screens/OutboxScreen';
+import AddAccountScreen from './src/screens/AddAccountScreen';
+import RulesScreen from './src/screens/RulesScreen';
+import FollowupsScreen from './src/screens/FollowupsScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -56,6 +59,9 @@ function Root() {
   const openTarget = async (target: PushTarget) => {
     const nav = navigationRef.current;
     if (!nav?.isReady()) { pendingTarget.current = target; return; }
+
+    // A follow-up reminder is about a sent message, not one in a folder.
+    if (target.reason === 'followup') { nav.navigate('Followups'); return; }
 
     try {
       const accounts = await api.listAccounts();
@@ -169,6 +175,13 @@ function Root() {
           <Stack.Screen name="Compose" component={ComposeScreen} options={{ title: 'New message' }} />
           <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
           <Stack.Screen name="Outbox" component={OutboxScreen} options={{ title: 'Outbox' }} />
+          <Stack.Screen
+            name="AddAccount"
+            component={AddAccountScreen}
+            options={({ route }) => ({ title: route.params?.reconnect ? 'Reconnect' : 'Add account' })}
+          />
+          <Stack.Screen name="Rules" component={RulesScreen} options={{ title: 'Rules' }} />
+          <Stack.Screen name="Followups" component={FollowupsScreen} options={{ title: 'Follow-ups' }} />
         </Stack.Navigator>
       </NavigationContainer>
     </>

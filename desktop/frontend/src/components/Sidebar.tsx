@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { accountsApi, emailsApi } from '../api/client'
 import { promptDialog, confirmDialog } from './DialogHost'
@@ -112,7 +112,10 @@ export function Sidebar() {
     snoozes, drafts, setShowDraftsModal,
     setUnreadCounts, getUnreadCount, outbox, setOutbox, setShowOutboxModal, setShowRulesModal,
     unifiedView, setUnifiedView, showNotification,
+    followups, setShowFollowupsModal,
   } = useEmailStore()
+  const dueFollowups = followups.filter(f => f.status === 'due').length
+  const waitingFollowups = followups.filter(f => f.status === 'waiting').length
 
   useEffect(() => {
     accountsApi.list()
@@ -223,6 +226,18 @@ export function Sidebar() {
     } catch (err) { console.error(err) }
     finally { setLoadingEmails(false) }
   }
+
+  // The command palette navigates through the same path a click takes.
+  const folderClickRef = useRef(handleFolderClick)
+  folderClickRef.current = handleFolderClick
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ accountId?: string; folder?: string }>).detail
+      if (detail?.accountId) folderClickRef.current(detail.accountId, detail.folder || 'INBOX')
+    }
+    window.addEventListener('hermes:open-folder', onOpen)
+    return () => window.removeEventListener('hermes:open-folder', onOpen)
+  }, [])
 
   const handleDeleteAccount = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -476,6 +491,27 @@ export function Sidebar() {
               failedOutbox ? 'bg-danger text-white' : 'bg-accent text-[#201500]'
             }`}>
               {pendingOutbox}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setShowFollowupsModal(true)}
+          className={`w-full flex items-center gap-2.5 px-2.5 py-[7px] text-[12.5px] rounded-lg transition-colors duration-150
+            ${dueFollowups ? 'text-ink hover:bg-ink/5' : 'text-ink-2 hover:bg-ink/5 hover:text-ink'}`}
+        >
+          <span className="text-ink-3">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/>
+              <path d="M8 5.5v3l2 1.5M3 2.5l-1.5 1.5M13 2.5l1.5 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </span>
+          <span className="flex-1 text-left">Follow-ups</span>
+          {(dueFollowups || waitingFollowups) > 0 && (
+            <span className={`text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums ${
+              dueFollowups ? 'bg-accent text-[#201500]' : 'bg-ink/8 text-ink-2'
+            }`}>
+              {dueFollowups || waitingFollowups}
             </span>
           )}
         </button>

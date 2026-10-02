@@ -3,7 +3,7 @@ import { Linking } from 'react-native';
 import { useAppStore } from './store';
 import type {
   Account, EmailSummary, EmailBody, Folder, OutboxItem, UnreadCounts, UnifiedPage,
-  ThreadSummary,
+  ThreadSummary, MailRule, Followup, MutedThread, AiMode,
 } from './types';
 
 // The base URL and private token are configured on the Settings screen. In
@@ -22,6 +22,23 @@ export const api = {
 
   listAccounts: () =>
     client().get<Account[]>('/auth/accounts').then((r) => r.data),
+
+  // ─── Adding and reconnecting accounts ─────────────────────────────────────
+  // The server tests the connection before saving anything, so a typo in a
+  // host or password comes back as an error rather than a dead account.
+  addImap: (data: {
+    email: string; name?: string; password: string;
+    imapHost: string; imapPort?: number; imapSecure?: boolean;
+    smtpHost: string; smtpPort?: number; smtpSecure?: boolean;
+  }) => client().post<{ account: Account }>('/auth/accounts/imap', data, { timeout: 60000 }).then((r) => r.data.account),
+
+  /** Replace an IMAP password the server stopped accepting. */
+  updatePassword: (accountId: string, password: string) =>
+    client().patch<{ account: Account }>(`/auth/accounts/${accountId}`, { password }, { timeout: 60000 }).then((r) => r.data.account),
+
+  /** The provider's sign-in page; opening it in a browser adds or reconnects the account. */
+  oauthUrl: (provider: 'gmail' | 'outlook') =>
+    client().get<{ url: string }>(`/auth/${provider}`).then((r) => r.data.url),
 
   listEmails: (accountId: string, folder = 'INBOX', limit = 50, pageToken?: string | null) =>
     client()
@@ -135,10 +152,30 @@ export const api = {
       sendAt?: string;
       /** Seconds to wait before sending, during which it can be recalled. */
       undoWindowSec?: number;
+      /** Remind me if nobody has replied after this many days. */
+      followUpDays?: number;
     }
   ) => client()
     .post<{ jobId: string; sendAt: string; canUndoUntil: string | null }>(`/emails/${accountId}/send`, data)
     .then((r) => r.data),
+
+  // ─── Follow-ups ───────────────────────────────────────────────────────────
+  followups: () => client().get<Followup[]>('/emails/followups').then((r) => r.data),
+  remindAgain: (id: string, days: number) =>
+    client().post<Followup>(`/emails/followups/${id}/remind`, { days }).then((r) => r.data),
+  dismissFollowup: (id: string) => client().delete(`/emails/followups/${id}`).then((r) => r.data),
+
+  // ─── Muted conversations ──────────────────────────────────────────────────
+  muted: () => client().get<MutedThread[]>('/emails/muted').then((r) => r.data),
+  mute: (accountId: string, threadId: string, subject?: string) =>
+    client().post(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}/mute`, { subject }).then((r) => r.data),
+  unmute: (accountId: string, threadId: string) =>
+    client().delete(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}/mute`).then((r) => r.data),
+
+  // ─── Rules ────────────────────────────────────────────────────────────────
+  // The whole list is saved at once; the server re-validates every rule.
+  rules: () => client().get<MailRule[]>('/emails/rules').then((r) => r.data),
+  saveRules: (rules: MailRule[]) => client().put<MailRule[]>('/emails/rules', { rules }).then((r) => r.data),
 
   /** Recall a queued message before its window closes. */
   cancelSend: (accountId: string, jobId: string) =>
@@ -201,6 +238,13 @@ export const api = {
 
   threadSummary: (data: { subject?: string; messages: { from?: string; date?: string; body?: string }[] }) =>
     client().post<ThreadSummary>('/ai/thread-summary', data).then((r) => r.data),
+
+  /**
+   * Draft help in one response. The desktop streams this; React Native's fetch
+   * cannot read a stream, so the phone uses the non-streaming twin.
+   */
+  suggest: (data: { mode: AiMode; subject?: string; body?: string; replyTo?: { from: string; subject: string; body: string } }) =>
+    client().post<{ text: string }>('/ai/suggest-text', data, { timeout: 90000 }).then((r) => r.data.text),
 
   // ─── Push registration ────────────────────────────────────────────────────
   registerDevice: (token: string, platform: string) =>

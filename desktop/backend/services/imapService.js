@@ -728,6 +728,17 @@ async function deleteDraft(account, ref) {
   });
 }
 
+/** APPEND a raw message to a mailbox, keeping the date from its own header. */
+async function importMessage(account, raw, folder = 'INBOX') {
+  const header = Buffer.from(raw).subarray(0, 16384).toString('latin1').split(/\r?\n\r?\n/)[0];
+  const dateLine = header.replace(/\r?\n[ \t]+/g, ' ').match(/^date:\s*(.+)$/im)?.[1];
+  const date = dateLine && !Number.isNaN(Date.parse(dateLine)) ? new Date(dateLine) : undefined;
+  return getConn(account).run(async (client) => {
+    const res = await client.append(folder, raw, ['\\Seen'], date);
+    return { uid: res?.uid || null, folder };
+  });
+}
+
 async function markAsRead(account, uid, folder = 'INBOX') {
   return getConn(account).run(async (client) => {
     await client.mailboxOpen(folder);
@@ -903,6 +914,7 @@ module.exports = {
   toggleStar,
   moveEmail,
   deleteEmail,
+  importMessage,
   testConnection,
   closeConnection
 };

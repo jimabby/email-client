@@ -283,6 +283,8 @@ export function AwaySettings() {
         )}
       </section>
 
+      <ImportMail />
+
       <section className="border-t border-line pt-6">
         <h3 className="text-[13px] font-semibold text-ink">Back up your settings</h3>
         <p className="text-xs text-ink-2 mt-1 mb-3 max-w-md leading-relaxed">
@@ -309,6 +311,75 @@ export function AwaySettings() {
         </div>
       </section>
     </div>
+  )
+}
+
+/**
+ * Bring mail in from another client: an .mbox export (Thunderbird, Apple Mail,
+ * Google Takeout) or a single .eml, filed into a folder of one account with
+ * each message's original date.
+ */
+function ImportMail() {
+  const { accounts, folders, showNotification } = useEmailStore()
+  const [accountId, setAccountId] = useState(accounts[0]?.id || '')
+  const [folder, setFolder] = useState('INBOX')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  useEffect(() => { if (!accountId && accounts[0]) setAccountId(accounts[0].id) }, [accounts, accountId])
+
+  const folderOptions = (folders[accountId] || []).map(f => f.path)
+  if (!folderOptions.includes('INBOX')) folderOptions.unshift('INBOX')
+
+  const run = async (file?: File) => {
+    if (!file || !accountId) return
+    setBusy(true)
+    setResult(null)
+    try {
+      const res = await emailsApi.importMailbox(accountId, file, folder)
+      const summary = `Imported ${res.imported} of ${res.total} message${res.total === 1 ? '' : 's'} into ${res.folder}`
+        + (res.failed ? ` — ${res.failed} failed${res.errors[0] ? ` (${res.errors[0]})` : ''}` : '')
+        + (res.skipped ? ` — ${res.skipped} over the per-file limit were skipped` : '')
+      setResult(summary)
+      showNotification(res.failed ? 'error' : 'success', summary)
+      window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : 'Import failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="border-t border-line pt-6">
+      <h3 className="text-[13px] font-semibold text-ink">Import mail</h3>
+      <p className="text-xs text-ink-2 mt-1 mb-3 max-w-md leading-relaxed">
+        Upload an .mbox file (from Thunderbird, Apple Mail, or Google Takeout) or a single
+        .eml message. Messages keep their original dates and are not re-sent to anyone.
+      </p>
+      {accounts.length === 0 ? (
+        <p className="text-[12.5px] text-ink-3">Add an account first.</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={accountId} onChange={e => setAccountId(e.target.value)} className="field px-2 py-1.5 text-[12.5px]" aria-label="Import into account">
+            {accounts.map(a => <option key={a.id} value={a.id}>{a.email}</option>)}
+          </select>
+          <select value={folder} onChange={e => setFolder(e.target.value)} className="field px-2 py-1.5 text-[12.5px]" aria-label="Import into folder">
+            {folderOptions.map(path => <option key={path} value={path}>{path}</option>)}
+          </select>
+          <label className={`px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-line text-ink rounded-md hover:border-accent/60 cursor-pointer ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+            {busy ? 'Importing… (large files take a while)' : 'Choose .mbox or .eml…'}
+            <input
+              type="file"
+              accept=".mbox,.mbx,.eml,message/rfc822,application/mbox"
+              className="hidden"
+              onChange={e => { run(e.target.files?.[0]); e.target.value = '' }}
+            />
+          </label>
+        </div>
+      )}
+      {result && <p className="text-[11.5px] text-ink-3 mt-2">{result}</p>}
+    </section>
   )
 }
 

@@ -179,8 +179,8 @@ export default function SettingsScreen({ navigation }: Props) {
       {aiConfigured !== null && (
         <Text style={styles.note}>
           {aiConfigured
-            ? 'AI is configured on the server — summaries and smart replies are available when reading a message.'
-            : 'No AI key is configured on the server, so summaries and smart replies are hidden. Add one in the desktop app under Settings → AI.'}
+            ? 'AI is configured on the server — summaries, smart replies, and draft help in Compose are available.'
+            : 'No AI key is configured on the server, so summaries, smart replies, and draft help are hidden. Add one in the desktop app under Settings → AI.'}
         </Text>
       )}
 

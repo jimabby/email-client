@@ -813,8 +813,28 @@ async function moveEmail(account, gmailId, fromFolder, toFolder) {
   return { id: gmailId };
 }
 
+/**
+ * File a raw RFC 822 message into a label without sending it. The Date header
+ * becomes the message's date, so an imported archive sorts where it belongs.
+ */
+async function importMessage(account, raw, folder = 'INBOX') {
+  const gmail = getGmailClient(account);
+  const label = folderToLabelId(folder);
+  // "Archive" has no label of its own in Gmail — an unlabelled message is
+  // exactly what lives only in All Mail.
+  const labelIds = /^archive$/i.test(folder) || /all ?mail/i.test(folder) ? [] : [label];
+  const res = await gmail.users.messages.import({
+    userId: 'me',
+    internalDateSource: 'dateHeader',
+    neverMarkSpam: true,
+    requestBody: { raw: Buffer.from(raw).toString('base64url'), labelIds },
+  });
+  return { id: res.data?.id || null };
+}
+
 module.exports = {
   _internals: { extractBody, messageDate, messageToSummary },
+  importMessage,
   getHeaders,
   getAuthUrl,
   handleCallback,

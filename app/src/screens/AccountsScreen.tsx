@@ -121,8 +121,23 @@ export default function AccountsScreen({ navigation }: Props) {
         <View style={styles.center}>
           <Text style={styles.errorTitle}>No accounts yet</Text>
           <Text style={styles.errorMsg}>
-            Add an email account in the desktop app — it'll show up here.
+            Add one below, or in the desktop app — either way it shows up everywhere.
           </Text>
+        </View>
+      }
+      ListFooterComponent={
+        <View style={styles.footer}>
+          <TouchableOpacity style={styles.footerBtn} onPress={() => navigation.navigate('AddAccount')}>
+            <Text style={styles.footerBtnText}>+ Add account</Text>
+          </TouchableOpacity>
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={[styles.footerBtn, { flex: 1 }]} onPress={() => navigation.navigate('Followups')}>
+              <Text style={styles.footerBtnText}>Follow-ups</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.footerBtn, { flex: 1 }]} onPress={() => navigation.navigate('Rules')}>
+              <Text style={styles.footerBtnText}>Rules</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       }
       renderItem={({ item }) => (
@@ -139,11 +154,15 @@ export default function AccountsScreen({ navigation }: Props) {
             <Text style={styles.name} numberOfLines={1}>{item.name || item.email}</Text>
             <Text style={styles.email} numberOfLines={1}>{item.email}</Text>
             {item.authError && (
-              // Signing in again needs a browser and the OAuth app, which live
-              // on the desktop; the phone can only say that it is needed.
-              <Text style={styles.authError} numberOfLines={2}>
-                {item.type === 'imap' ? 'Password no longer accepted' : 'Sign-in expired'} — reconnect in the desktop app
-              </Text>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('AddAccount', { reconnect: item })}
+                hitSlop={6}
+                accessibilityRole="button"
+              >
+                <Text style={styles.authError} numberOfLines={2}>
+                  {item.type === 'imap' ? 'Password no longer accepted' : 'Sign-in expired'} — tap to reconnect
+                </Text>
+              </TouchableOpacity>
             )}
           </View>
           {(unread[item.id]?.INBOX?.unread ?? 0) > 0 && (
@@ -211,5 +230,9 @@ function makeStyles(t: Palette, ui: Ui) {
     errorMsg: { ...ui.secondary, textAlign: 'center', lineHeight: 20, marginBottom: space.lg },
     btn: ui.btnPrimary,
     btnText: ui.btnPrimaryText,
+    footer: { padding: space.lg, gap: space.sm },
+    footerRow: { flexDirection: 'row', gap: space.sm },
+    footerBtn: ui.btnSecondary,
+    footerBtnText: ui.btnSecondaryText,
   });
 }

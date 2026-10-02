@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { AwaySettings } from './AwaySettings'
+import { NotificationSettings } from './NotificationSettings'
+import { AiModelPicker } from './AiModelPicker'
 import { accountsApi, aiApi, emailsApi } from '../api/client'
 import type { Account, Alias, MailTemplate } from '../types/email'
 
-type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature' | 'productivity' | 'privacy' | 'away'
+type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature' | 'productivity' | 'notifications' | 'privacy' | 'away'
 
 const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHost: string; smtpPort: number }> = {
   'Gmail (App Password)': { imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 587 },
@@ -160,8 +162,9 @@ export function AccountModal() {
     { id: 'ai' as Tab, label: 'AI', sub: 'Claude / GPT / Gemini' },
     { id: 'signature' as Tab, label: 'Signature', sub: 'Email footer' },
     { id: 'productivity' as Tab, label: 'Rules & Templates', sub: 'Automate mail' },
+    { id: 'notifications' as Tab, label: 'Notifications', sub: 'VIPs, quiet hours' },
     { id: 'privacy' as Tab, label: 'Privacy & Appearance', sub: 'Tracking, theme' },
-    { id: 'away' as Tab, label: 'Away & Export', sub: 'Auto-reply, backup' },
+    { id: 'away' as Tab, label: 'Away & Import/Export', sub: 'Auto-reply, backup' },
   ]
 
   return (
@@ -192,7 +195,7 @@ export function AccountModal() {
               </button>
             ))}
             <div className="mt-2 mb-0.5 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em] px-2 py-1.5">Preferences</div>
-            {tabs.filter(t => ['ai','signature','productivity','privacy','away'].includes(t.id)).map(t => (
+            {tabs.filter(t => ['ai','signature','productivity','notifications','privacy','away'].includes(t.id)).map(t => (
               <button key={t.id} onClick={() => setTab(t.id)}
                 className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors
                   ${tab === t.id
@@ -358,6 +361,7 @@ export function AccountModal() {
           )}
 
           {tab === 'away' && <AwaySettings />}
+          {tab === 'notifications' && <NotificationSettings />}
 
           {tab === 'signature' && (
             <div className="space-y-5">
@@ -531,6 +535,9 @@ export function AccountModal() {
                   {aiSaving ? '⟳ Saving…' : `Save ${aiSelectedProvider === 'claude' ? 'Claude' : aiSelectedProvider === 'openai' ? 'ChatGPT' : 'Gemini'} Key`}
                 </button>
               </form>
+
+              {/* The model applies to the saved provider, so it is only offered once one is configured. */}
+              {aiConfigured && aiProvider && <AiModelPicker provider={aiProvider} />}
             </div>
           )}
           {tab === 'privacy' && (

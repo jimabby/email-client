@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type {
   Account, EmailSummary, EmailBody, Folder, ComposeData, EmailCategory, SnoozeItem,
-  Draft, UnreadCounts, OutboxItem, Alias,
+  Draft, UnreadCounts, OutboxItem, Alias, Followup, MutedThread,
 } from '../types/email'
 import { readJson, writeJson, writeListWithinQuota } from '../lib/storage'
 
@@ -189,6 +189,21 @@ interface EmailStore {
   // Rules editor
   showRulesModal: boolean
   setShowRulesModal: (show: boolean) => void
+
+  // Follow-up reminders (server-owned; refreshed on a poll)
+  followups: Followup[]
+  setFollowups: (items: Followup[]) => void
+  showFollowupsModal: boolean
+  setShowFollowupsModal: (show: boolean) => void
+
+  // Muted conversations (server-owned)
+  mutedThreads: MutedThread[]
+  setMutedThreads: (items: MutedThread[]) => void
+  isThreadMuted: (accountId: string, threadId?: string | null) => boolean
+
+  // Ctrl+K command palette
+  showCommandPalette: boolean
+  setShowCommandPalette: (show: boolean) => void
 
   // AI Chat
   isChatOpen: boolean
@@ -516,6 +531,19 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
 
   showRulesModal: false,
   setShowRulesModal: (show) => set({ showRulesModal: show }),
+
+  followups: [],
+  setFollowups: (items) => set({ followups: items }),
+  showFollowupsModal: false,
+  setShowFollowupsModal: (show) => set({ showFollowupsModal: show }),
+
+  mutedThreads: [],
+  setMutedThreads: (items) => set({ mutedThreads: items }),
+  isThreadMuted: (accountId, threadId) =>
+    !!threadId && get().mutedThreads.some(m => m.accountId === accountId && m.threadId === threadId),
+
+  showCommandPalette: false,
+  setShowCommandPalette: (show) => set({ showCommandPalette: show }),
 
   // AI Chat
   isChatOpen: false,

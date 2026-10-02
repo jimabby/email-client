@@ -111,6 +111,8 @@ app.use(express.json({ limit: '30mb' }));
 // Applied before auth so an unauthenticated flood is also bounded.
 app.use('/api', apiLimiter);
 app.use('/api/ai', aiLimiter);
+// Categorisation calls the AI provider for every uncached message.
+app.use('/api/emails/categorize', aiLimiter);
 app.use('/api/emails/:accountId/send', sendLimiter);
 
 // Provider callbacks and signed webhook endpoints cannot send the Hermes token.
@@ -194,6 +196,7 @@ const server = app.listen(PORT, BIND_HOST, () => {
   require('./services/sendQueueService').startScheduler();
   require('./services/snoozeService').startScheduler();
   require('./services/searchIndexService').startScheduler();
+  require('./services/followupService').startScheduler();
   // Watch every account from boot, not just when a client opens the SSE
   // stream — that is what makes notifications arrive with the window closed.
   require('./services/mailWatchService').watchAll();

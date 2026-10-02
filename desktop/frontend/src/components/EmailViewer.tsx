@@ -98,6 +98,7 @@ export function EmailViewer() {
     toggleStarLocal, markEmailUnread, setSelectedEmail,
     folders, currentAccountId, currentFolder, emails, accounts,
     snoozeEmailLocal, unsnoozeLocal, getArchiveFolder,
+    isThreadMuted, setMutedThreads, setFollowups,
   } = useEmailStore()
 
   const [showMoveMenu, setShowMoveMenu] = useState(false)
@@ -518,6 +519,63 @@ export function EmailViewer() {
     }
   }
 
+  // Muting is per conversation: later replies are archived and marked read on
+  // arrival, so they never notify. Muting also archives this message, which is
+  // what "get this thread out of my inbox" means.
+  const handleToggleMute = async () => {
+    const threadId = selectedEmail.threadId
+    if (!threadId) { showNotification('error', 'This message is not part of a conversation that can be muted'); return }
+    const { id, accountId, folder, subject } = selectedEmail
+    try {
+      if (isThreadMuted(accountId, threadId)) {
+        await emailsApi.unmuteThread(accountId, threadId)
+        setMutedThreads(await emailsApi.getMuted())
+        showNotification('success', 'Conversation unmuted')
+        return
+      }
+      await emailsApi.muteThread(accountId, threadId, subject)
+      setMutedThreads(await emailsApi.getMuted())
+      const origin = folder || 'INBOX'
+      if (origin === 'INBOX') {
+        await emailsApi.move(accountId, id, getArchiveFolder(accountId), origin).catch(() => {})
+        removeEmail(id)
+      }
+      showNotification('success', 'Conversation muted — new replies skip the inbox', {
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            await emailsApi.unmuteThread(accountId, threadId).catch(() => {})
+            emailsApi.getMuted().then(setMutedThreads).catch(() => {})
+          },
+        },
+      })
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : 'Could not change mute')
+    }
+  }
+
+  // A message already sent can still be watched for a reply.
+  const handleFollowUpLater = async (days: number) => {
+    const to = Array.isArray(selectedEmail.to) ? selectedEmail.to.join(', ') : String(selectedEmail.to || '')
+    if (!to) { showNotification('error', 'This message has no recipient to wait for'); return }
+    try {
+      await emailsApi.createFollowup({
+        accountId: selectedEmail.accountId,
+        to,
+        subject: selectedEmail.subject,
+        threadId: selectedEmail.threadId || null,
+        sentAt: selectedEmail.date,
+        days,
+      })
+      setFollowups(await emailsApi.getFollowups())
+      showNotification('success', `You'll be reminded if nobody replies within ${days === 1 ? 'a day' : `${days} days`}`, {
+        action: { label: 'Follow-ups', onClick: () => useEmailStore.getState().setShowFollowupsModal(true) },
+      })
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : 'Could not set a follow-up')
+    }
+  }
+
   const handleMarkUnread = async () => {
     try {
       await emailsApi.markUnread(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder)
@@ -905,6 +963,20 @@ export function EmailViewer() {
                 label="Mark as unread"
                 icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/><path d="M2 4l6 5 6-5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
               />
+              {selectedEmail.threadId && (
+                <MenuItem
+                  onClick={() => { setShowMoreMenu(false); handleToggleMute() }}
+                  label={isThreadMuted(selectedEmail.accountId, selectedEmail.threadId) ? 'Unmute conversation' : 'Mute conversation'}
+                  icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 6h2.5L9 3v10L5.5 10H3V6z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M11.5 6l3 4M14.5 6l-3 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
+                />
+              )}
+              {/sent/i.test(selectedEmail.folder || '') && (
+                <MenuItem
+                  onClick={() => { setShowMoreMenu(false); handleFollowUpLater(3) }}
+                  label="Remind me if no reply in 3 days"
+                  icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5.5v3l2 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
+                />
+              )}
               {unsubscribeLink && (
                 <MenuItem
                   onClick={() => { setShowMoreMenu(false); handleUnsubscribe(unsubscribeLink) }}
