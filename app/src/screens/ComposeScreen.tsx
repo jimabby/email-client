@@ -112,9 +112,17 @@ export default function ComposeScreen({ navigation, route }: Props) {
     ];
   };
 
-  const dispatch = async (sendAt?: Date) => {
-    if (!to.trim() || !subject.trim()) {
-      Alert.alert('Missing fields', 'Please fill in the recipient and subject.');
+  const dispatch = async (sendAt?: Date, confirmedNoSubject = false) => {
+    if (!to.trim()) {
+      Alert.alert('Missing recipient', 'Please add at least one recipient.');
+      return;
+    }
+    // An empty subject is legal mail, just usually a mistake — ask, don't refuse.
+    if (!subject.trim() && !confirmedNoSubject) {
+      Alert.alert('Send without a subject?', 'This message has no subject line.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Send anyway', onPress: () => { dispatch(sendAt, true); } },
+      ]);
       return;
     }
     setSending(true);

@@ -1,9 +1,11 @@
 import { useEmailStore } from '../store/emailStore'
 import { EMAIL_CATEGORIES } from '../types/email'
 import type { EmailCategory } from '../types/email'
+import { useT } from '../lib/i18n'
 
 export function CategoryTabs() {
   const { emails, emailCategories, activeCategory, setActiveCategory, currentAccountId, getUnreadCount: serverUnread } = useEmailStore()
+  const t = useT()
 
   function getUnreadCount(cat: EmailCategory) {
     // Categories only exist client-side, so per-category counts still come from
@@ -35,7 +37,7 @@ export function CategoryTabs() {
                 : 'text-ink-2 hover:text-ink hover:bg-ink/5'
               }`}
           >
-            <span className="truncate">{cat}</span>
+            <span className="truncate">{t(cat)}</span>
             {unread > 0 && (
               <span className={`px-1 rounded-full text-[10px] font-semibold leading-[1.5] tabular-nums flex-shrink-0
                 ${isActive ? 'bg-accent text-[#201500]' : 'bg-ink/12 text-ink-2'}`}>

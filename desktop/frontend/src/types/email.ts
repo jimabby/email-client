@@ -16,6 +16,10 @@ export interface Account {
   allowInsecureTLS?: boolean;
   /** Set when the provider stopped accepting this account's credentials. */
   authError?: { message: string; at: string } | null;
+  /** IMAP: the user's override for saving sent mail to Sent (null = default). */
+  saveSentCopy?: boolean | null;
+  /** IMAP: whether a Sent copy is actually saved, after defaults are applied. */
+  sentCopyEffective?: boolean;
 }
 
 export interface EmailSummary {
@@ -340,4 +344,23 @@ export interface Draft {
   savedAt: string;
   serverRef?: ServerDraftRef | null;
   attachments?: DraftAttachment[];
+}
+
+/** Mail from one first-time sender, waiting in the screener. */
+export interface ScreenerGroup {
+  sender: string;
+  name: string;
+  count: number;
+  latest: string | null;
+  emails: EmailSummary[];
+}
+
+export interface ScreenerState {
+  enabled: boolean;
+  folder: string;
+  allowed: string[];
+  blocked: string[];
+  enabledAt: string | null;
+  pending: ScreenerGroup[];
+  errors: { accountId: string; email: string; error: string }[];
 }

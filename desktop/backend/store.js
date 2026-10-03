@@ -7,10 +7,14 @@ const secrets = require('./services/secretStore');
 // In dev mode it falls back to the backend directory.
 const DATA_DIR  = process.env.HERMES_DATA_DIR || __dirname;
 const STORE_FILE = path.join(DATA_DIR, 'accounts.json');
-// The email cache is high-churn (rewritten on every list/body fetch) and can
-// grow to hundreds of MB. Keep it in its own file so account credentials and
-// OAuth tokens in accounts.json aren't rewritten — or put at risk — each fetch.
-const CACHE_FILE = path.join(DATA_DIR, 'email-cache.json');
+// The offline copy of message lists and bodies. Each entry is its own sealed
+// file: the cache used to be one file of up to 300 entries, and every message
+// opened re-encrypted and rewrote all of it on the event loop.
+const CACHE_DIR = path.join(DATA_DIR, 'email-cache');
+const CACHE_INDEX_FILE = path.join(CACHE_DIR, 'index.json');
+const MAX_CACHE_ENTRIES = 300;
+// Older builds kept the whole cache in this one file; it is migrated on load.
+const LEGACY_CACHE_FILE = path.join(DATA_DIR, 'email-cache.json');
 // Categories churn on every inbox load and grow to thousands of entries.
 // Keeping them out of accounts.json means a category refresh never rewrites
 // the file holding credentials.
@@ -109,7 +113,9 @@ function makeWriter(file, serialize) {
 }
 
 const store = loadStore();
-const emailCache = readSealedJson(CACHE_FILE, {});
+try { fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 }); } catch { /* reported on first write */ }
+// key -> cachedAt, in least- to most-recently-written order.
+const cacheIndex = readSealedJson(CACHE_INDEX_FILE, {});
 const categories = readJson(CATEGORIES_FILE, {});
 const outbox = readSealedJson(OUTBOX_FILE, { items: [] });
 if (!Array.isArray(outbox.items)) outbox.items = [];
@@ -118,7 +124,7 @@ if (!state.ruleRuns || typeof state.ruleRuns !== 'object') state.ruleRuns = {};
 if (!state.autoReplies || typeof state.autoReplies !== 'object') state.autoReplies = {};
 
 const storeWriter = makeWriter(STORE_FILE, () => JSON.stringify(secrets.sealObject(store), null, 2));
-const cacheWriter = makeWriter(CACHE_FILE, () => secrets.sealText(JSON.stringify(emailCache)));
+const cacheWriter = makeWriter(CACHE_INDEX_FILE, () => secrets.sealText(JSON.stringify(cacheIndex)));
 const categoriesWriter = makeWriter(CATEGORIES_FILE, () => JSON.stringify(categories));
 const outboxWriter = makeWriter(OUTBOX_FILE, () => secrets.sealText(JSON.stringify(outbox)));
 const stateWriter = makeWriter(STATE_FILE, () => secrets.sealText(JSON.stringify(state)));
@@ -143,14 +149,56 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => { flushAll(); process.exit(0); });
 }
 
+// ─── Offline message cache ──────────────────────────────────────────────────
+
+function cacheEntryFile(key) {
+  const name = require('crypto').createHash('sha256').update(key).digest('hex');
+  return path.join(CACHE_DIR, `${name}.bin`);
+}
+
+function dropCacheEntry(key) {
+  delete cacheIndex[key];
+  try { fs.unlinkSync(cacheEntryFile(key)); } catch { /* already gone */ }
+}
+
+function writeCacheEntry(key, entry) {
+  try {
+    writeJsonAtomic(cacheEntryFile(key), secrets.sealText(JSON.stringify(entry)));
+  } catch (e) {
+    console.error('Failed to save cache entry:', e.message);
+    return;
+  }
+  // Delete first so a refreshed entry moves to the end of the insertion order,
+  // which is what makes the trim below evict the least recently cached.
+  delete cacheIndex[key];
+  cacheIndex[key] = entry.cachedAt;
+  const keys = Object.keys(cacheIndex);
+  for (const old of keys.slice(0, Math.max(0, keys.length - MAX_CACHE_ENTRIES))) dropCacheEntry(old);
+  saveCache();
+}
+
+function readCacheEntry(key) {
+  if (!cacheIndex[key]) return null;
+  try {
+    return JSON.parse(secrets.openText(fs.readFileSync(cacheEntryFile(key))));
+  } catch {
+    dropCacheEntry(key);
+    saveCache();
+    return null;
+  }
+}
+
 // ─── One-time migrations ────────────────────────────────────────────────────
 
-// Older builds stored the message cache inside accounts.json.
-if (store.emailCache && typeof store.emailCache === 'object') {
-  Object.assign(emailCache, store.emailCache);
-  delete store.emailCache;
-  saveCache();
-  saveStore();
+// Older builds kept the cache in one file (and before that, in accounts.json).
+{
+  const legacy = { ...(store.emailCache && typeof store.emailCache === 'object' ? store.emailCache : {}) };
+  if (fs.existsSync(LEGACY_CACHE_FILE)) Object.assign(legacy, readSealedJson(LEGACY_CACHE_FILE, {}));
+  for (const [key, entry] of Object.entries(legacy)) {
+    if (entry && typeof entry === 'object' && entry.value !== undefined) writeCacheEntry(key, entry);
+  }
+  try { fs.unlinkSync(LEGACY_CACHE_FILE); } catch { /* not there */ }
+  if (store.emailCache) { delete store.emailCache; saveStore(); }
 }
 
 // Older builds stored categories inside accounts.json.
@@ -251,6 +299,8 @@ module.exports = {
     if (idx === -1) return false;
     store.accounts.splice(idx, 1);
     saveStore();
+    // A removed account's mail must not linger on disk.
+    this.purgeAccountCache(id);
     return true;
   },
 
@@ -303,20 +353,23 @@ module.exports = {
     saveState();
   },
 
-  getEmailCache(key) { return emailCache[key] || null; },
+  getEmailCache(key) { return readCacheEntry(key); },
   saveEmailCache(key, value) {
     // Keep the cache useful but bounded: attachment bytes can be tens of MB and
     // remain available online, while message text is what offline reading needs.
     const safeValue = JSON.parse(JSON.stringify(value, (name, item) => name === 'content' ? null : item));
     if (JSON.stringify(safeValue).length > 1024 * 1024) return;
-    // Delete first so a refreshed entry moves to the end of the insertion
-    // order. Reassigning in place kept its original slot, which made the trim
-    // below evict by first-cached rather than least-recently-cached.
-    delete emailCache[key];
-    emailCache[key] = { value: safeValue, cachedAt: new Date().toISOString() };
-    const keys = Object.keys(emailCache);
-    for (const old of keys.slice(0, Math.max(0, keys.length - 300))) delete emailCache[old];
-    saveCache();
+    writeCacheEntry(key, { value: safeValue, cachedAt: new Date().toISOString() });
+  },
+
+  /** Forget every cached list and body belonging to one account. */
+  purgeAccountCache(accountId) {
+    let dropped = 0;
+    for (const key of Object.keys(cacheIndex)) {
+      if (key.split(':')[1] === accountId) { dropCacheEntry(key); dropped++; }
+    }
+    if (dropped) saveCache();
+    return dropped;
   },
 
   // ─── Email categories cache ───────────────────────────────────────────────
@@ -569,6 +622,27 @@ module.exports = {
     store.notificationSettings = settings;
     saveStore();
     return this.getNotificationSettings();
+  },
+
+  // ─── Sender screener ──────────────────────────────────────────────────────
+  // Senders are bare lower-case addresses, or "@domain" for a whole domain.
+  getScreenerSettings() {
+    const raw = store.screener || {};
+    const list = (value) => (Array.isArray(value) ? value.filter(v => typeof v === 'string') : []);
+    return {
+      enabled: raw.enabled === true,
+      folder: typeof raw.folder === 'string' && raw.folder.trim() ? raw.folder : 'Screener',
+      allowed: list(raw.allowed),
+      blocked: list(raw.blocked),
+      enabledAt: raw.enabledAt || null,
+    };
+  },
+
+  saveScreenerSettings(settings) {
+    const given = Object.fromEntries(Object.entries(settings || {}).filter(([, v]) => v !== undefined));
+    store.screener = { ...this.getScreenerSettings(), ...given };
+    saveStore();
+    return this.getScreenerSettings();
   },
 
   // ─── Registered mobile devices ────────────────────────────────────────────

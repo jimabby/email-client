@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { readJson } from '../lib/storage'
+import { useT } from '../lib/i18n'
 
 interface Command {
   id: string
@@ -21,7 +22,7 @@ interface SavedSearch {
 
 /** Every query word must appear in the label or keywords; earlier hits rank higher. */
 function score(command: Command, query: string): number {
-  const haystack = `${command.label} ${command.keywords || ''} ${command.hint || ''}`.toLowerCase()
+  const haystack = `${command.label} ${command.keywords || ''} ${command.hint || ''} ${command.id.replace(/[:_-]/g, ' ')}`.toLowerCase()
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   let total = 0
   for (const word of words) {
@@ -46,8 +47,9 @@ export function CommandPalette() {
   const {
     setShowCommandPalette, accounts, folders, currentAccountId,
     openCompose, setUnifiedView, setShowDraftsModal, setShowOutboxModal, setShowFollowupsModal,
-    setShowRulesModal, setShowAccountModal, toggleTheme, toggleChat,
+    setShowRulesModal, setShowAccountModal, toggleTheme, toggleChat, setShowScreenerModal,
   } = store
+  const t = useT()
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -62,50 +64,51 @@ export function CommandPalette() {
     const openFolder = (accountId: string, folder: string) =>
       window.dispatchEvent(new CustomEvent('hermes:open-folder', { detail: { accountId, folder } }))
 
-    list.push({ id: 'compose', label: 'New message', hint: 'Ctrl+N', keywords: 'compose write email', run: () => openCompose() })
-    list.push({ id: 'unified', label: 'All inboxes', hint: 'Go to', keywords: 'unified inbox every account', run: () => setUnifiedView(true) })
+    list.push({ id: 'compose', label: t('New message'), hint: 'Ctrl+N', keywords: 'compose write email', run: () => openCompose() })
+    list.push({ id: 'unified', label: t('All inboxes'), hint: t('Go to'), keywords: 'unified inbox every account', run: () => setUnifiedView(true) })
 
     for (const account of accounts) {
-      list.push({ id: `inbox:${account.id}`, label: `Inbox — ${account.email}`, hint: 'Go to', run: () => openFolder(account.id, 'INBOX') })
+      list.push({ id: `inbox:${account.id}`, label: `${t('Inbox')} — ${account.email}`, hint: t('Go to'), run: () => openFolder(account.id, 'INBOX') })
       for (const folder of folders[account.id] || []) {
         if (folder.path === 'INBOX') continue
         list.push({
           id: `folder:${account.id}:${folder.path}`,
-          label: `${folder.name} — ${account.email}`,
-          hint: 'Folder',
+          label: `${t(folder.name)} — ${account.email}`,
+          hint: t('Folder'),
           keywords: folder.path,
           run: () => openFolder(account.id, folder.path),
         })
       }
     }
     if (currentAccountId) {
-      list.push({ id: 'starred', label: 'Starred', hint: 'Go to', run: () => openFolder(currentAccountId, '__starred__') })
-      list.push({ id: 'snoozed', label: 'Snoozed', hint: 'Go to', run: () => openFolder(currentAccountId, '__snoozed__') })
+      list.push({ id: 'starred', label: t('Starred'), hint: t('Go to'), run: () => openFolder(currentAccountId, '__starred__') })
+      list.push({ id: 'snoozed', label: t('Snoozed'), hint: t('Go to'), run: () => openFolder(currentAccountId, '__snoozed__') })
     }
 
     for (const saved of readJson<SavedSearch[]>('hermes-saved-searches', [])) {
       list.push({
         id: `saved:${saved.id}`,
         label: saved.name || saved.query,
-        hint: 'Saved search',
+        hint: t('Saved search'),
         keywords: saved.query,
         run: () => window.dispatchEvent(new CustomEvent('hermes:run-search', { detail: saved })),
       })
     }
 
     list.push(
-      { id: 'drafts', label: 'Drafts', hint: 'Open', run: () => setShowDraftsModal(true) },
-      { id: 'outbox', label: 'Outbox', hint: 'Open', keywords: 'queued scheduled failed', run: () => setShowOutboxModal(true) },
-      { id: 'followups', label: 'Follow-ups', hint: 'Open', keywords: 'reminders no reply', run: () => setShowFollowupsModal(true) },
-      { id: 'rules', label: 'Rules', hint: 'Open', keywords: 'filters automate', run: () => setShowRulesModal(true) },
-      { id: 'settings', label: 'Settings', hint: 'Open', keywords: 'preferences accounts notifications vip quiet import export ai model', run: () => setShowAccountModal(true) },
-      { id: 'refresh', label: 'Refresh list', hint: 'Action', keywords: 'reload sync', run: () => window.dispatchEvent(new CustomEvent('hermes:refresh-list')) },
-      { id: 'theme', label: 'Change theme', hint: 'Action', keywords: 'dark light appearance', run: () => toggleTheme() },
-      { id: 'assistant', label: 'AI assistant', hint: 'Action', keywords: 'chat ask', run: () => toggleChat() },
-      { id: 'shortcuts', label: 'Keyboard shortcuts', hint: '?', keywords: 'help keys', run: () => window.dispatchEvent(new CustomEvent('hermes:toggle-shortcuts')) },
+      { id: 'drafts', label: t('Drafts'), hint: t('Open'), run: () => setShowDraftsModal(true) },
+      { id: 'outbox', label: t('Outbox'), hint: t('Open'), keywords: 'queued scheduled failed', run: () => setShowOutboxModal(true) },
+      { id: 'followups', label: t('Follow-ups'), hint: t('Open'), keywords: 'reminders no reply', run: () => setShowFollowupsModal(true) },
+      { id: 'screener', label: t('Screener'), hint: t('Open'), keywords: 'new senders approve block allow', run: () => setShowScreenerModal(true) },
+      { id: 'rules', label: t('Rules'), hint: t('Open'), keywords: 'filters automate', run: () => setShowRulesModal(true) },
+      { id: 'settings', label: t('Settings'), hint: t('Open'), keywords: 'preferences accounts notifications vip quiet import export ai model', run: () => setShowAccountModal(true) },
+      { id: 'refresh', label: t('Refresh list'), hint: t('Action'), keywords: 'reload sync', run: () => window.dispatchEvent(new CustomEvent('hermes:refresh-list')) },
+      { id: 'theme', label: t('Change theme'), hint: t('Action'), keywords: 'dark light appearance', run: () => toggleTheme() },
+      { id: 'assistant', label: t('AI assistant'), hint: t('Action'), keywords: 'chat ask', run: () => toggleChat() },
+      { id: 'shortcuts', label: t('Keyboard shortcuts'), hint: '?', keywords: 'help keys', run: () => window.dispatchEvent(new CustomEvent('hermes:toggle-shortcuts')) },
     )
     return list
-  }, [accounts, folders, currentAccountId])
+  }, [accounts, folders, currentAccountId, t])
 
   const results = useMemo(() => {
     const trimmed = query.trim()
@@ -118,8 +121,8 @@ export function CommandPalette() {
     // Whatever was typed can always be searched for, across every account.
     ranked.push({
       id: 'search',
-      label: `Search all mail for “${trimmed}”`,
-      hint: 'Search',
+      label: t('Search all mail for “{query}”', { query: trimmed }),
+      hint: t('Search'),
       run: () => window.dispatchEvent(new CustomEvent('hermes:run-search', {
         detail: {
           id: 'palette', name: trimmed, query: trimmed, mode: 'email', attachmentType: '',
@@ -167,7 +170,7 @@ export function CommandPalette() {
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Type a command, folder, or search…"
+            placeholder={t('Type a command, folder, or search…')}
             aria-label="Command"
             role="combobox"
             aria-expanded="true"
@@ -194,7 +197,7 @@ export function CommandPalette() {
               {command.hint && <span className="text-[11px] text-ink-3 flex-shrink-0">{command.hint}</span>}
             </button>
           ))}
-          {!results.length && <p className="px-4 py-6 text-center text-[12.5px] text-ink-3">No matches</p>}
+          {!results.length && <p className="px-4 py-6 text-center text-[12.5px] text-ink-3">{t('No matches')}</p>}
         </div>
       </div>
     </div>

@@ -137,6 +137,15 @@ function handleNewMail(accountId, meta = {}) {
         console.warn('[watch] Muting failed:', err.message);
       }
 
+      // First-time senders wait in the screener instead of the inbox. Neither
+      // an auto-reply nor a notification goes to someone not yet approved.
+      try {
+        const screener = require('./screenerService');
+        for (const id of await screener.screenArrivals(account, fresh.filter(e => !removed.has(e.id)))) removed.add(id);
+      } catch (err) {
+        console.warn('[watch] Screener failed:', err.message);
+      }
+
       const kept = fresh.filter(e => !removed.has(e.id));
       const notable = kept.filter(e => !markedRead.has(e.id));
 

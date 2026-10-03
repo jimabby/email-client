@@ -11,6 +11,7 @@ import { readJson, writeJson } from './lib/storage'
 import { drawUnreadBadge } from './lib/taskbarBadge'
 import { startFlushLoop } from './lib/localOutbox'
 import { accountsApi, aiApi, emailsApi } from './api/client'
+import { useT, t } from './lib/i18n'
 
 const ComposeModal = lazy(() => import('./components/ComposeModal').then(m => ({ default: m.ComposeModal })))
 const AccountModal = lazy(() => import('./components/AccountModal').then(m => ({ default: m.AccountModal })))
@@ -20,6 +21,7 @@ const OutboxModal = lazy(() => import('./components/OutboxModal').then(m => ({ d
 const RulesModal = lazy(() => import('./components/RulesModal').then(m => ({ default: m.RulesModal })))
 const FollowupsModal = lazy(() => import('./components/FollowupsModal').then(m => ({ default: m.FollowupsModal })))
 const CommandPalette = lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
+const ScreenerModal = lazy(() => import('./components/ScreenerModal').then(m => ({ default: m.ScreenerModal })))
 
 // Bridge exposed by the Electron preload script. Absent when running in a
 // plain browser, so every use is optional.
@@ -35,6 +37,7 @@ declare global {
 
 function Notification() {
   const { notification, clearNotification } = useEmailStore()
+  const t = useT()
   if (!notification) return null
 
   const success = notification.type === 'success'
@@ -66,7 +69,7 @@ function Notification() {
       )}
       <button
         onClick={clearNotification}
-        aria-label="Dismiss notification"
+        aria-label={t('Dismiss notification')}
         className="btn-ghost p-1.5 flex-shrink-0"
       >
         <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
@@ -120,8 +123,10 @@ const THEME_LABEL: Record<'system' | 'light' | 'dark', string> = {
   dark: 'Theme: dark',
 }
 
+
 function TopBar() {
   const { themePreference, toggleTheme, setShowAccountModal, isChatOpen, toggleChat, aiConfigured } = useEmailStore()
+  const t = useT()
 
   const chip = 'w-8 h-8 rounded-[10px] flex items-center justify-center btn-ghost'
 
@@ -136,8 +141,8 @@ function TopBar() {
 
       <button
         onClick={() => useEmailStore.getState().setShowCommandPalette(true)}
-        title="Command palette (Ctrl+K)"
-        aria-label="Open command palette"
+        title={t('Command palette (Ctrl+K)')}
+        aria-label={t('Command palette (Ctrl+K)')}
         className="h-8 px-2.5 rounded-[10px] flex items-center gap-2 btn-ghost text-[12px] text-ink-3"
       >
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
@@ -149,8 +154,8 @@ function TopBar() {
 
       <button
         onClick={toggleChat}
-        title="AI Assistant"
-        aria-label={isChatOpen ? 'Close AI Assistant' : 'Open AI Assistant'}
+        title={t('AI Assistant')}
+        aria-label={isChatOpen ? t('Close AI Assistant') : t('Open AI Assistant')}
         className={`${chip} ${isChatOpen ? '!text-ai !bg-ai/12' : ''} ${!aiConfigured ? 'opacity-50' : ''}`}
       >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -165,8 +170,8 @@ function TopBar() {
           the resolved theme, or system mode would be invisible. */}
       <button
         onClick={toggleTheme}
-        title={`${THEME_LABEL[themePreference]} (click to change)`}
-        aria-label={THEME_LABEL[themePreference]}
+        title={t('{theme} (click to change)', { theme: t(THEME_LABEL[themePreference]) })}
+        aria-label={t(THEME_LABEL[themePreference])}
         className={chip}
       >
         {themePreference === 'system' ? <SystemThemeIcon /> : themePreference === 'dark' ? <MoonIcon /> : <SunIcon />}
@@ -174,8 +179,8 @@ function TopBar() {
 
       <button
         onClick={() => setShowAccountModal(true)}
-        title="Settings"
-        aria-label="Open settings"
+        title={t('Settings')}
+        aria-label={t('Settings')}
         className={chip}
       >
         <SettingsIcon />
@@ -183,8 +188,8 @@ function TopBar() {
 
       <button
         onClick={() => window.dispatchEvent(new CustomEvent('hermes:toggle-shortcuts'))}
-        title="Keyboard shortcuts (?)"
-        aria-label="Show keyboard shortcuts"
+        title={t('Keyboard shortcuts (?)')}
+        aria-label={t('Keyboard shortcuts (?)')}
         className={chip}
       >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -231,13 +236,13 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
               <path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
             </svg>
           </div>
-          <h2 className="text-[17px] font-semibold text-ink mb-2 tracking-[-0.01em]">Something went wrong</h2>
+          <h2 className="text-[17px] font-semibold text-ink mb-2 tracking-[-0.01em]">{t('Something went wrong')}</h2>
           <p className="text-[13px] text-ink-2 mb-6 max-w-md leading-relaxed">{this.state.error?.message}</p>
           <button
             onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload() }}
             className="btn-accent px-5 py-2.5 text-[13px] font-semibold rounded-xl"
           >
-            Reload Hermes
+            {t('Reload Hermes')}
           </button>
         </div>
       )
@@ -251,28 +256,33 @@ const CHAT_PANE_KEY = 'hermes-pane-chat'
 
 // ─── Keyboard Shortcuts Help ─────────────────────────────────────────────────
 function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
+  const t = useT()
   const shortcuts = [
-    { key: 'Ctrl+K', desc: 'Command palette' },
-    { key: 'Ctrl+N', desc: 'New message' },
-    { key: '/', desc: 'Search' },
-    { key: 'r', desc: 'Reply' },
-    { key: 'f', desc: 'Forward' },
-    { key: 's', desc: 'Star / unstar' },
-    { key: 'e', desc: 'Archive' },
-    { key: 'u', desc: 'Mark unread' },
-    { key: 'd', desc: 'Delete' },
-    { key: 'Esc', desc: 'Deselect / close' },
-    { key: '?', desc: 'Show shortcuts' },
+    { key: 'Ctrl+K', desc: t('Command palette') },
+    { key: 'Ctrl+N', desc: t('New message') },
+    { key: '/', desc: t('Search') },
+    { key: 'j / k', desc: t('Next / previous message') },
+    { key: '↓ / ↑', desc: t('Next / previous message (list focused)') },
+    { key: 'x', desc: t('Select / deselect message') },
+    { key: 'r', desc: t('Reply') },
+    { key: 'a', desc: t('Reply all') },
+    { key: 'f', desc: t('Forward') },
+    { key: 's', desc: t('Star / unstar') },
+    { key: 'e', desc: t('Archive') },
+    { key: 'u', desc: t('Mark unread') },
+    { key: 'd', desc: t('Delete') },
+    { key: 'Esc', desc: t('Deselect / close') },
+    { key: '?', desc: t('Show shortcuts') },
   ]
   return (
     <div data-hermes-shortcuts className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[100] flex items-center justify-center animate-fade" onClick={onClose}>
       <div
         onClick={e => e.stopPropagation()}
-        className="glass-elevated rounded-3xl w-[360px] overflow-hidden animate-rise"
+        className="glass-elevated rounded-3xl w-[380px] max-h-[85vh] overflow-y-auto animate-rise"
       >
         <div className="flex items-center justify-between px-5 pt-4 pb-3">
-          <h2 className="font-semibold text-[15px] text-ink tracking-[-0.01em]">Keyboard shortcuts</h2>
-          <button onClick={onClose} aria-label="Close" className="btn-ghost p-1.5">
+          <h2 className="font-semibold text-[15px] text-ink tracking-[-0.01em]">{t('Keyboard shortcuts')}</h2>
+          <button onClick={onClose} aria-label={t('Close')} className="btn-ghost p-1.5">
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
           </button>
         </div>
@@ -332,48 +342,74 @@ function useKeyboardShortcuts() {
         return
       }
 
+      // Buttons are found by data-action, never by their (translated) labels.
+      const clickAction = (action: string) =>
+        (document.querySelector(`[data-action="${action}"]`) as HTMLButtonElement | null)?.click()
+      const plain = !e.ctrlKey && !e.metaKey && !e.altKey
+
       // / — Focus search
       if (e.key === '/') {
         e.preventDefault()
-        const searchBtn = document.querySelector('[title="Search"]') as HTMLButtonElement
-        searchBtn?.click()
+        clickAction('search')
+        return
+      }
+
+      // j / k — next / previous message, in the order the list shows them.
+      if ((e.key === 'j' || e.key === 'k') && plain) {
+        e.preventDefault()
+        window.dispatchEvent(new CustomEvent('hermes:navigate', { detail: { delta: e.key === 'j' ? 1 : -1 } }))
+        return
+      }
+
+      // x — tick the current message for a bulk action
+      if (e.key === 'x' && selectedEmail && plain) {
+        e.preventDefault()
+        useEmailStore.getState().toggleEmailSelection(selectedEmail.id)
         return
       }
 
       // r — Reply (when email selected)
-      if (e.key === 'r' && selectedEmail && !e.ctrlKey && !e.metaKey) {
+      if (e.key === 'r' && selectedEmail && plain) {
         e.preventDefault()
-        const replyBtn = document.querySelector('[aria-label="Reply to email"]') as HTMLButtonElement
-        replyBtn?.click()
+        clickAction('reply')
+        return
+      }
+
+      // a — Reply all
+      if (e.key === 'a' && selectedEmail && plain) {
+        e.preventDefault()
+        clickAction('reply-all')
         return
       }
 
       // f — Forward
-      if (e.key === 'f' && selectedEmail && !e.ctrlKey && !e.metaKey) {
+      if (e.key === 'f' && selectedEmail && plain) {
         e.preventDefault()
-        const fwdBtn = document.querySelector('[aria-label="Forward email"]') as HTMLButtonElement
-        fwdBtn?.click()
+        clickAction('forward')
         return
       }
 
       // d or Delete — Delete
-      if ((e.key === 'd' || e.key === 'Delete') && selectedEmail && !e.ctrlKey && !e.metaKey) {
+      if ((e.key === 'd' || e.key === 'Delete') && selectedEmail && plain) {
         e.preventDefault()
-        const delBtn = document.querySelector('[aria-label="Delete email"]') as HTMLButtonElement
-        delBtn?.click()
+        clickAction('delete')
         return
       }
 
       // u — Mark unread
-      if (e.key === 'u' && selectedEmail && !e.ctrlKey && !e.metaKey) {
+      if (e.key === 'u' && selectedEmail && plain) {
         e.preventDefault()
-        const btn = document.querySelector('[aria-label="Mark as unread"]') as HTMLButtonElement
-        btn?.click()
+        const { accountId, id, folder } = selectedEmail
+        emailsApi.markUnread(accountId, id, folder).then(() => {
+          useEmailStore.getState().markEmailUnread(id)
+          useEmailStore.getState().setSelectedEmail(null)
+          useEmailStore.getState().showNotification('success', t('Marked as unread'))
+        }).catch(() => useEmailStore.getState().showNotification('error', t('Failed to mark as unread')))
         return
       }
 
       // s — Star/unstar
-      if (e.key === 's' && selectedEmail && !e.ctrlKey && !e.metaKey) {
+      if (e.key === 's' && selectedEmail && plain) {
         e.preventDefault()
         useEmailStore.getState().toggleStarLocal(selectedEmail.id)
         emailsApi.star(selectedEmail.accountId, selectedEmail.id, !selectedEmail.starred, selectedEmail.folder).catch(() => {
@@ -383,15 +419,10 @@ function useKeyboardShortcuts() {
       }
 
       // e — Archive (move to the account's resolved archive folder)
-      if (e.key === 'e' && selectedEmail && !e.ctrlKey && !e.metaKey) {
+      if (e.key === 'e' && selectedEmail && plain) {
         e.preventDefault()
-        const archiveFolder = useEmailStore.getState().getArchiveFolder(selectedEmail.accountId)
-        emailsApi.move(selectedEmail.accountId, selectedEmail.id, archiveFolder, selectedEmail.folder).then(() => {
-          useEmailStore.getState().removeEmail(selectedEmail.id)
-          useEmailStore.getState().showNotification('success', 'Archived')
-        }).catch(() => {
-          useEmailStore.getState().showNotification('error', 'Failed to archive')
-        })
+        // The reader's own Archive button carries the Undo.
+        clickAction('archive')
         return
       }
 
@@ -413,6 +444,7 @@ export default function App() {
     isComposeOpen, composeNonce, showAccountModal, showDraftsModal, showOutboxModal, showRulesModal,
     setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport,
     setSnoozes, isChatOpen, showFollowupsModal, showCommandPalette, setFollowups, setMutedThreads,
+    showScreenerModal,
   } = useEmailStore()
   useKeyboardShortcuts()
   const [showShortcuts, setShowShortcuts] = useState(false)
@@ -544,7 +576,7 @@ export default function App() {
     // Messages composed while the backend was unreachable are held in the
     // renderer and handed over as soon as it answers again.
     const stopFlush = startFlushLoop((sent) => {
-      showNotification('success', `Sent ${sent} message${sent === 1 ? '' : 's'} that were waiting to go out`)
+      showNotification('success', t(sent === 1 ? 'Sent {count} message that was waiting to go out' : 'Sent {count} messages that were waiting to go out', { count: sent }))
     })
 
     return () => { clearInterval(reportPoll); clearInterval(snoozePoll); clearInterval(followupPoll); stopFlush() }
@@ -561,6 +593,7 @@ export default function App() {
       if (!target) return
       if (target.view === 'outbox') { useEmailStore.getState().setShowOutboxModal(true); return }
       if (target.view === 'followups') { useEmailStore.getState().setShowFollowupsModal(true); return }
+      if (target.view === 'screener') { useEmailStore.getState().setShowScreenerModal(true); return }
       if (!target.accountId) return
 
       const store = useEmailStore.getState()
@@ -581,13 +614,13 @@ export default function App() {
           }
         }
       } catch {
-        showNotification('error', 'Could not open that message')
+        showNotification('error', t('Could not open that message'))
       }
     })
 
     const unsubscribeCompose = bridge.on('hermes:compose', () => useEmailStore.getState().openCompose())
     const unsubscribeDown = bridge.on('hermes:backend-down', () =>
-      showNotification('error', 'The Hermes background service stopped. Restart the app to reconnect.', { timeoutMs: 0 })
+      showNotification('error', t('The Hermes background service stopped. Restart the app to reconnect.'), { timeoutMs: 0 })
     )
 
     // Windows needs an image for the taskbar overlay and the main process has
@@ -608,7 +641,7 @@ export default function App() {
     const error = params.get('error')
 
     if (success && authType) {
-      showNotification('success', `${authType === 'gmail' ? 'Gmail' : 'Outlook'} account connected!`)
+      showNotification('success', t('{provider} account connected!', { provider: authType === 'gmail' ? 'Gmail' : 'Outlook' }))
       window.history.replaceState({}, '', '/')
       accountsApi.list().then(accounts => {
         setAccounts(accounts)
@@ -641,7 +674,7 @@ export default function App() {
               <EmailList />
             </div>
 
-            <Handle onMouseDown={startDrag('list', listPaneWidth)} title="Resize inbox and email content" />
+            <Handle onMouseDown={startDrag('list', listPaneWidth)} title={t('Resize inbox and email content')} />
 
             <div id="email-content-host" className="relative flex-1 min-w-0 overflow-hidden glass rounded-2xl shadow-pane rim-top">
               <EmailViewer />
@@ -650,7 +683,7 @@ export default function App() {
 
           {isChatOpen && (
             <>
-              <Handle onMouseDown={startDrag('chat', chatPaneWidth)} title="Resize AI assistant" />
+              <Handle onMouseDown={startDrag('chat', chatPaneWidth)} title={t('Resize AI assistant')} />
               <div
                 style={{ width: `${chatPaneWidth}px` }}
                 className="flex-shrink-0 overflow-hidden glass rounded-2xl shadow-pane rim-top animate-rise"
@@ -669,6 +702,7 @@ export default function App() {
           {showRulesModal && <RulesModal />}
           {showFollowupsModal && <FollowupsModal />}
           {showCommandPalette && <CommandPalette />}
+          {showScreenerModal && <ScreenerModal />}
           <DailyReportModal />
         </Suspense>
         <Notification />

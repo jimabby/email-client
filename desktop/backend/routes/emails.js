@@ -15,6 +15,7 @@ const downloadTickets = require('../services/downloadTicketService');
 const pushService = require('../services/pushService');
 const followupService = require('../services/followupService');
 const importService = require('../services/importService');
+const screenerService = require('../services/screenerService');
 const { randomUUID: uuidv4 } = require('crypto');
 
 function getService(accountType) {
@@ -122,6 +123,10 @@ function safeInlineType(contentType) {
  */
 function sendAttachment(res, attachment, index, wantsInlineRequested) {
   const filename = String(attachment.filename || `attachment-${index}`).replace(/["\r\n]/g, '');
+  // Node refuses a header value with characters beyond Latin-1, so a name like
+  // "报告.pdf" made setHeader throw and the download fail. The quoted form gets
+  // an ASCII stand-in; filename* carries the real name for every modern client.
+  const asciiFilename = filename.replace(/[^\x20-\x7e]/g, '_');
   // The declared type comes from the sender. Serving it back verbatim with
   // Content-Disposition: inline would let a message render attacker HTML on
   // this origin — the same origin as the app, which holds the API token. Only
@@ -132,7 +137,7 @@ function sendAttachment(res, attachment, index, wantsInlineRequested) {
 
   res.setHeader('Content-Type', wantsInline ? declared : 'application/octet-stream');
   res.setHeader('Content-Length', attachment.content.length);
-  res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.setHeader('Content-Disposition', `${disposition}; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
   // Defence in depth: even for an allowlisted type, deny the response its own
   // origin, scripts, and plugins, so a parser quirk cannot become execution.
   res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; object-src 'none'");
@@ -627,6 +632,38 @@ router.delete('/followups/:id', (req, res) => {
   res.json({ success: store.removeFollowup(req.params.id) });
 });
 
+// ─── Sender screener ────────────────────────────────────────────────────────
+
+// GET /api/emails/screener — settings plus everything waiting, by sender.
+router.get('/screener', async (req, res) => {
+  try {
+    res.json(await screenerService.listPending());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/emails/screener  Body: { enabled?, folder? }
+router.put('/screener', (req, res) => {
+  res.json(screenerService.configure(req.body || {}));
+});
+
+// POST /api/emails/screener/decide  Body: { sender, decision: 'allow'|'block' }
+router.post('/screener/decide', async (req, res) => {
+  try {
+    const result = await screenerService.decide(req.body || {});
+    invalidateCounts();
+    res.json({ success: result.failed === 0, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/emails/screener/senders  Body: { sender } — undo a decision.
+router.delete('/screener/senders', (req, res) => {
+  res.json(screenerService.forget(req.body?.sender || req.query.sender));
+});
+
 // ─── Muted conversations ────────────────────────────────────────────────────
 
 router.get('/muted', (req, res) => res.json(store.getMutedThreads()));
@@ -691,6 +728,7 @@ router.get('/settings-export', (req, res) => {
       accountEmails: (accountIds || []).map(byEmail).filter(Boolean),
     },
     notifications: store.getNotificationSettings(),
+    screener: (({ enabled, folder, allowed, blocked }) => ({ enabled, folder, allowed, blocked }))(store.getScreenerSettings()),
   });
 });
 
@@ -771,6 +809,17 @@ router.post('/settings-import', (req, res) => {
         end: time(n.quietHours?.end, '07:00'),
         allowVips: n.quietHours?.allowVips !== false,
       },
+    });
+  }
+
+  if (data.screener && typeof data.screener === 'object') {
+    const clean = (list) => (Array.isArray(list) ? list : []).map(screenerService.normalizeSender).filter(Boolean).slice(0, 5000);
+    store.saveScreenerSettings({
+      // Like the auto-responder, never switched on as a side effect of a
+      // restore — it would start moving mail out of the inbox unannounced.
+      folder: typeof data.screener.folder === 'string' && data.screener.folder.trim() ? data.screener.folder.trim().slice(0, 100) : undefined,
+      allowed: clean(data.screener.allowed),
+      blocked: clean(data.screener.blocked),
     });
   }
 
@@ -1177,7 +1226,8 @@ router.post('/:accountId/send', async (req, res) => {
     to, cc, bcc, subject, text, html, attachments, sendAt, undoWindowSec,
     inReplyTo, references, threadId, replyToEmailId, replyToFolder, sendAs, followUpDays,
   } = req.body;
-  if (!to || !subject) return res.status(400).json({ error: 'to and subject are required' });
+  // An empty subject is legal mail; the composer asks before sending one.
+  if (!String(to || '').trim()) return res.status(400).json({ error: 'At least one recipient is required' });
   if (followUpDays !== undefined && followUpDays !== null) {
     const days = Number(followUpDays);
     if (!Number.isFinite(days) || days <= 0 || days > 60) {
@@ -1703,23 +1753,69 @@ async function runBulk(emailIds, worker, accountType = 'imap') {
   return results;
 }
 
+/**
+ * IMAP bulk: one UID-set command per source folder instead of one command per
+ * message. `op(folder, uids)` does the provider work; `after(id)` runs for
+ * every message that succeeded. Same result shape as runBulk.
+ */
+async function runImapBulk(emailIds, fallbackFolder, op, after) {
+  const results = { succeeded: 0, failed: 0, errors: [], skipped: 0 };
+  let ids = emailIds;
+  if (ids.length > BULK_MAX_IDS) {
+    results.skipped = ids.length - BULK_MAX_IDS;
+    ids = ids.slice(0, BULK_MAX_IDS);
+  }
+
+  const byFolder = new Map();
+  for (const id of ids) {
+    const folder = imapFolder(id, fallbackFolder);
+    if (!byFolder.has(folder)) byFolder.set(folder, []);
+    byFolder.get(folder).push(id);
+  }
+
+  for (const [folder, group] of byFolder) {
+    try {
+      await op(folder, group.map(imapUid));
+      results.succeeded += group.length;
+      for (const id of group) after(id);
+    } catch (err) {
+      results.failed += group.length;
+      if (results.errors.length < 5) results.errors.push(String(err?.message || err));
+    }
+  }
+  return results;
+}
+
+/** Bulk action dispatch: batched on IMAP, bounded-concurrency elsewhere. */
+function bulk(account, emailIds, folder, { imap, each, after }) {
+  if (account.type === 'imap') return runImapBulk(emailIds, folder, imap, after);
+  return runBulk(emailIds, async (emailId) => { await each(emailId); after(emailId); }, account.type);
+}
+
+function bulkIds(req, res) {
+  const { emailIds } = req.body || {};
+  if (!Array.isArray(emailIds) || !emailIds.length) {
+    res.status(400).json({ error: 'emailIds array required' });
+    return null;
+  }
+  return emailIds.map(String);
+}
+
 // POST /api/emails/:accountId/bulk/delete
 router.post('/:accountId/bulk/delete', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
-
-  const { emailIds } = req.body;
-  if (!Array.isArray(emailIds) || !emailIds.length) return res.status(400).json({ error: 'emailIds array required' });
+  const emailIds = bulkIds(req, res);
+  if (!emailIds) return;
 
   const folder = req.query.folder || 'INBOX';
   const service = getService(account.type);
 
-  const results = await runBulk(emailIds, async (emailId) => {
-    if (account.type === 'imap') await service.deleteEmail(account, imapUid(emailId), imapFolder(emailId, folder));
-    else await service.deleteEmail(account, gmailOrOutlookId(emailId), folder);
-    searchIndex.remove(emailId);
-    store.removeSnooze(emailId);
-  }, account.type);
+  const results = await bulk(account, emailIds, folder, {
+    imap: (from, uids) => service.bulkDelete(account, uids, from),
+    each: (emailId) => service.deleteEmail(account, gmailOrOutlookId(emailId), folder),
+    after: (emailId) => { searchIndex.remove(emailId); forgetSnooze(emailId); },
+  });
 
   invalidateCounts();
   res.json({ success: results.failed === 0 && !results.skipped, ...results });
@@ -1729,19 +1825,18 @@ router.post('/:accountId/bulk/delete', async (req, res) => {
 router.post('/:accountId/bulk/read', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
-
-  const { emailIds } = req.body;
-  if (!Array.isArray(emailIds) || !emailIds.length) return res.status(400).json({ error: 'emailIds array required' });
+  const emailIds = bulkIds(req, res);
+  if (!emailIds) return;
 
   const folder = req.query.folder || 'INBOX';
   const service = getService(account.type);
   if (!service.markAsRead) return res.json({ success: true, succeeded: emailIds.length, failed: 0, errors: [] });
 
-  const results = await runBulk(emailIds, async (emailId) => {
-    if (account.type === 'imap') await service.markAsRead(account, imapUid(emailId), imapFolder(emailId, folder));
-    else await service.markAsRead(account, gmailOrOutlookId(emailId));
-    searchIndex.setFlags(emailId, { read: true });
-  }, account.type);
+  const results = await bulk(account, emailIds, folder, {
+    imap: (from, uids) => service.bulkSetFlag(account, uids, from, '\\Seen', true),
+    each: (emailId) => service.markAsRead(account, gmailOrOutlookId(emailId)),
+    after: (emailId) => searchIndex.setFlags(emailId, { read: true }),
+  });
 
   invalidateCounts();
   res.json({ success: results.failed === 0 && !results.skipped, ...results });
@@ -1751,18 +1846,17 @@ router.post('/:accountId/bulk/read', async (req, res) => {
 router.post('/:accountId/bulk/unread', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
-
-  const { emailIds } = req.body;
-  if (!Array.isArray(emailIds) || !emailIds.length) return res.status(400).json({ error: 'emailIds array required' });
+  const emailIds = bulkIds(req, res);
+  if (!emailIds) return;
 
   const folder = req.query.folder || 'INBOX';
   const service = getService(account.type);
 
-  const results = await runBulk(emailIds, async (emailId) => {
-    if (account.type === 'imap') await service.markAsUnread(account, imapUid(emailId), imapFolder(emailId, folder));
-    else await service.markAsUnread(account, gmailOrOutlookId(emailId));
-    searchIndex.setFlags(emailId, { read: false });
-  }, account.type);
+  const results = await bulk(account, emailIds, folder, {
+    imap: (from, uids) => service.bulkSetFlag(account, uids, from, '\\Seen', false),
+    each: (emailId) => service.markAsUnread(account, gmailOrOutlookId(emailId)),
+    after: (emailId) => searchIndex.setFlags(emailId, { read: false }),
+  });
 
   invalidateCounts();
   res.json({ success: results.failed === 0 && !results.skipped, ...results });
@@ -1772,21 +1866,21 @@ router.post('/:accountId/bulk/unread', async (req, res) => {
 router.post('/:accountId/bulk/move', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
-
-  const { emailIds, folder: toFolder } = req.body;
-  if (!Array.isArray(emailIds) || !emailIds.length) return res.status(400).json({ error: 'emailIds array required' });
+  const emailIds = bulkIds(req, res);
+  if (!emailIds) return;
+  const toFolder = req.body.folder;
   if (!toFolder) return res.status(400).json({ error: 'folder is required' });
 
   const sourceFolder = req.query.folder || 'INBOX';
   const service = getService(account.type);
 
-  const results = await runBulk(emailIds, async (emailId) => {
-    if (account.type === 'imap') await service.moveEmail(account, imapUid(emailId), imapFolder(emailId, sourceFolder), toFolder);
-    else if (account.type === 'gmail') await service.moveEmail(account, gmailOrOutlookId(emailId), sourceFolder, toFolder);
-    else await service.moveEmail(account, gmailOrOutlookId(emailId), toFolder);
-    searchIndex.remove(emailId);
-    forgetSnooze(emailId);
-  }, account.type);
+  const results = await bulk(account, emailIds, sourceFolder, {
+    imap: (from, uids) => service.bulkMove(account, uids, from, toFolder),
+    each: (emailId) => (account.type === 'gmail'
+      ? service.moveEmail(account, gmailOrOutlookId(emailId), sourceFolder, toFolder)
+      : service.moveEmail(account, gmailOrOutlookId(emailId), toFolder)),
+    after: (emailId) => { searchIndex.remove(emailId); forgetSnooze(emailId); },
+  });
 
   invalidateCounts();
   res.json({ success: results.failed === 0 && !results.skipped, ...results });

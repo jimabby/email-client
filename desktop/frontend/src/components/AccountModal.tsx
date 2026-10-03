@@ -5,6 +5,7 @@ import { NotificationSettings } from './NotificationSettings'
 import { AiModelPicker } from './AiModelPicker'
 import { accountsApi, aiApi, emailsApi } from '../api/client'
 import type { Account, Alias, MailTemplate } from '../types/email'
+import { useT, useLanguageStore, LANGUAGE_NAMES, type LanguagePreference } from '../lib/i18n'
 
 type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature' | 'productivity' | 'notifications' | 'privacy' | 'away'
 
@@ -57,7 +58,21 @@ export function AccountModal() {
     signature, setSignature, accounts, accountSignatures, setAccountSignature,
     setShowRulesModal, setAliases,
     gravatarEnabled, setGravatarEnabled, theme, toggleTheme,
+    setAccounts, setShowScreenerModal,
   } = useEmailStore()
+  const t = useT()
+  const languagePreference = useLanguageStore(s => s.preference)
+  const setLanguagePreference = useLanguageStore(s => s.setPreference)
+
+  // IMAP accounts: whether Hermes files a copy of sent mail in Sent.
+  const setSentCopy = async (account: Account, value: boolean | null) => {
+    try {
+      const { account: updated } = await accountsApi.setSaveSentCopy(account.id, value)
+      setAccounts(useEmailStore.getState().accounts.map(a => (a.id === account.id ? { ...a, ...updated } : a)))
+    } catch (err) {
+      showNotification('error', (err as any)?.response?.data?.error || t('Could not change that setting'))
+    }
+  }
   const [tab, setTab] = useState<Tab>('imap')
   const [preset, setPreset] = useState('Gmail (App Password)')
   const [isLoading, setIsLoading] = useState(false)
@@ -156,23 +171,23 @@ export function AccountModal() {
   }
 
   const tabs = [
-    { id: 'imap' as Tab, label: 'IMAP / SMTP', sub: 'Any provider' },
+    { id: 'imap' as Tab, label: 'IMAP / SMTP', sub: t('Any provider') },
     { id: 'gmail' as Tab, label: 'Gmail', sub: 'OAuth' },
     { id: 'outlook' as Tab, label: 'Outlook', sub: 'OAuth' },
     { id: 'ai' as Tab, label: 'AI', sub: 'Claude / GPT / Gemini' },
-    { id: 'signature' as Tab, label: 'Signature', sub: 'Email footer' },
-    { id: 'productivity' as Tab, label: 'Rules & Templates', sub: 'Automate mail' },
-    { id: 'notifications' as Tab, label: 'Notifications', sub: 'VIPs, quiet hours' },
-    { id: 'privacy' as Tab, label: 'Privacy & Appearance', sub: 'Tracking, theme' },
-    { id: 'away' as Tab, label: 'Away & Import/Export', sub: 'Auto-reply, backup' },
+    { id: 'signature' as Tab, label: t('Signature'), sub: t('Email footer') },
+    { id: 'productivity' as Tab, label: t('Rules & Templates'), sub: t('Automate mail') },
+    { id: 'notifications' as Tab, label: t('Notifications'), sub: t('VIPs, quiet hours') },
+    { id: 'privacy' as Tab, label: t('Privacy & Appearance'), sub: t('Tracking, theme, language') },
+    { id: 'away' as Tab, label: t('Away & Import/Export'), sub: t('Auto-reply, backup') },
   ]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-md p-4 animate-fade">
       <div className="glass-elevated rounded-3xl w-[600px] max-h-[90vh] flex flex-col overflow-hidden animate-rise">
         <div className="flex items-center justify-between px-6 py-4 border-b border-line ">
-          <h2 className="text-base font-semibold text-ink ">Settings</h2>
-          <button onClick={() => setShowAccountModal(false)} className="btn-ghost w-8 h-8 flex items-center justify-center">
+          <h2 className="text-base font-semibold text-ink ">{t('Settings')}</h2>
+          <button onClick={() => setShowAccountModal(false)} aria-label={t('Close')} className="btn-ghost w-8 h-8 flex items-center justify-center">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 2l12 12M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
         </div>
@@ -181,30 +196,30 @@ export function AccountModal() {
         <div className="flex flex-1 min-h-0">
           {/* Left nav */}
           <div className="w-44 flex-shrink-0 border-r border-line/40 p-2 flex flex-col gap-0.5">
-            <div className="text-[9px] font-bold text-ink-3 uppercase tracking-widest px-2 py-1.5">Add Account</div>
-            {tabs.filter(t => ['imap','gmail','outlook'].includes(t.id)).map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)}
+            <div className="text-[9px] font-bold text-ink-3 uppercase tracking-widest px-2 py-1.5">{t('Add Account')}</div>
+            {tabs.filter(item => ['imap','gmail','outlook'].includes(item.id)).map(item => (
+              <button key={item.id} onClick={() => setTab(item.id)}
                 className={`w-full flex flex-col items-start px-3 py-2 rounded-lg text-left transition-colors
-                  ${tab === t.id
+                  ${tab === item.id
                     ? 'bg-ink/8 text-ink font-medium'
                     : 'text-ink-2 hover:bg-ink/5 hover:text-ink'
                   }`}
               >
-                <span className="text-xs font-medium">{t.label}</span>
-                <span className="text-[10px] opacity-60 mt-0.5">{t.sub}</span>
+                <span className="text-xs font-medium">{item.label}</span>
+                <span className="text-[10px] opacity-60 mt-0.5">{item.sub}</span>
               </button>
             ))}
-            <div className="mt-2 mb-0.5 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em] px-2 py-1.5">Preferences</div>
-            {tabs.filter(t => ['ai','signature','productivity','notifications','privacy','away'].includes(t.id)).map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)}
+            <div className="mt-2 mb-0.5 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em] px-2 py-1.5">{t('Preferences')}</div>
+            {tabs.filter(item => ['ai','signature','productivity','notifications','privacy','away'].includes(item.id)).map(item => (
+              <button key={item.id} onClick={() => setTab(item.id)}
                 className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors
-                  ${tab === t.id
+                  ${tab === item.id
                     ? 'bg-ink/8 text-ink font-medium'
                     : 'text-ink-2 hover:bg-ink/5 hover:text-ink'
                   }`}
               >
-                <span className="text-xs font-medium flex-1">{t.label}</span>
-                {t.id === 'ai' && aiConfigured && <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />}
+                <span className="text-xs font-medium flex-1">{item.label}</span>
+                {item.id === 'ai' && aiConfigured && <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />}
               </button>
             ))}
           </div>
@@ -558,16 +573,33 @@ export function AccountModal() {
               </section>
 
               <section className="border-t border-line/40 pt-5">
-                <h3 className="text-[15px] font-semibold text-ink mb-1 tracking-[-0.01em]">Appearance</h3>
+                <h3 className="text-[15px] font-semibold text-ink mb-1 tracking-[-0.01em]">{t('Appearance')}</h3>
                 <p className="text-[12.5px] text-ink-3 mb-4 leading-relaxed">
-                  Also available from the moon icon in the title bar.
+                  {t('Also available from the moon icon in the title bar.')}
                 </p>
                 <Toggle
                   checked={theme === 'dark'}
                   onChange={() => toggleTheme()}
-                  label="Dark appearance"
-                  hint={theme === 'dark' ? 'Dark' : 'Light'}
+                  label={t('Dark appearance')}
+                  hint={theme === 'dark' ? t('Dark') : t('Light')}
                 />
+              </section>
+
+              <section className="border-t border-line/40 pt-5">
+                <h3 className="text-[15px] font-semibold text-ink mb-1 tracking-[-0.01em]">{t('Language')}</h3>
+                <p className="text-[12.5px] text-ink-3 mb-3 leading-relaxed">
+                  {t('The language of Hermes itself. Your mail is never translated.')}
+                </p>
+                <select
+                  value={languagePreference}
+                  onChange={e => setLanguagePreference(e.target.value as LanguagePreference)}
+                  className={inputCls}
+                  aria-label={t('Language')}
+                >
+                  <option value="system">{t('Match system')}</option>
+                  <option value="en">{LANGUAGE_NAMES.en}</option>
+                  <option value="zh">{LANGUAGE_NAMES.zh}</option>
+                </select>
               </section>
             </div>
           )}
@@ -575,7 +607,46 @@ export function AccountModal() {
           {tab === 'productivity' && (
             <div className="space-y-6">
               <section>
-                <h3 className="text-sm font-semibold text-ink mb-1">Mailbox rules</h3>
+                <h3 className="text-sm font-semibold text-ink mb-1">{t('Screener')}</h3>
+                <p className="text-[11px] text-ink-3 mb-3">
+                  {t('Hold mail from first-time senders for approval before it reaches your inbox.')}
+                </p>
+                <button
+                  onClick={() => { setShowAccountModal(false); setShowScreenerModal(true) }}
+                  className="px-3 py-2 rounded-md bg-accent text-xs font-bold text-[#201500] hover:bg-accent transition-colors"
+                >
+                  {t('Open screener')}
+                </button>
+              </section>
+
+              {accounts.some(a => a.type === 'imap') && (
+                <section className="border-t border-line pt-5">
+                  <h3 className="text-sm font-semibold text-ink mb-1">{t('Saved copies of sent mail')}</h3>
+                  <p className="text-[11px] text-ink-3 mb-2">
+                    {t('Most IMAP servers do not keep a copy of what you send, so Hermes saves one to the Sent folder. Turn it off for a server that already files its own, or every message will appear twice.')}
+                  </p>
+                  {accounts.filter(a => a.type === 'imap').map(acc => (
+                    <div key={acc.id} className="flex items-center gap-2">
+                      <div className="flex-1 min-w-0">
+                        <Toggle
+                          checked={acc.sentCopyEffective !== false}
+                          onChange={(next) => setSentCopy(acc, next)}
+                          label={acc.email}
+                          hint={acc.saveSentCopy === null || acc.saveSentCopy === undefined ? t('Automatic for this server') : t('Set by you')}
+                        />
+                      </div>
+                      {acc.saveSentCopy !== null && acc.saveSentCopy !== undefined && (
+                        <button onClick={() => setSentCopy(acc, null)} className="text-[11px] text-info hover:underline flex-shrink-0">
+                          {t('Reset')}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </section>
+              )}
+
+              <section className="border-t border-line pt-5">
+                <h3 className="text-sm font-semibold text-ink mb-1">{t('Mailbox rules')}</h3>
                 <p className="text-[11px] text-ink-3 mb-3">
                   Rules run on the server as mail arrives, with multiple conditions and actions per rule.
                 </p>
@@ -583,7 +654,7 @@ export function AccountModal() {
                   onClick={() => { setShowAccountModal(false); setShowRulesModal(true) }}
                   className="px-3 py-2 rounded-md bg-accent text-xs font-bold text-[#201500] hover:bg-accent transition-colors"
                 >
-                  Open rules editor
+                  {t('Open rules editor')}
                 </button>
               </section>
 

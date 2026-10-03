@@ -3,6 +3,7 @@ import { useEmailStore } from '../store/emailStore'
 import { accountsApi, emailsApi } from '../api/client'
 import { promptDialog, confirmDialog } from './DialogHost'
 import * as localOutbox from '../lib/localOutbox'
+import { useT, t as translate } from '../lib/i18n'
 
 const InboxIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 10h3l1.5 2h5L12 10h3V13a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M1 10V4a1 1 0 011-1h12a1 1 0 011 1v6" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
 const SentIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 2.5L7 9M13.5 2.5L9 14l-2-5-5-2 11.5-4.5z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -13,6 +14,7 @@ const SnoozeIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="n
 const FolderIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
 const OutboxIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 10h3l1.5 2h5L12 10h3v3a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M8 8V1M5.5 3.5L8 1l2.5 2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
 const RulesIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="13" cy="11" r="2" stroke="currentColor" strokeWidth="1.2"/></svg>
+const ScreenerIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="6.5" cy="5" r="2.5" stroke="currentColor" strokeWidth="1.3"/><path d="M1.5 13.5c.4-2.6 2.4-4.2 5-4.2 1 0 1.9.2 2.6.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M11 10.5l1.5 1.5 2.5-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
 const StarIcon = ({ filled }: { filled?: boolean }) => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? 'currentColor' : 'none'} className="text-accent">
     <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
@@ -78,8 +80,8 @@ function NavItem({ icon, label, active, badge = 0, badgeTone = 'accent', onClick
       {onRename && (
         <button
           onClick={(e) => { e.stopPropagation(); onRename() }}
-          title={`Rename ${label}`}
-          aria-label={`Rename ${label}`}
+          title={translate('Rename {name}', { name: label })}
+          aria-label={translate('Rename {name}', { name: label })}
           className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-ink-3
                      opacity-0 group-hover/nav:opacity-100 focus-visible:opacity-100
                      hover:text-ink hover:bg-ink/8 transition-all"
@@ -113,7 +115,10 @@ export function Sidebar() {
     setUnreadCounts, getUnreadCount, outbox, setOutbox, setShowOutboxModal, setShowRulesModal,
     unifiedView, setUnifiedView, showNotification,
     followups, setShowFollowupsModal,
+    screenerPending, setScreenerPending, setShowScreenerModal,
   } = useEmailStore()
+  const t = useT()
+  const [screenerOn, setScreenerOn] = useState(false)
   const dueFollowups = followups.filter(f => f.status === 'due').length
   const waitingFollowups = followups.filter(f => f.status === 'waiting').length
 
@@ -158,17 +163,17 @@ export function Sidebar() {
         return
       }
       const password = await promptDialog({
-        title: `Reconnect ${account.email}`,
-        label: 'The server no longer accepts the saved password. Enter the current one (or a new app password).',
-        confirmLabel: 'Reconnect',
+        title: t('Reconnect {email}', { email: account.email }),
+        label: t('The server no longer accepts the saved password. Enter the current one (or a new app password).'),
+        confirmLabel: t('Reconnect'),
         secret: true,
       })
       if (!password) return
       const { account: updated } = await accountsApi.updatePassword(id, password)
       setAccounts(accounts.map(a => a.id === id ? { ...a, ...updated, authError: null } : a))
-      showNotification('success', `${account.email} reconnected`)
+      showNotification('success', t('{email} reconnected', { email: account.email }))
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not reconnect')
+      showNotification('error', err instanceof Error ? err.message : t('Could not reconnect'))
     }
   }
 
@@ -187,6 +192,19 @@ export function Sidebar() {
     const timer = setInterval(refresh, 60_000)
     return () => clearInterval(timer)
   }, [accounts, folders])
+
+  // Senders waiting in the screener. Each check lists a provider folder per
+  // account, so it runs on a slow poll and only while the screener is on.
+  useEffect(() => {
+    if (!accounts.length) return
+    const refresh = () => emailsApi.getScreener()
+      .then(state => { setScreenerOn(state.enabled); setScreenerPending(state.pending.length) })
+      .catch(() => {})
+    refresh()
+    const timer = setInterval(refresh, 120_000)
+    window.addEventListener('hermes:screener-changed', refresh)
+    return () => { clearInterval(timer); window.removeEventListener('hermes:screener-changed', refresh) }
+  }, [accounts.length])
 
   const [parkedCount, setParkedCount] = useState(0)
   useEffect(() => localOutbox.subscribe(items => setParkedCount(items.length)), [])
@@ -243,9 +261,9 @@ export function Sidebar() {
     e.stopPropagation()
     const account = accounts.find(a => a.id === id)
     const ok = await confirmDialog({
-      title: 'Remove this account?',
-      body: `${account?.email || 'This account'} will be disconnected from Hermes. The mailbox itself is untouched and can be added again later.`,
-      confirmLabel: 'Remove',
+      title: t('Remove this account?'),
+      body: t('{account} will be disconnected from Hermes. The mailbox itself is untouched and can be added again later.', { account: account?.email || t('This account') }),
+      confirmLabel: t('Remove'),
       danger: true,
     })
     if (!ok) return
@@ -288,19 +306,19 @@ export function Sidebar() {
     <aside
       className="flex flex-col h-full glass rounded-2xl shadow-pane rim-top w-[var(--sidebar-width)] flex-shrink-0 overflow-hidden"
       role="navigation"
-      aria-label="Email accounts and folders"
+      aria-label={t('Email accounts and folders')}
     >
       {/* Compose */}
       <div className="p-2.5">
         <button
           onClick={() => openCompose()}
-          aria-label="Compose new message"
+          aria-label={t('New message')}
           className="btn-accent w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-[13px] font-semibold tracking-[-0.005em]"
         >
           <svg width="13" height="13" viewBox="0 0 12 12" fill="none">
             <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
           </svg>
-          New message
+          {t('New message')}
         </button>
       </div>
 
@@ -318,7 +336,7 @@ export function Sidebar() {
                 <path d="M1.5 4.5h11M1.5 7h11M1.5 9.5h11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
               </svg>
             </span>
-            <span className="flex-1 text-left">All inboxes</span>
+            <span className="flex-1 text-left">{t('All inboxes')}</span>
             {allInboxUnread > 0 && (
               <span className="text-[11px] tabular-nums text-ink-3">{allInboxUnread}</span>
             )}
@@ -333,9 +351,9 @@ export function Sidebar() {
             <div className="w-11 h-11 rounded-2xl bg-ink/6 flex items-center justify-center mx-auto mb-3 text-ink-3">
               <InboxIcon />
             </div>
-            <p className="text-ink-2 text-[12.5px] mb-2">No accounts yet</p>
+            <p className="text-ink-2 text-[12.5px] mb-2">{t('No accounts yet')}</p>
             <button onClick={() => setShowAccountModal(true)} className="text-accent-ink text-[12.5px] font-medium hover:underline">
-              Add an account
+              {t('Add an account')}
             </button>
           </div>
         ) : (
@@ -363,7 +381,7 @@ export function Sidebar() {
                   <button
                     onClick={(e) => handleDeleteAccount(account.id, e)}
                     className="opacity-0 group-hover:opacity-100 text-ink-3 hover:text-danger p-1 rounded-md transition-all"
-                    title="Remove account"
+                    title={t('Remove account')}
                   >
                     <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
                       <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
@@ -374,13 +392,13 @@ export function Sidebar() {
                 {account.authError && (
                   <div role="alert" className="mx-1 mt-1 flex items-center gap-2 rounded-lg bg-danger/10 px-2.5 py-1.5 text-[11.5px] text-danger">
                     <span className="flex-1 leading-snug" title={account.authError.message}>
-                      {account.type === 'imap' ? 'Password no longer accepted' : 'Sign-in expired'} — mail is not updating
+                      {account.type === 'imap' ? t('Password no longer accepted') : t('Sign-in expired')} — {t('mail is not updating')}
                     </span>
                     <button
                       onClick={(e) => handleReconnect(account.id, e)}
                       className="shrink-0 font-semibold hover:underline"
                     >
-                      Reconnect
+                      {t('Reconnect')}
                     </button>
                   </div>
                 )}
@@ -389,7 +407,7 @@ export function Sidebar() {
                   <div className="mt-1 space-y-px animate-fade">
                     <NavItem
                       icon={<StarIcon filled={currentFolder === '__starred__'} />}
-                      label="Starred"
+                      label={t('Starred')}
                       active={currentFolder === '__starred__'}
                       badge={starred}
                       onClick={() => { setCurrentAccount(account.id); setCurrentFolder('__starred__') }}
@@ -397,7 +415,7 @@ export function Sidebar() {
 
                     <NavItem
                       icon={<SnoozeIcon />}
-                      label="Snoozed"
+                      label={t('Snoozed')}
                       active={currentFolder === '__snoozed__'}
                       badge={snoozedCount(account.id)}
                       badgeTone="neutral"
@@ -409,7 +427,7 @@ export function Sidebar() {
                         machine, which is why the label has to differ. */}
                     <NavItem
                       icon={<DraftsIcon />}
-                      label="Local drafts"
+                      label={t('Local drafts')}
                       badge={draftsCount(account.id)}
                       badgeTone="neutral"
                       onClick={() => { setCurrentAccount(account.id); setShowDraftsModal(true) }}
@@ -423,16 +441,16 @@ export function Sidebar() {
                         <NavItem
                           key={folder.path}
                           icon={<Icon />}
-                          label={folder.name}
+                          label={t(folder.name)}
                           active={isActiveFolder}
                           badge={isActiveFolder ? 0 : unreadCount(account.id, folder.path)}
                           onClick={() => handleFolderClick(account.id, folder.path)}
                           onRename={async () => {
                             const name = await promptDialog({
-                              title: 'Rename folder',
-                              label: 'Folder name',
+                              title: t('Rename folder'),
+                              label: t('Folder name'),
                               defaultValue: folder.name,
-                              confirmLabel: 'Rename',
+                              confirmLabel: t('Rename'),
                             })
                             if (!name || name === folder.name) return
                             try {
@@ -440,7 +458,7 @@ export function Sidebar() {
                               setFolders(account.id, accountFolders.map(f => f.path === folder.path ? updated : f))
                             } catch (err) {
                               console.error(err)
-                              showNotification('error', 'Could not rename that folder')
+                              showNotification('error', t('Could not rename that folder'))
                             }
                           }}
                         />
@@ -450,10 +468,10 @@ export function Sidebar() {
                     <button
                       onClick={async () => {
                         const name = await promptDialog({
-                          title: 'New folder',
-                          label: 'Folder name',
-                          placeholder: 'e.g. Receipts',
-                          confirmLabel: 'Create',
+                          title: t('New folder'),
+                          label: t('Folder name'),
+                          placeholder: t('e.g. Receipts'),
+                          confirmLabel: t('Create'),
                         })
                         if (!name) return
                         try {
@@ -461,13 +479,13 @@ export function Sidebar() {
                           setFolders(account.id, [...accountFolders, created])
                         } catch (err) {
                           console.error(err)
-                          showNotification('error', 'Could not create that folder')
+                          showNotification('error', t('Could not create that folder'))
                         }
                       }}
                       className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-ink-3 hover:text-accent-ink rounded-lg hover:bg-ink/4 transition-colors"
                     >
                       <span className="w-[14px] flex justify-center text-base leading-none">+</span>
-                      New folder
+                      {t('New folder')}
                     </button>
                   </div>
                 )}
@@ -485,7 +503,7 @@ export function Sidebar() {
             ${failedOutbox ? 'text-danger hover:bg-danger/10' : 'text-ink-2 hover:bg-ink/5 hover:text-ink'}`}
         >
           <span className={failedOutbox ? '' : 'text-ink-3'}><OutboxIcon /></span>
-          <span className="flex-1 text-left">Outbox</span>
+          <span className="flex-1 text-left">{t('Outbox')}</span>
           {pendingOutbox > 0 && (
             <span className={`text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums ${
               failedOutbox ? 'bg-danger text-white' : 'bg-accent text-[#201500]'
@@ -506,7 +524,7 @@ export function Sidebar() {
               <path d="M8 5.5v3l2 1.5M3 2.5l-1.5 1.5M13 2.5l1.5 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </span>
-          <span className="flex-1 text-left">Follow-ups</span>
+          <span className="flex-1 text-left">{t('Follow-ups')}</span>
           {(dueFollowups || waitingFollowups) > 0 && (
             <span className={`text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums ${
               dueFollowups ? 'bg-accent text-[#201500]' : 'bg-ink/8 text-ink-2'
@@ -517,11 +535,25 @@ export function Sidebar() {
         </button>
 
         <button
+          onClick={() => setShowScreenerModal(true)}
+          title={screenerOn ? t('Review mail from first-time senders') : t('Screener is off — open to turn it on')}
+          className="w-full flex items-center gap-2.5 px-2.5 py-[7px] text-[12.5px] text-ink-2 hover:text-ink hover:bg-ink/5 rounded-lg transition-colors duration-150"
+        >
+          <span className="text-ink-3"><ScreenerIcon /></span>
+          <span className="flex-1 text-left">{t('Screener')}</span>
+          {screenerOn && screenerPending > 0 && (
+            <span className="text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums bg-accent text-[#201500]">
+              {screenerPending}
+            </span>
+          )}
+        </button>
+
+        <button
           onClick={() => setShowRulesModal(true)}
           className="w-full flex items-center gap-2.5 px-2.5 py-[7px] text-[12.5px] text-ink-2 hover:text-ink hover:bg-ink/5 rounded-lg transition-colors duration-150"
         >
           <span className="text-ink-3"><RulesIcon /></span>
-          <span className="flex-1 text-left">Rules</span>
+          <span className="flex-1 text-left">{t('Rules')}</span>
         </button>
 
         <button
@@ -534,7 +566,7 @@ export function Sidebar() {
               <path d="M7 4v6M4 7h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
             </svg>
           </span>
-          <span className="flex-1 text-left">Add account</span>
+          <span className="flex-1 text-left">{t('Add account')}</span>
         </button>
       </div>
     </aside>

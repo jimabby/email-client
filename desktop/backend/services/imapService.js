@@ -1,5 +1,6 @@
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
+const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const MailComposer = require('nodemailer/lib/mail-composer');
 const calendar = require('./calendarService');
@@ -634,15 +635,35 @@ function resolveFrom(account, sendAs) {
   return { name: account.name || account.email, address: account.email };
 }
 
-async function sendEmail(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs, autoSubmitted }) {
-  const transporter = getTransporter(account);
+// SMTP servers that file their own copy of every message in Sent. Appending
+// another one there would show each sent message twice.
+const SELF_FILING_SMTP = /(^|\.)(gmail\.com|googlemail\.com|office365\.com|outlook\.com|hotmail\.com|live\.com)$/i;
+
+/**
+ * Whether Hermes should APPEND a copy of sent mail to the Sent folder.
+ * `account.saveSentCopy` is the user's explicit choice; left unset, the copy is
+ * saved unless the SMTP host is known to file its own.
+ */
+function shouldSaveSentCopy(account) {
+  if (account.saveSentCopy === true) return true;
+  if (account.saveSentCopy === false) return false;
+  return !SELF_FILING_SMTP.test(String(account.smtpHost || '').trim());
+}
+
+/** The nodemailer message options shared by send, the Sent copy, and drafts. */
+function messageOptions(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs, autoSubmitted }) {
   // References for a reply = the original's References + its Message-ID.
   const replyRefs = [references, inReplyTo].filter(Boolean).join(' ');
-  return transporter.sendMail({
+  return {
     // nodemailer escapes and encodes these fields itself, so a newline in a
     // name or address can't inject extra headers.
     from: resolveFrom(account, sendAs),
-    to, cc, bcc, subject, text, html,
+    to: to || undefined,
+    cc: cc || undefined,
+    bcc: bcc || undefined,
+    subject: subject || '',
+    text: text || undefined,
+    html: html || undefined,
     inReplyTo: inReplyTo || undefined,
     references: replyRefs || undefined,
     // RFC 3834 — see the Gmail builder for why this matters.
@@ -652,7 +673,49 @@ async function sendEmail(account, { to, cc, bcc, subject, text, html, attachment
       content: Buffer.from(a.content, 'base64'),
       contentType: a.contentType
     }))
+  };
+}
+
+function compileMime(options, { keepBcc = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const node = new MailComposer(options).compile();
+    // The Sent copy is the user's own record, so it keeps Bcc like every other
+    // client's does; the copy on the wire never carries it.
+    node.keepBcc = keepBcc;
+    node.build((err, message) => (err ? reject(err) : resolve(message)));
   });
+}
+
+/** APPEND the sent message to the account's Sent mailbox. */
+async function saveSentCopy(account, options) {
+  const raw = await compileMime(options, { keepBcc: true });
+  const sent = await findSpecialFolder(account, '\\Sent', /^sent( items| messages| mail)?$/i);
+  const mailbox = sent?.path || 'Sent';
+  return getConn(account).run(client => client.append(mailbox, raw, ['\\Seen'], options.date));
+}
+
+async function sendEmail(account, email) {
+  const transporter = getTransporter(account);
+  const domain = String(account.email || '').split('@')[1] || 'hermes.local';
+  // One Message-ID and Date for both the delivered message and the Sent copy,
+  // so replies to it thread against the copy the user can see.
+  const options = {
+    ...messageOptions(account, email),
+    messageId: `<${crypto.randomUUID()}@${domain}>`,
+    date: new Date(),
+  };
+  const info = await transporter.sendMail(options);
+
+  if (shouldSaveSentCopy(account)) {
+    // The message is already delivered. A failed copy must not fail the send,
+    // or the outbox would retry it and the recipients would get it twice.
+    try {
+      await saveSentCopy(account, options);
+    } catch (err) {
+      console.warn(`[imap] Sent, but could not save a copy to Sent for ${account.email}: ${err.message}`);
+    }
+  }
+  return info;
 }
 
 // Fetch just the headers needed to thread a reply to this message.
@@ -676,27 +739,8 @@ async function getThreadingInfo(account, uid, folder = 'INBOX') {
 // with the same From and the same threading headers it would have been sent
 // with — otherwise reopening it silently reverts to the account address and
 // detaches the reply from its thread.
-function buildMime(account, { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs }) {
-  const replyRefs = [references, inReplyTo].filter(Boolean).join(' ');
-  return new Promise((resolve, reject) => {
-    const mail = new MailComposer({
-      from: resolveFrom(account, sendAs),
-      to: to || undefined,
-      cc: cc || undefined,
-      bcc: bcc || undefined,
-      subject: subject || '',
-      text: text || undefined,
-      html: html || undefined,
-      inReplyTo: inReplyTo || undefined,
-      references: replyRefs || undefined,
-      attachments: (attachments || []).map(a => ({
-        filename: a.filename,
-        content: Buffer.from(a.content, 'base64'),
-        contentType: a.contentType
-      }))
-    });
-    mail.compile().build((err, message) => (err ? reject(err) : resolve(message)));
-  });
+function buildMime(account, draft) {
+  return compileMime(messageOptions(account, draft), { keepBcc: true });
 }
 
 // Locate the account's Drafts mailbox (prefer the \Drafts special-use flag).
@@ -801,6 +845,48 @@ async function deleteEmail(account, uid, folder = 'INBOX') {
   return { permanent: true };
 }
 
+// ─── Batched bulk operations ────────────────────────────────────────────────
+// One UID-set command per folder instead of one round trip per message: a
+// 500-message select-all used to queue 500 commands behind the account's one
+// connection.
+
+function uidSet(uids) {
+  return uids.map(Number).filter(n => Number.isInteger(n) && n > 0).join(',');
+}
+
+/** Add or remove a flag on many messages in one folder. */
+async function bulkSetFlag(account, uids, folder, flag, add) {
+  const set = uidSet(uids);
+  if (!set) return;
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(folder);
+    if (add) await client.messageFlagsAdd(set, [flag], { uid: true });
+    else await client.messageFlagsRemove(set, [flag], { uid: true });
+  });
+}
+
+/** Move many messages out of one folder in a single MOVE. */
+async function bulkMove(account, uids, fromFolder, toFolder) {
+  const set = uidSet(uids);
+  if (!set) return;
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(fromFolder);
+    await client.messageMove(set, toFolder, { uid: true });
+  });
+}
+
+/** Delete many messages from one folder: to Trash, or for good from Trash. */
+async function bulkDelete(account, uids, folder) {
+  const trash = await findSpecialFolder(account, '\\Trash', /^(trash|deleted( items| messages)?|bin)$|trash/i);
+  if (trash && trash.path !== folder) return bulkMove(account, uids, folder, trash.path);
+  const set = uidSet(uids);
+  if (!set) return;
+  return getConn(account).run(async (client) => {
+    await client.mailboxOpen(folder);
+    await client.messageDelete(set, { uid: true });
+  });
+}
+
 /** Undo a delete: move the message (addressed by its Trash UID) back. */
 async function untrashEmail(account, uid, trashFolder, toFolder = 'INBOX') {
   return moveEmail(account, uid, trashFolder, toFolder || 'INBOX');
@@ -888,7 +974,10 @@ async function testConnection(account) {
 }
 
 module.exports = {
-  _internals: { snippetFromSource, threadRoot, referencesFromHeaders, parseHeaderBlock },
+  _internals: { snippetFromSource, threadRoot, referencesFromHeaders, parseHeaderBlock, shouldSaveSentCopy, uidSet },
+  bulkSetFlag,
+  bulkMove,
+  bulkDelete,
   composeId,
   getHeaders,
   untrashEmail,

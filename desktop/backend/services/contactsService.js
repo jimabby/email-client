@@ -43,9 +43,10 @@ function build() {
   const record = ({ name, email }, weight, ts, accountId) => {
     let entry = byEmail.get(email);
     if (!entry) {
-      entry = { email, name: '', score: 0, lastSeen: 0, count: 0, accountIds: new Set() };
+      entry = { email, name: '', score: 0, lastSeen: 0, count: 0, accountIds: new Set(), outbound: false };
       byEmail.set(email, entry);
     }
+    if (weight === WEIGHT_OUTBOUND) entry.outbound = true;
     // Prefer a real display name over an empty one, and a longer one over an
     // abbreviation ("A. Smith" loses to "Alice Smith").
     if (name && name.length > entry.name.length) entry.name = name;
@@ -143,8 +144,19 @@ function isKnown(email) {
   return all().some(c => c.email === target);
 }
 
+/**
+ * Whether the user has ever written to this address. Stricter than isKnown:
+ * an arrival is indexed before it is screened, so merely having mail *from*
+ * someone proves nothing about whether the user wants it.
+ */
+function hasWrittenTo(email) {
+  const target = String(email || '').trim().toLowerCase();
+  if (!target) return false;
+  return all().some(c => c.email === target && c.outbound);
+}
+
 function invalidate() {
   cache = { at: 0, contacts: [] };
 }
 
-module.exports = { search, all, isKnown, invalidate, parseAddressList, _internals: { build } };
+module.exports = { search, all, isKnown, hasWrittenTo, invalidate, parseAddressList, _internals: { build } };

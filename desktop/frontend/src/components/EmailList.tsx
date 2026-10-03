@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { format, isToday, isYesterday, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
+import { useT, t as translate } from '../lib/i18n'
 import { confirmDialog } from './DialogHost'
 import { aiApi, emailsApi, withToken } from '../api/client'
 import type { EmailSummary } from '../types/email'
@@ -74,7 +75,7 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
       onClick={onClick}
       role="option"
       aria-selected={isSelected}
-      aria-label={`${!email.read ? 'Unread: ' : ''}${getSenderName(email.from)} — ${email.subject || '(no subject)'}`}
+      aria-label={`${!email.read ? `${translate('Unread')}: ` : ''}${getSenderName(email.from)} — ${email.subject || translate('(no subject)')}`}
       className={`group relative flex items-start gap-2.5 mx-1.5 rounded-xl cursor-pointer
                   ${indent ? 'pl-9 pr-3' : 'px-2.5'} ${compact ? 'py-2' : 'py-2.5'}
                   transition-[background-color,box-shadow] duration-150
@@ -96,7 +97,7 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
         onClick={onCheck}
         role="checkbox"
         aria-checked={isChecked}
-        aria-label={isChecked ? 'Deselect email' : 'Select email'}
+        aria-label={isChecked ? translate('Deselect email') : translate('Select email')}
         className={`flex-shrink-0 mt-1.5 w-[17px] h-[17px] rounded-[6px] border flex items-center justify-center
                     cursor-pointer transition-all duration-150
           ${isChecked
@@ -129,7 +130,7 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
             {typeof threadCount === 'number' && threadCount > 1 && onToggleThread && (
               <button
                 onClick={onToggleThread}
-                title={threadExpanded ? 'Collapse thread' : 'Expand thread'}
+                title={threadExpanded ? translate('Collapse thread') : translate('Expand thread')}
                 className="p-0.5 text-ink-3 hover:text-ink transition-colors"
               >
                 <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`${threadExpanded ? 'rotate-180' : ''} transition-transform duration-200`}>
@@ -138,7 +139,7 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
               </button>
             )}
             {email.hasAttachments && (
-              <span title="Has attachments" aria-label="Has attachments" className="text-ink-3 flex-shrink-0">
+              <span title={translate('Has attachments')} aria-label={translate('Has attachments')} className="text-ink-3 flex-shrink-0">
                 <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
                   <path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
                 </svg>
@@ -151,7 +152,7 @@ function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, thre
         </div>
 
         <div className={`text-[12.5px] truncate mt-px ${!email.read ? 'font-medium text-ink' : 'text-ink-2'}`}>
-          {email.subject || '(no subject)'}
+          {email.subject || translate('(no subject)')}
           {typeof threadCount === 'number' && threadCount > 1 && (
             <span className="ml-1.5 text-[10px] px-1.5 py-px rounded-full bg-ink/10 text-ink-2 align-middle">
               {threadCount}
@@ -282,6 +283,7 @@ export function EmailList() {
     unifiedView, unifiedTokens, setUnifiedTokens,
     snoozes, getArchiveFolder,
   } = useEmailStore()
+  const t = useT()
 
   const [searchInput, setSearchInput] = useState('')
   const [showSearch, setShowSearch] = useState(false)
@@ -620,16 +622,16 @@ export function EmailList() {
     if (!selected.length) { clearEmailSelection(); return }
     const ok = await confirmDialog({
       title: `Delete ${selected.length} email${selected.length > 1 ? 's' : ''}?`,
-      body: 'They move to the Trash folder, where the provider will keep them for a while.',
-      confirmLabel: 'Delete',
+      body: t('They move to the Trash folder, where the provider will keep them for a while.'),
+      confirmLabel: t('Delete'),
       danger: true,
     })
     if (!ok) return
     try {
       await Promise.all(groupSelection(selected).map(g => emailsApi.bulkDelete(g.accountId, g.ids, g.folder)))
       removeFromViews(selected.map(e => e.id))
-      showNotification('success', `Deleted ${selected.length} email${selected.length > 1 ? 's' : ''}`)
-    } catch { showNotification('error', 'Failed to delete some emails') }
+      showNotification('success', t(selected.length === 1 ? 'Deleted {count} email' : 'Deleted {count} emails', { count: selected.length }))
+    } catch { showNotification('error', t('Failed to delete some emails')) }
   }
 
   const handleBulkMarkRead = async () => {
@@ -640,7 +642,7 @@ export function EmailList() {
       const ids = selected.map(e => e.id)
       markEmailsRead(ids)
       if (searchResults) setSearchResults(searchResults.map(e => ids.includes(e.id) ? { ...e, read: true } : e))
-    } catch { showNotification('error', 'Failed to mark some emails as read') }
+    } catch { showNotification('error', t('Failed to mark some emails as read')) }
   }
 
   const handleBulkMarkUnread = async () => {
@@ -651,7 +653,7 @@ export function EmailList() {
       const ids = selected.map(e => e.id)
       markEmailsUnread(ids)
       if (searchResults) setSearchResults(searchResults.map(e => ids.includes(e.id) ? { ...e, read: false } : e))
-    } catch { showNotification('error', 'Failed to mark some emails as unread') }
+    } catch { showNotification('error', t('Failed to mark some emails as unread')) }
   }
 
   const handleBulkMove = async (targetFolder: string) => {
@@ -661,8 +663,8 @@ export function EmailList() {
     try {
       await Promise.all(groupSelection(selected).map(g => emailsApi.bulkMove(g.accountId, g.ids, targetFolder, g.folder)))
       removeFromViews(selected.map(e => e.id))
-      showNotification('success', `Moved ${selected.length} email${selected.length > 1 ? 's' : ''} to ${targetFolder}`)
-    } catch { showNotification('error', 'Failed to move some emails') }
+      showNotification('success', t(selected.length === 1 ? 'Moved {count} email to {folder}' : 'Moved {count} emails to {folder}', { count: selected.length, folder: targetFolder }))
+    } catch { showNotification('error', t('Failed to move some emails')) }
   }
 
   const handleBulkArchive = async () => {
@@ -671,8 +673,8 @@ export function EmailList() {
     try {
       await Promise.all(groupSelection(selected).map(g => emailsApi.bulkMove(g.accountId, g.ids, getArchiveFolder(g.accountId), g.folder)))
       removeFromViews(selected.map(e => e.id))
-      showNotification('success', `Archived ${selected.length} email${selected.length > 1 ? 's' : ''}`)
-    } catch { showNotification('error', 'Failed to archive some emails') }
+      showNotification('success', t(selected.length === 1 ? 'Archived {count} email' : 'Archived {count} emails', { count: selected.length }))
+    } catch { showNotification('error', t('Failed to archive some emails')) }
   }
 
   const handleLoadMore = async () => {
@@ -756,11 +758,11 @@ export function EmailList() {
       category: activeCategory,
     }
     if (savedSearches.some(s => sameSearch(s, entry))) {
-      showNotification('success', 'That search is already saved')
+      showNotification('success', t('That search is already saved'))
       return
     }
     persistSavedSearches([entry, ...savedSearches].slice(0, 50))
-    showNotification('success', 'Search saved')
+    showNotification('success', t('Search saved'))
   }
 
   const isCurrentSearchSaved = savedSearches.some(s =>
@@ -928,6 +930,37 @@ export function EmailList() {
     getItemKey: (index) => renderRows[index]?.key ?? index,
   })
 
+  // ─── Keyboard navigation ────────────────────────────────────────────────
+  // j/k (from the global shortcut handler) and the arrow keys (while the list
+  // has focus) walk the rows in the order they are drawn — threads, category,
+  // and priority sort included — so "next" always means the row below.
+  const navigableEmails = useMemo(
+    () => renderRows.map(row => (row.kind === 'thread' ? row.thread.latest : row.email)),
+    [renderRows],
+  )
+  const navigateRef = useRef<(delta: number) => void>(() => {})
+  navigateRef.current = (delta: number) => {
+    if (!navigableEmails.length) return
+    const current = selectedEmail ? navigableEmails.findIndex(e => e.id === selectedEmail.id) : -1
+    const next = current === -1 ? (delta > 0 ? 0 : navigableEmails.length - 1) : current + delta
+    if (next >= navigableEmails.length) {
+      // Past the last row: fetch the next page rather than stopping dead.
+      if (nextToken && !isLoadingMore && !searchResults) handleLoadMore()
+      return
+    }
+    if (next < 0) return
+    handleSelectEmail(navigableEmails[next])
+    virtualizer.scrollToIndex(next, { align: 'auto' })
+  }
+  useEffect(() => {
+    const onNavigate = (event: Event) => {
+      const delta = (event as CustomEvent<{ delta?: number }>).detail?.delta
+      if (delta) navigateRef.current(delta)
+    }
+    window.addEventListener('hermes:navigate', onNavigate)
+    return () => window.removeEventListener('hermes:navigate', onNavigate)
+  }, [])
+
   // A changed folder, search, or sort should put the user back at the top —
   // otherwise the list keeps a scroll offset that belongs to a different list.
   useEffect(() => {
@@ -960,11 +993,11 @@ export function EmailList() {
     )
   }
 
-  const folderLabel = isStarred ? 'Starred'
-    : isSnoozed ? 'Snoozed'
-    : currentFolder === 'INBOX' ? 'Inbox'
-    : currentFolder === 'SENT' ? 'Sent'
-    : currentFolder
+  const folderLabel = isStarred ? t('Starred')
+    : isSnoozed ? t('Snoozed')
+    : currentFolder === 'INBOX' ? t('Inbox')
+    : currentFolder === 'SENT' ? t('Sent')
+    : (currentAccountId && folders[currentAccountId]?.find(f => f.path === currentFolder)?.name) || currentFolder
 
   return (
     <div className="flex flex-col h-full">
@@ -980,7 +1013,7 @@ export function EmailList() {
                   ? 'bg-info border-info'
                   : 'border-line '
                 }`}
-              title={prioritySorted.every(e => selectedEmailIds.includes(e.id)) ? 'Deselect all' : 'Select all'}
+              title={prioritySorted.every(e => selectedEmailIds.includes(e.id)) ? t('Deselect all') : t('Select all')}
             >
               {prioritySorted.length > 0 && prioritySorted.every(e => selectedEmailIds.includes(e.id)) ? (
                 <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
@@ -990,17 +1023,17 @@ export function EmailList() {
                 <div className="w-2 h-0.5 bg-info rounded" />
               ) : null}
             </div>
-            <span className="text-xs font-semibold text-ink mr-1">{selectedEmailIds.length} selected</span>
-            <button onClick={handleBulkMarkRead} title="Mark as read"
+            <span className="text-xs font-semibold text-ink mr-1">{t('{count} selected', { count: selectedEmailIds.length })}</span>
+            <button onClick={handleBulkMarkRead} title={t('Mark as read')}
               className="btn-ghost w-8 h-8 flex items-center justify-center">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 4l7 5 7-5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3"/></svg>
             </button>
-            <button onClick={handleBulkMarkUnread} title="Mark as unread"
+            <button onClick={handleBulkMarkUnread} title={t('Mark as unread')}
               className="btn-ghost w-8 h-8 flex items-center justify-center">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 4l7 5 7-5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><circle cx="13" cy="4" r="3" fill="#f59e0b"/></svg>
             </button>
             <div className="relative">
-              <button onClick={() => setShowMoveMenu(m => !m)} title="Move to folder"
+              <button onClick={() => setShowMoveMenu(m => !m)} title={t('Move to folder')}
                 className="btn-ghost w-8 h-8 flex items-center justify-center">
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.44a1 1 0 01.7.29L8 4h5.5A1.5 1.5 0 0115 5.5v7A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5v-9z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
               </button>
@@ -1018,18 +1051,18 @@ export function EmailList() {
                 </div>
               )}
             </div>
-            <button onClick={handleBulkArchive} title="Archive"
+            <button onClick={handleBulkArchive} title={t('Archive')}
               className="btn-ghost w-8 h-8 flex items-center justify-center">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
                 <path d="M2 4h12v1H2zM3 5v7a1 1 0 001 1h8a1 1 0 001-1V5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
                 <path d="M6 8h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
               </svg>
             </button>
-            <button onClick={handleBulkDelete} title="Delete"
+            <button onClick={handleBulkDelete} title={t('Delete')}
               className="btn-ghost w-8 h-8 flex items-center justify-center hover:!text-danger hover:!bg-danger/10">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3M2 4h12M5 4v9a1 1 0 001 1h4a1 1 0 001-1V4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
             </button>
-            <button onClick={clearEmailSelection} title="Deselect all"
+            <button onClick={clearEmailSelection} title={t('Deselect all')}
               className="btn-ghost ml-auto w-8 h-8 flex items-center justify-center">
               <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
             </button>
@@ -1046,24 +1079,24 @@ export function EmailList() {
                 onFocus={() => setShowSavedMenu(true)}
                 onBlur={() => setTimeout(() => setShowSavedMenu(false), 120)}
                 onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType(''); setSearchAll(false); setShowSavedMenu(false) } }}
-                placeholder={searchMode === 'attachment' ? 'Attachment name…' : 'Search emails…'}
+                placeholder={searchMode === 'attachment' ? t('Attachment name…') : t('Search emails…')}
                 className="flex-1 text-[13px] bg-transparent text-ink placeholder-ink-3 focus:outline-none"
               />
               <button
                 onClick={() => { setSearchMode(searchMode === 'attachment' ? 'email' : 'attachment'); setAttachmentType('') }}
-                title="Search attachments"
+                title={t('Search attachments')}
                 className={`px-2 py-1 text-[10px] rounded-full border transition-colors ${searchMode === 'attachment'
                   ? 'text-ink bg-accent/10 border-accent/40'
                   : 'text-ink-3 border-line hover:text-ink '
                 }`}
               >
-                Attachments
+                {t('Attachments')}
               </button>
               <button
                 onMouseDown={e => e.preventDefault()}
                 onClick={saveCurrentSearch}
                 disabled={!searchInput.trim() || isCurrentSearchSaved}
-                title={isCurrentSearchSaved ? 'Already saved' : 'Save this search'}
+                title={isCurrentSearchSaved ? t('Already saved') : t('Save this search')}
                 aria-label="Save this search"
                 className={`px-2 py-1 text-[10px] rounded-full border transition-colors disabled:opacity-40
                   ${isCurrentSearchSaved
@@ -1071,17 +1104,17 @@ export function EmailList() {
                     : 'text-ink-3 border-line/60 hover:text-ink hover:bg-ink/5'
                   }`}
               >
-                {isCurrentSearchSaved ? 'Saved' : 'Save'}
+                {isCurrentSearchSaved ? t('Saved') : t('Save')}
               </button>
               <button
                 onClick={() => setSearchAll(v => !v)}
-                title="Search all accounts"
+                title={t('Search all accounts')}
                 className={`px-2 py-1 text-[10px] rounded-full border transition-colors ${searchAll
                   ? 'text-ink bg-info/10 border-info/40'
                   : 'text-ink-3 border-line hover:text-ink '
                 }`}
               >
-                All accounts
+                {t('All accounts')}
               </button>
               <button onClick={() => { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType(''); setSearchAll(false) }}
                 className="text-ink-3 hover:text-danger transition-colors p-0.5 flex-shrink-0">
@@ -1090,7 +1123,7 @@ export function EmailList() {
             </div>
             {searchMode === 'attachment' && (
               <div className="flex items-center gap-2">
-                <div className="text-[10px] text-ink-3 ">Type</div>
+                <div className="text-[10px] text-ink-3 ">{t('Type')}</div>
                 <input
                   type="text"
                   value={attachmentType}
@@ -1105,23 +1138,23 @@ export function EmailList() {
               <div className="absolute left-0 right-0 top-full mt-1.5 z-50 glass-elevated rounded-xl py-1.5 animate-pop max-h-80 overflow-y-auto">
                 {savedSearches.length > 0 && (
                   <SearchSection
-                    title="Saved"
+                    title={t('Saved')}
                     entries={savedSearches}
                     onApply={applySavedSearch}
                     onRemove={deleteSavedSearch}
-                    removeTitle="Remove saved search"
+                    removeTitle={t('Remove saved search')}
                   />
                 )}
 
                 {recentSearches.length > 0 && (
                   <SearchSection
-                    title="Recent"
+                    title={t('Recent')}
                     entries={recentSearches}
                     onApply={applySavedSearch}
                     onRemove={deleteRecentSearch}
-                    removeTitle="Remove from recents"
+                    removeTitle={t('Remove from recents')}
                     onClearAll={() => persistRecentSearches([])}
-                    clearLabel="Clear recent searches"
+                    clearLabel={t('Clear recent searches')}
                   />
                 )}
               </div>
@@ -1132,17 +1165,17 @@ export function EmailList() {
             <div className="flex-1 min-w-0 flex items-baseline gap-2 pl-1.5">
               <h2 className="font-semibold text-ink text-[15px] tracking-[-0.015em] truncate">{folderLabel}</h2>
               <span className="text-[11.5px] text-ink-3 tabular-nums flex-shrink-0">
-                {searchResults !== null ? `${visibleCount} result${visibleCount === 1 ? '' : 's'}` : visibleCount || ''}
+                {searchResults !== null ? t(visibleCount === 1 ? '{count} result' : '{count} results', { count: visibleCount }) : visibleCount || ''}
               </span>
             </div>
             {currentAccountId && !isStarred && !isSnoozed && (
-              <button onClick={() => setShowSearch(true)} title="Search" aria-label="Search emails"
+              <button onClick={() => setShowSearch(true)} data-action="search" title={t('Search (/)')} aria-label={t('Search emails…')}
                 className="btn-ghost w-8 h-8 flex items-center justify-center">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.4"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
               </button>
             )}
             {currentAccountId && !isStarred && !isSnoozed && (
-              <button onClick={handleRefresh} title="Refresh" aria-label="Refresh emails"
+              <button onClick={handleRefresh} title={t('Refresh')} aria-label={t('Refresh')}
                 className="btn-ghost w-8 h-8 flex items-center justify-center">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="none" className={isLoadingEmails ? 'animate-spin' : ''}><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
@@ -1150,7 +1183,7 @@ export function EmailList() {
             {currentAccountId && (
               <button
                 onClick={toggleThreadView}
-                title={threadView ? 'Thread view on' : 'Thread view off'}
+                title={threadView ? t('Thread view on') : t('Thread view off')}
                 aria-pressed={threadView}
                 className={`btn-ghost w-8 h-8 flex items-center justify-center ${threadView ? '!text-ink !bg-ink/10' : ''}`}
               >
@@ -1162,7 +1195,7 @@ export function EmailList() {
             {currentAccountId && (
               <button
                 onClick={() => { setPriorityMode(v => !v); setPriorityKey('') }}
-                title={priorityMode ? 'Priority inbox on' : 'Priority inbox off'}
+                title={priorityMode ? t('Priority inbox on') : t('Priority inbox off')}
                 aria-pressed={priorityMode}
                 className={`btn-ghost w-8 h-8 flex items-center justify-center ${priorityMode ? '!text-accent-ink !bg-accent/15' : ''}`}
               >
@@ -1183,11 +1216,17 @@ export function EmailList() {
 
       {isInbox && !searchResults && <CategoryTabs />}
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto" role="listbox" aria-label="Email list" tabIndex={0} onKeyDown={e => { if (e.key === 'Escape' && selectedEmailIds.length > 0) clearEmailSelection() }}>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto" role="listbox" aria-label={t('Email list')} tabIndex={0} onKeyDown={e => {
+        if (e.key === 'Escape' && selectedEmailIds.length > 0) clearEmailSelection()
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault()
+          navigateRef.current(e.key === 'ArrowDown' ? 1 : -1)
+        }
+      }}>
         {isSearching ? (
           <div className="flex items-center justify-center h-24 text-ink-3 text-[12.5px] gap-2">
             <svg className="animate-spin" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/></svg>
-            Searching…
+            {t('Searching…')}
           </div>
         ) : renderRows.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
@@ -1207,30 +1246,30 @@ export function EmailList() {
             </div>
             <p className="text-ink text-[14px] font-medium mb-1.5 tracking-[-0.01em]">
               {searchResults !== null
-                ? 'No results found'
+                ? t('No results found')
                 : !currentAccountId
-                ? 'No account selected'
+                ? t('No account selected')
                 : isSnoozed
-                ? 'Nothing snoozed'
+                ? t('Nothing snoozed')
                 : isStarred
-                ? 'No starred emails'
+                ? t('No starred emails')
                 : activeCategory !== 'All'
-                ? `No ${activeCategory.toLowerCase()} emails`
-                : 'This folder is empty'
+                ? t('No emails in {category}', { category: t(activeCategory) })
+                : t('This folder is empty')
               }
             </p>
             <p className="text-ink-3 text-[12.5px] max-w-[220px] leading-relaxed">
               {searchResults !== null
-                ? 'Try a different search term or check another folder'
+                ? t('Try a different search term or check another folder')
                 : !currentAccountId
-                ? 'Add an account in Settings to get started'
+                ? t('Add an account in Settings to get started')
                 : isSnoozed
-                ? 'Snooze an email to have it resurface here later'
+                ? t('Snooze an email to have it resurface here later')
                 : isStarred
-                ? 'Star emails to find them quickly here'
+                ? t('Star emails to find them quickly here')
                 : activeCategory !== 'All'
-                ? 'Emails in this category will appear here'
-                : 'New emails will appear here when they arrive'
+                ? t('Emails in this category will appear here')
+                : t('New emails will appear here when they arrive')
               }
             </p>
           </div>
@@ -1300,8 +1339,8 @@ export function EmailList() {
                   className="flex items-center gap-1.5 px-5 py-2 text-[12.5px] font-medium text-ink-2 hover:text-ink bg-ink/5 hover:bg-ink/10 rounded-full transition-colors disabled:opacity-50"
                 >
                   {isLoadingMore
-                    ? <><svg className="animate-spin" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/></svg> Loading…</>
-                    : 'Load more emails'
+                    ? <><svg className="animate-spin" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="5"/></svg> {t('Loading…')}</>
+                    : t('Load more emails')
                   }
                 </button>
               </div>

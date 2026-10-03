@@ -4,6 +4,7 @@ import type {
   MailRule, MailTemplate, Alias, OutboxItem, UnreadCounts,
   Contact, VacationSettings, SignatureMap, UnifiedPage,
   Followup, MutedThread, NotificationSettings, ImportResult, AiModelChoices,
+  ScreenerState,
 } from '../types/email'
 
 // When the backend runs with an API_TOKEN it injects the value into the served
@@ -121,6 +122,10 @@ export const accountsApi = {
   /** Update an IMAP password (the "Reconnect" path) — tested before saving. */
   updatePassword: (id: string, password: string) =>
     api.patch<{ account: Account }>(`/auth/accounts/${id}`, { password }).then(r => r.data),
+
+  /** IMAP: save sent mail to the Sent folder (true/false), or null for the default. */
+  setSaveSentCopy: (id: string, saveSentCopy: boolean | null) =>
+    api.patch<{ account: Account }>(`/auth/accounts/${id}`, { saveSentCopy }).then(r => r.data),
 
   getGmailAuthUrl: () => api.get<{ url: string }>('/auth/gmail').then(r => r.data),
   getOutlookAuthUrl: () => api.get<{ url: string }>('/auth/outlook').then(r => r.data),
@@ -322,6 +327,14 @@ export const emailsApi = {
   dismissFollowup: (id: string) => api.delete(`/emails/followups/${id}`).then(r => r.data),
 
   // ─── Muted conversations ─────────────────────────────────────────────────
+  getScreener: () => api.get<ScreenerState>('/emails/screener').then(r => r.data),
+  configureScreener: (settings: { enabled?: boolean; folder?: string }) =>
+    api.put<ScreenerState>('/emails/screener', settings).then(r => r.data),
+  decideSender: (sender: string, decision: 'allow' | 'block') =>
+    api.post<{ success: boolean; moved: number; failed: number }>('/emails/screener/decide', { sender, decision }).then(r => r.data),
+  forgetSender: (sender: string) =>
+    api.delete<ScreenerState>('/emails/screener/senders', { data: { sender } }).then(r => r.data),
+
   getMuted: () => api.get<MutedThread[]>('/emails/muted').then(r => r.data),
   muteThread: (accountId: string, threadId: string, subject?: string) =>
     api.post(`/emails/${accountId}/thread/${encodeURIComponent(threadId)}/mute`, { subject }).then(r => r.data),

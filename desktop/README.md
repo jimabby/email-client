@@ -27,8 +27,16 @@ A fast, dark-themed desktop/web email client for Gmail, Outlook, and any IMAP/SM
   included, and can be undone
 - **Reconnect prompts** — an account whose sign-in was revoked or whose password
   changed is flagged in the sidebar with a one-click fix
-- **Settings backup** — rules, templates, signatures, aliases, and the
-  auto-reply as one file (Settings → Away)
+- **Settings backup** — rules, templates, signatures, aliases, the screener's
+  decisions, and the auto-reply as one file (Settings → Away)
+- **Screener** — first-time senders wait in a holding folder until you allow
+  or block them (per address or whole domain)
+- **Keyboard navigation** — `j`/`k` (or the arrow keys) move through the list,
+  `x` selects, `a` replies all; `?` lists everything
+- **Send & archive**, **drag-and-drop attachments**, and **print / save as PDF**
+- **Sent copies on IMAP** — sent mail is filed in Sent on servers that don't
+  keep their own copy
+- **English and Simplified Chinese** interface (follows the OS by default)
 
 ## Security notes
 

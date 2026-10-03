@@ -12,6 +12,7 @@ import { ReaderFrame } from './ReaderFrame'
 import { InviteCard } from './InviteCard'
 import { SenderBadge } from './SenderBadge'
 import type { Attachment, DraftAttachment } from '../types/email'
+import { useT } from '../lib/i18n'
 
 function formatFullDate(dateStr: string): string {
   try { return format(parseISO(dateStr), 'EEEE, MMMM d, yyyy h:mm a') }
@@ -100,6 +101,7 @@ export function EmailViewer() {
     snoozeEmailLocal, unsnoozeLocal, getArchiveFolder,
     isThreadMuted, setMutedThreads, setFollowups,
   } = useEmailStore()
+  const t = useT()
 
   const [showMoveMenu, setShowMoveMenu] = useState(false)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
@@ -226,8 +228,8 @@ export function EmailViewer() {
             </defs>
           </svg>
         </div>
-        <h3 className="text-[17px] font-semibold text-ink mb-2 tracking-[-0.015em]">No message selected</h3>
-        <p className="text-ink-3 text-[13px] leading-relaxed max-w-[220px]">Pick an email from the list, or press <kbd className="px-1.5 py-0.5 mx-0.5 rounded-md bg-ink/8 text-ink-2 text-[11px]">Ctrl&nbsp;N</kbd> to write one</p>
+        <h3 className="text-[17px] font-semibold text-ink mb-2 tracking-[-0.015em]">{t('No message selected')}</h3>
+        <p className="text-ink-3 text-[13px] leading-relaxed max-w-[240px]">{t('Pick an email from the list (j / k to move), or press Ctrl N to write one')}</p>
       </div>
     )
   }
@@ -326,9 +328,9 @@ export function EmailViewer() {
     if (!selectedEmail) return
     if (isTrashFolder(selectedEmail.folder)) {
       const ok = await confirmDialog({
-        title: 'Delete this email forever?',
-        body: 'It is already in Trash, so it will be permanently removed.',
-        confirmLabel: 'Delete forever',
+        title: t('Delete this email forever?'),
+        body: t('It is already in Trash, so it will be permanently removed.'),
+        confirmLabel: t('Delete forever'),
         danger: true,
       })
       if (!ok) return
@@ -339,26 +341,26 @@ export function EmailViewer() {
       const { undoId } = await emailsApi.delete(accountId, id, folder)
       removeEmail(id)
       if (!undoId) {
-        showNotification('success', 'Email deleted')
+        showNotification('success', t('Email deleted'))
         return
       }
-      showNotification('success', 'Moved to Trash', {
+      showNotification('success', t('Moved to Trash'), {
         action: {
-          label: 'Undo',
+          label: t('Undo'),
           onClick: async () => {
             try {
               await emailsApi.untrash(accountId, undoId, folder || 'INBOX')
-              showNotification('success', 'Delete undone')
+              showNotification('success', t('Delete undone'))
               window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
             } catch {
-              showNotification('error', 'Could not restore the message')
+              showNotification('error', t('Could not restore the message'))
             }
           },
         },
         timeoutMs: 8000,
       })
     } catch {
-      showNotification('error', 'Failed to delete email')
+      showNotification('error', t('Failed to delete email'))
     }
   }
 
@@ -372,25 +374,25 @@ export function EmailViewer() {
       // Reporting spam is a judgement call made in one click, and it trains the
       // provider's filter — exactly the kind of action that needs a way back.
       if (!undoId) {
-        showNotification('success', 'Reported as spam')
+        showNotification('success', t('Reported as spam'))
         return
       }
-      showNotification('success', 'Reported as spam', {
+      showNotification('success', t('Reported as spam'), {
         action: {
-          label: 'Undo',
+          label: t('Undo'),
           onClick: async () => {
             try {
               await emailsApi.unreportSpam(accountId, undoId, origin)
-              showNotification('success', 'Moved back to ' + origin)
+              showNotification('success', t('Moved back to {folder}', { folder: origin }))
               window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
             } catch {
-              showNotification('error', 'Could not restore the message')
+              showNotification('error', t('Could not restore the message'))
             }
           },
         },
         timeoutMs: 8000,
       })
-    } catch { showNotification('error', 'Failed to report spam') }
+    } catch { showNotification('error', t('Failed to report spam')) }
   }
   /**
    * Unsubscribe the way the sender asked to be told. With a List-Unsubscribe
@@ -403,25 +405,25 @@ export function EmailViewer() {
     if (!body?.listUnsubscribe) { openPage(fallbackLink); return }
     try {
       const result = await emailsApi.unsubscribe(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder)
-      if (result.method === 'one-click') showNotification('success', 'Unsubscribed')
-      else if (result.method === 'mailto') showNotification('success', `Unsubscribe request sent to ${result.to}`)
+      if (result.method === 'one-click') showNotification('success', t('Unsubscribed'))
+      else if (result.method === 'mailto') showNotification('success', t('Unsubscribe request sent to {to}', { to: result.to || '' }))
       else if (result.method === 'browser' && result.url) openPage(result.url)
       else openPage(fallbackLink)
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not unsubscribe')
+      showNotification('error', err instanceof Error ? err.message : t('Could not unsubscribe'))
     }
   }
 
   const handleBlock = async () => {
     const ok = await confirmDialog({
-      title: 'Block this sender?',
-      body: `${selectedEmail.from} will be reported as spam, and a rule will send future messages there automatically.`,
-      confirmLabel: 'Block',
+      title: t('Block this sender?'),
+      body: t('{sender} will be reported as spam, and a rule will send future messages there automatically.', { sender: selectedEmail.from }),
+      confirmLabel: t('Block'),
       danger: true,
     })
     if (!ok) return
-    try { await emailsApi.blockSender(selectedEmail.accountId, selectedEmail.id, selectedEmail.from, selectedEmail.folder); removeEmail(selectedEmail.id); showNotification('success', 'Sender blocked') }
-    catch { showNotification('error', 'Failed to block sender') }
+    try { await emailsApi.blockSender(selectedEmail.accountId, selectedEmail.id, selectedEmail.from, selectedEmail.folder); removeEmail(selectedEmail.id); showNotification('success', t('Sender blocked')) }
+    catch { showNotification('error', t('Failed to block sender')) }
   }
 
   /**
@@ -446,14 +448,14 @@ export function EmailViewer() {
     const { accountId, undoId, from, to } = undo
     showNotification('success', message, {
       action: {
-        label: 'Undo',
+        label: t('Undo'),
         onClick: async () => {
           try {
             await emailsApi.move(accountId, undoId, from, to)
-            showNotification('success', `Moved back to ${from}`)
+            showNotification('success', t('Moved back to {folder}', { folder: from }))
             window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
           } catch {
-            showNotification('error', 'Could not move the message back')
+            showNotification('error', t('Could not move the message back'))
           }
         },
       },
@@ -470,9 +472,9 @@ export function EmailViewer() {
     try {
       const { undoId } = await emailsApi.move(accountId, id, archive, origin)
       removeEmail(id)
-      notifyMoved('Archived', { accountId, undoId, from: origin, to: archive })
+      notifyMoved(t('Archived'), { accountId, undoId, from: origin, to: archive })
     } catch {
-      showNotification('error', 'Failed to archive email')
+      showNotification('error', t('Failed to archive email'))
     }
   }
 
@@ -480,7 +482,7 @@ export function EmailViewer() {
   // version arrived as one unreadable paragraph) and bring the attachments.
   const handleForward = async () => {
     const attachmentCount = body?.attachments?.length || 0
-    if (attachmentCount) showNotification('success', `Preparing ${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}…`)
+    if (attachmentCount) showNotification('success', t(attachmentCount === 1 ? 'Preparing {count} attachment…' : 'Preparing {count} attachments…', { count: attachmentCount }))
 
     const header = body
       ? [
@@ -515,7 +517,7 @@ export function EmailViewer() {
       await emailsApi.star(selectedEmail.accountId, selectedEmail.id, newStarred, selectedEmail.folder)
     } catch {
       toggleStarLocal(selectedEmail.id) // revert
-      showNotification('error', 'Failed to update star')
+      showNotification('error', t('Failed to update star'))
     }
   }
 
@@ -524,13 +526,13 @@ export function EmailViewer() {
   // what "get this thread out of my inbox" means.
   const handleToggleMute = async () => {
     const threadId = selectedEmail.threadId
-    if (!threadId) { showNotification('error', 'This message is not part of a conversation that can be muted'); return }
+    if (!threadId) { showNotification('error', t('This message is not part of a conversation that can be muted')); return }
     const { id, accountId, folder, subject } = selectedEmail
     try {
       if (isThreadMuted(accountId, threadId)) {
         await emailsApi.unmuteThread(accountId, threadId)
         setMutedThreads(await emailsApi.getMuted())
-        showNotification('success', 'Conversation unmuted')
+        showNotification('success', t('Conversation unmuted'))
         return
       }
       await emailsApi.muteThread(accountId, threadId, subject)
@@ -540,9 +542,9 @@ export function EmailViewer() {
         await emailsApi.move(accountId, id, getArchiveFolder(accountId), origin).catch(() => {})
         removeEmail(id)
       }
-      showNotification('success', 'Conversation muted — new replies skip the inbox', {
+      showNotification('success', t('Conversation muted — new replies skip the inbox'), {
         action: {
-          label: 'Undo',
+          label: t('Undo'),
           onClick: async () => {
             await emailsApi.unmuteThread(accountId, threadId).catch(() => {})
             emailsApi.getMuted().then(setMutedThreads).catch(() => {})
@@ -550,14 +552,14 @@ export function EmailViewer() {
         },
       })
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not change mute')
+      showNotification('error', err instanceof Error ? err.message : t('Could not change mute'))
     }
   }
 
   // A message already sent can still be watched for a reply.
   const handleFollowUpLater = async (days: number) => {
     const to = Array.isArray(selectedEmail.to) ? selectedEmail.to.join(', ') : String(selectedEmail.to || '')
-    if (!to) { showNotification('error', 'This message has no recipient to wait for'); return }
+    if (!to) { showNotification('error', t('This message has no recipient to wait for')); return }
     try {
       await emailsApi.createFollowup({
         accountId: selectedEmail.accountId,
@@ -568,11 +570,11 @@ export function EmailViewer() {
         days,
       })
       setFollowups(await emailsApi.getFollowups())
-      showNotification('success', `You'll be reminded if nobody replies within ${days === 1 ? 'a day' : `${days} days`}`, {
-        action: { label: 'Follow-ups', onClick: () => useEmailStore.getState().setShowFollowupsModal(true) },
+      showNotification('success', t(days === 1 ? "You'll be reminded if nobody replies within a day" : "You'll be reminded if nobody replies within {days} days", { days }), {
+        action: { label: t('Follow-ups'), onClick: () => useEmailStore.getState().setShowFollowupsModal(true) },
       })
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not set a follow-up')
+      showNotification('error', err instanceof Error ? err.message : t('Could not set a follow-up'))
     }
   }
 
@@ -581,9 +583,9 @@ export function EmailViewer() {
       await emailsApi.markUnread(selectedEmail.accountId, selectedEmail.id, selectedEmail.folder)
       markEmailUnread(selectedEmail.id)
       setSelectedEmail(null)
-      showNotification('success', 'Marked as unread')
+      showNotification('success', t('Marked as unread'))
     } catch {
-      showNotification('error', 'Failed to mark as unread')
+      showNotification('error', t('Failed to mark as unread'))
     }
   }
 
@@ -597,11 +599,11 @@ export function EmailViewer() {
     const weekend = (() => { const d = at(now, 8); const day = d.getDay(); const add = ((6 - day) + 7) % 7 || 7; d.setDate(d.getDate() + add); return d })()
     const nextWeek = (() => { const d = at(now, 8); const day = d.getDay(); const add = ((1 - day) + 7) % 7 || 7; d.setDate(d.getDate() + add); return d })()
     return [
-      { label: 'Later today', until: laterToday },
-      { label: 'This evening', until: thisEvening },
-      { label: 'Tomorrow', until: tomorrow },
-      { label: 'This weekend', until: weekend },
-      { label: 'Next week', until: nextWeek },
+      { label: t('Later today'), until: laterToday },
+      { label: t('This evening'), until: thisEvening },
+      { label: t('Tomorrow'), until: tomorrow },
+      { label: t('This weekend'), until: weekend },
+      { label: t('Next week'), until: nextWeek },
     ]
   }
 
@@ -612,9 +614,9 @@ export function EmailViewer() {
     try {
       await emailsApi.snooze(email.accountId, email.id, until.toISOString(), email, email.folder)
       snoozeEmailLocal(email, until.toISOString())
-      showNotification('success', `Snoozed until ${until.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`)
+      showNotification('success', t('Snoozed until {when}', { when: until.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) }))
     } catch {
-      showNotification('error', 'Failed to snooze email')
+      showNotification('error', t('Failed to snooze email'))
     }
   }
 
@@ -634,9 +636,9 @@ export function EmailViewer() {
       await emailsApi.unsnooze(email.accountId, email.id)
       unsnoozeLocal(email.id)
       setSelectedEmail(null)
-      showNotification('success', 'Email un-snoozed')
+      showNotification('success', t('Email un-snoozed'))
     } catch {
-      showNotification('error', 'Failed to un-snooze email')
+      showNotification('error', t('Failed to un-snooze email'))
     }
   }
 
@@ -648,10 +650,62 @@ export function EmailViewer() {
     try {
       const { undoId } = await emailsApi.move(accountId, id, targetFolder, origin)
       removeEmail(id)
-      notifyMoved(`Moved to ${targetFolder}`, { accountId, undoId, from: origin, to: targetFolder })
+      notifyMoved(t('Moved to {folder}', { folder: targetFolder }), { accountId, undoId, from: origin, to: targetFolder })
     } catch {
-      showNotification('error', 'Failed to move email')
+      showNotification('error', t('Failed to move email'))
     }
+  }
+
+  /**
+   * Print the message, or save it as PDF from the print dialog.
+   *
+   * The reader frame cannot print itself — it is sandboxed without
+   * allow-modals, and printing the app window would print the whole UI. So the
+   * already-sanitised content is laid out again in a throwaway frame that may
+   * open the print dialog but still may not run script, with a policy of its
+   * own that loads remote images only if the reader chose to show them.
+   */
+  const handlePrint = () => {
+    if (!selectedEmail) return
+    const meta = [
+      [t('From'), body?.from || selectedEmail.from],
+      [t('To'), body?.to || (selectedEmail.to || []).join(', ')],
+      [t('Cc'), body?.cc || ''],
+      [t('Date'), formatFullDate(body?.date || selectedEmail.date)],
+    ].filter(([, value]) => value)
+      .map(([label, value]) => `<div><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</div>`)
+      .join('')
+    const content = sanitizedHtml
+      || `<pre style="white-space:pre-wrap;font:inherit">${escapeHtml(body?.text || '')}</pre>`
+    const attachmentList = body?.attachments?.length
+      ? `<div class="att"><b>${escapeHtml(t('Attachments ({count})', { count: body.attachments.length }))}:</b> ${body.attachments.map(a => escapeHtml(a.filename || '')).join(', ')}</div>`
+      : ''
+    const policy = `default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:${showRemoteImages ? ' https:' : ''}; font-src data:`
+    const doc = `<!doctype html><html><head><meta charset="utf-8">`
+      + `<meta http-equiv="Content-Security-Policy" content="${policy}">`
+      + `<title>${escapeHtml(selectedEmail.subject || t('(no subject)'))}</title>`
+      + `<style>body{font:14px/1.55 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;color:#111;background:#fff;margin:28px}`
+      + `h1{font-size:20px;margin:0 0 12px}.meta{font-size:12px;color:#444;border-bottom:1px solid #ccc;padding-bottom:10px;margin-bottom:18px}`
+      + `.att{margin-top:22px;padding-top:10px;border-top:1px solid #ccc;font-size:12px;color:#444}img{max-width:100%;height:auto}</style>`
+      + `</head><body><h1>${escapeHtml(selectedEmail.subject || t('(no subject)'))}</h1><div class="meta">${meta}</div>${content}${attachmentList}</body></html>`
+
+    const frame = document.createElement('iframe')
+    frame.setAttribute('sandbox', 'allow-same-origin allow-modals')
+    frame.setAttribute('aria-hidden', 'true')
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden'
+    frame.onload = () => {
+      try {
+        frame.contentWindow?.focus()
+        frame.contentWindow?.print()
+      } catch {
+        showNotification('error', t('Could not open the print dialog'))
+      } finally {
+        // print() blocks until the dialog closes; give it a moment regardless.
+        window.setTimeout(() => frame.remove(), 1000)
+      }
+    }
+    frame.srcdoc = doc
+    document.body.appendChild(frame)
   }
 
   const handleSummarizeThread = async () => {
@@ -691,7 +745,7 @@ export function EmailViewer() {
     if (!body) return
     setActionsLoading(true)
     try { setActions((await aiApi.extractActions({ subject: body.subject, body: body.text || stripHtml(body.html || '') })).actions) }
-    catch { showNotification('error', 'Failed to extract actions') }
+    catch { showNotification('error', t('Failed to extract actions')) }
     finally { setActionsLoading(false) }
   }
 
@@ -719,10 +773,10 @@ export function EmailViewer() {
     if (!sanitized) return ''
     const { images, pixels } = sanitized.blocked
     const parts: string[] = []
-    if (pixels) parts.push(`${pixels} tracking pixel${pixels === 1 ? '' : 's'} removed`)
-    if (images) parts.push(`${images} remote image${images === 1 ? '' : 's'} blocked`)
-    if (!parts.length) return 'Some remote content was blocked for privacy.'
-    return `${parts.join(' · ')} for privacy.`
+    if (pixels) parts.push(t(pixels === 1 ? '{count} tracking pixel removed' : '{count} tracking pixels removed', { count: pixels }))
+    if (images) parts.push(t(images === 1 ? '{count} remote image blocked' : '{count} remote images blocked', { count: images }))
+    if (!parts.length) return t('Some remote content was blocked for privacy.')
+    return t('{details} for privacy.', { details: parts.join(' · ') })
   })()
 
   // The server will only ever serve these types inline; everything else comes
@@ -772,13 +826,13 @@ export function EmailViewer() {
       link.click()
       link.remove()
     } catch {
-      showNotification('error', `Could not download ${att.filename || 'the attachment'}`)
+      showNotification('error', t('Could not download {name}', { name: att.filename || t('the attachment') }))
     }
   }
 
   // "Summarize" still needs the bytes in hand — fetch just that one file.
   const summarizeAttachment = async (att: Attachment, index: number) => {
-    setAttachmentSummaries(s => ({ ...s, [index]: 'Summarizing…' }))
+    setAttachmentSummaries(s => ({ ...s, [index]: t('Summarizing…') }))
     try {
       const buffer = await emailsApi.fetchAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder)
       let binary = ''
@@ -794,7 +848,7 @@ export function EmailViewer() {
       })
       setAttachmentSummaries(s => ({ ...s, [index]: summary }))
     } catch {
-      setAttachmentSummaries(s => ({ ...s, [index]: 'Unable to summarize this attachment.' }))
+      setAttachmentSummaries(s => ({ ...s, [index]: t('Unable to summarize this attachment.') }))
     }
   }
 
@@ -831,42 +885,42 @@ export function EmailViewer() {
           pane is for. Everything rare or destructive lives behind "More", so a
           narrow window never has to wrap thirteen controls onto two rows. */}
       <div className="flex items-center gap-0.5 px-2.5 min-h-[52px] py-2 border-b border-line/40">
-        <button onClick={handleReply} className={toolBtn} aria-label="Reply to email" title="Reply (r)">
+        <button onClick={handleReply} className={toolBtn} data-action="reply" aria-label={t('Reply')} title={t('Reply (r)')}>
           <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M5 3L1 6.5M1 6.5L5 10M1 6.5h8a3 3 0 010 6h-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          Reply
+          {t('Reply')}
         </button>
-        <button onClick={handleReplyAll} className={toolBtn} aria-label="Reply to all recipients" title="Reply all">
+        <button onClick={handleReplyAll} className={toolBtn} data-action="reply-all" aria-label={t('Reply All')} title={t('Reply all (a)')}>
           <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M4 3L0 6.5M0 6.5L4 10M0 6.5h7M8 3L12 6.5M12 6.5L8 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          Reply All
+          {t('Reply All')}
         </button>
-        <button onClick={handleForward} className={toolBtn} aria-label="Forward email" title="Forward (f)">
+        <button onClick={handleForward} className={toolBtn} data-action="forward" aria-label={t('Forward')} title={t('Forward (f)')}>
           <svg width="14" height="14" viewBox="0 0 13 13" fill="none"><path d="M8 3l4 3.5M12 6.5L8 10M12 6.5H4a3 3 0 000 6h1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          Forward
+          {t('Forward')}
         </button>
 
         {divider}
 
         <button
           onClick={handleStar}
-          title={selectedEmail.starred ? 'Unstar' : 'Star (s)'}
-          aria-label={selectedEmail.starred ? 'Unstar email' : 'Star email'}
+          title={selectedEmail.starred ? t('Unstar') : t('Star (s)')}
+          aria-label={selectedEmail.starred ? t('Unstar') : t('Star')}
           className={`${iconBtn} ${selectedEmail.starred ? '!text-accent' : ''}`}
         >
           <StarIcon filled={selectedEmail.starred} />
         </button>
 
         {currentFolder === '__snoozed__' ? (
-          <button onClick={handleUnsnooze} title="Un-snooze" aria-label="Un-snooze email" className={iconBtn}>
+          <button onClick={handleUnsnooze} title={t('Un-snooze')} aria-label={t('Un-snooze')} className={iconBtn}>
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M6 7h4l-4 3.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </button>
         ) : (
           <div className="relative">
-            <button onClick={() => { setShowSnoozeMenu(v => !v); setShowMoveMenu(false); setShowMoreMenu(false) }} title="Snooze" aria-label="Snooze email" className={iconBtn}>
+            <button onClick={() => { setShowSnoozeMenu(v => !v); setShowMoveMenu(false); setShowMoreMenu(false) }} title={t('Snooze')} aria-label={t('Snooze')} className={iconBtn}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M6 7h4l-4 3.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 1.5L2.5 3.5M11 1.5l2.5 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
             </button>
             {showSnoozeMenu && (
               <div className="absolute right-0 top-full mt-1.5 w-48 glass-elevated rounded-xl z-20 py-1.5 overflow-hidden animate-pop">
-                <div className="px-3 py-1 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em]">Snooze until</div>
+                <div className="px-3 py-1 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em]">{t('Snooze until')}</div>
                 {snoozeOptions().map(opt => (
                   <button
                     key={opt.label}
@@ -884,7 +938,7 @@ export function EmailViewer() {
 
         {movableFolders.length > 0 && (
           <div className="relative">
-            <button onClick={() => { setShowMoveMenu(v => !v); setShowSnoozeMenu(false); setShowMoreMenu(false) }} title="Move to folder" aria-label="Move to folder" className={iconBtn}>
+            <button onClick={() => { setShowMoveMenu(v => !v); setShowSnoozeMenu(false); setShowMoreMenu(false) }} title={t('Move to folder')} aria-label={t('Move to folder')} className={iconBtn}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
                 <path d="M8 8v4M6 10l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -892,7 +946,7 @@ export function EmailViewer() {
             </button>
             {showMoveMenu && (
               <div className="absolute right-0 top-full mt-1.5 w-48 glass-elevated rounded-xl z-20 py-1.5 overflow-hidden animate-pop max-h-72 overflow-y-auto">
-                <div className="px-3 py-1 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em]">Move to</div>
+                <div className="px-3 py-1 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em]">{t('Move to')}</div>
                 {movableFolders.map(f => (
                   <button
                     key={f.path}
@@ -909,19 +963,20 @@ export function EmailViewer() {
 
         {divider}
 
-        <button onClick={handleArchive} className={toolBtn} title="Archive (e)" aria-label="Archive email">
+        <button onClick={handleArchive} className={toolBtn} data-action="archive" title={t('Archive (e)')} aria-label={t('Archive')}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path d="M2 4h12v1H2zM3 5v7a1 1 0 001 1h8a1 1 0 001-1V5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
             <path d="M6 8h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
-          Archive
+          {t('Archive')}
         </button>
 
         <button
           onClick={handleDelete}
           className={`${iconBtn} hover:!text-danger hover:!bg-danger/10`}
-          title="Delete (d)"
-          aria-label="Delete email"
+          data-action="delete"
+          title={t('Delete (d)')}
+          aria-label={t('Delete')}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
@@ -932,8 +987,8 @@ export function EmailViewer() {
         <div className="relative">
           <button
             onClick={() => { setShowMoreMenu(v => !v); setShowMoveMenu(false); setShowSnoozeMenu(false) }}
-            title="More actions"
-            aria-label="More actions"
+            title={t('More actions')}
+            aria-label={t('More actions')}
             aria-haspopup="menu"
             aria-expanded={showMoreMenu}
             className={`${iconBtn} ${showMoreMenu ? '!bg-ink/10 !text-ink' : ''}`}
@@ -949,38 +1004,43 @@ export function EmailViewer() {
               <MenuItem
                 onClick={() => { setShowMoreMenu(false); handleSummarizeThread() }}
                 disabled={summaryLoading}
-                label={summaryLoading ? 'Summarising…' : 'Summarise thread'}
+                label={summaryLoading ? t('Summarising…') : t('Summarise thread')}
                 icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3h10M3 7h7M3 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
               />
               <MenuItem
                 onClick={() => { setShowMoreMenu(false); handleExtractActions() }}
                 disabled={actionsLoading}
-                label={actionsLoading ? 'Finding…' : 'Find tasks & dates'}
+                label={actionsLoading ? t('Finding…') : t('Find tasks & dates')}
                 icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>}
               />
               <MenuItem
+                onClick={() => { setShowMoreMenu(false); handlePrint() }}
+                label={t('Print / save as PDF')}
+                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 6V2h8v4M4 12H2.5A1 1 0 011.5 11V7a1 1 0 011-1h11a1 1 0 011 1v4a1 1 0 01-1 1H12" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M4 9.5h8V14H4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>}
+              />
+              <MenuItem
                 onClick={() => { setShowMoreMenu(false); handleMarkUnread() }}
-                label="Mark as unread"
+                label={t('Mark as unread')}
                 icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/><path d="M2 4l6 5 6-5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
               />
               {selectedEmail.threadId && (
                 <MenuItem
                   onClick={() => { setShowMoreMenu(false); handleToggleMute() }}
-                  label={isThreadMuted(selectedEmail.accountId, selectedEmail.threadId) ? 'Unmute conversation' : 'Mute conversation'}
+                  label={isThreadMuted(selectedEmail.accountId, selectedEmail.threadId) ? t('Unmute conversation') : t('Mute conversation')}
                   icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 6h2.5L9 3v10L5.5 10H3V6z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M11.5 6l3 4M14.5 6l-3 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
                 />
               )}
               {/sent/i.test(selectedEmail.folder || '') && (
                 <MenuItem
                   onClick={() => { setShowMoreMenu(false); handleFollowUpLater(3) }}
-                  label="Remind me if no reply in 3 days"
+                  label={t('Remind me if no reply in 3 days')}
                   icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5.5v3l2 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
                 />
               )}
               {unsubscribeLink && (
                 <MenuItem
                   onClick={() => { setShowMoreMenu(false); handleUnsubscribe(unsubscribeLink) }}
-                  label="Unsubscribe"
+                  label={t('Unsubscribe')}
                   icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M8 3l5 5-5 5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                 />
               )}
@@ -989,13 +1049,13 @@ export function EmailViewer() {
 
               <MenuItem
                 onClick={() => { setShowMoreMenu(false); handleSpam() }}
-                label="Report spam"
+                label={t('Report spam')}
                 danger
                 icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>}
               />
               <MenuItem
                 onClick={() => { setShowMoreMenu(false); handleBlock() }}
-                label="Block sender"
+                label={t('Block sender')}
                 danger
                 icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M3.8 3.8l8.4 8.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
               />
@@ -1006,7 +1066,7 @@ export function EmailViewer() {
       {/* Header */}
       <div className="px-7 pt-6 pb-5 border-b border-line/40">
         <h1 className="text-[21px] font-semibold text-ink mb-5 leading-[1.25] tracking-[-0.02em]">
-          {selectedEmail.subject || '(no subject)'}
+          {selectedEmail.subject || t('(no subject)')}
         </h1>
         <div className="flex items-start gap-3">
           <Avatar from={selectedEmail.from} size={36} />
@@ -1020,8 +1080,8 @@ export function EmailViewer() {
                 {body?.date ? formatFullDate(body.date) : formatFullDate(selectedEmail.date)}
               </span>
             </div>
-            {body?.to && <div className="text-xs text-ink-2 mt-0.5"><span className="text-ink-3 ">To: </span>{body.to}</div>}
-            {body?.cc && <div className="text-xs text-ink-2 "><span className="text-ink-3 ">Cc: </span>{body.cc}</div>}
+            {body?.to && <div className="text-xs text-ink-2 mt-0.5"><span className="text-ink-3 ">{t('To')}: </span>{body.to}</div>}
+            {body?.cc && <div className="text-xs text-ink-2 "><span className="text-ink-3 ">{t('Cc')}: </span>{body.cc}</div>}
           </div>
         </div>
       </div>
@@ -1032,13 +1092,13 @@ export function EmailViewer() {
           <div className="mb-5 flex items-center justify-between gap-3 rounded-xl bg-accent/12 px-3.5 py-2.5 text-[12.5px] text-ink-2">
             <span>{blockedSummary}</span>
             {sanitized && sanitized.blocked.images > 0 && (
-              <button onClick={() => setShowRemoteImages(true)} className="font-semibold text-info hover:underline flex-shrink-0">Show images</button>
+              <button onClick={() => setShowRemoteImages(true)} className="font-semibold text-info hover:underline flex-shrink-0">{t('Show images')}</button>
             )}
           </div>
         ) : null}
         {conversationBodies.length > 0 && (
           <div className="mb-5 space-y-2">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3">Earlier in this conversation</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3">{t('Earlier in this conversation')}</div>
             {conversationBodies.map(({ email, body: prior }) => (
               <details key={email!.id} className="rounded-xl border border-line/50 bg-ink/4 overflow-hidden">
                 <summary className="cursor-pointer px-3.5 py-2.5 text-[12.5px] hover:bg-ink/4 transition-colors"><strong>{prior.from}</strong><span className="float-right text-ink-3">{formatFullDate(prior.date)}</span></summary>
@@ -1049,7 +1109,7 @@ export function EmailViewer() {
         )}
         {actions.length > 0 && (
           <div className="mb-5 rounded-xl border border-line/50 bg-ink/4 p-3.5">
-            <div className="text-[12.5px] font-semibold mb-2">Suggested actions</div>
+            <div className="text-[12.5px] font-semibold mb-2">{t('Suggested actions')}</div>
             {actions.map((a, i) => <div key={i} className="flex items-center gap-2 text-xs py-1"><span className="flex-1">{a.kind === 'calendar' ? '📅' : '✓'} {a.title}{a.date ? ` — ${a.date}` : ''}</span><button onClick={() => {
               if (a.kind === 'calendar') {
                 const start = new Date(a.date || Date.now()).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
@@ -1058,16 +1118,16 @@ export function EmailViewer() {
               } else {
                 handleReminder(a.date)
               }
-            }} className="text-info">{a.kind === 'calendar' ? 'Add to calendar' : 'Create reminder'}</button></div>)}
+            }} className="text-info">{a.kind === 'calendar' ? t('Add to calendar') : t('Create reminder')}</button></div>)}
           </div>
         )}
         {threadSummary && (
           <div className="mb-5 rounded-xl border border-ai/25 bg-ai/8 p-4">
-            <div className="text-[11px] font-semibold text-ai uppercase tracking-[0.07em] mb-2">AI thread summary</div>
+            <div className="text-[11px] font-semibold text-ai uppercase tracking-[0.07em] mb-2">{t('AI thread summary')}</div>
             <div className="text-sm text-ink mb-3 leading-relaxed">{threadSummary.summary}</div>
             {threadSummary.keyPoints?.length > 0 && (
               <div className="mb-2">
-                <div className="text-[11px] font-semibold text-ink-2 mb-1">Key points</div>
+                <div className="text-[11px] font-semibold text-ink-2 mb-1">{t('Key points')}</div>
                 <ul className="list-disc pl-4 text-[11.5px] text-ink ">
                   {threadSummary.keyPoints.map((p, i) => <li key={i}>{p}</li>)}
                 </ul>
@@ -1075,7 +1135,7 @@ export function EmailViewer() {
             )}
             {threadSummary.actionItems?.length > 0 && (
               <div>
-                <div className="text-[11px] font-semibold text-ink-2 mb-1">Action items</div>
+                <div className="text-[11px] font-semibold text-ink-2 mb-1">{t('Action items')}</div>
                 <ul className="list-disc pl-4 text-[11.5px] text-ink ">
                   {threadSummary.actionItems.map((p, i) => <li key={i}>{p}</li>)}
                 </ul>
@@ -1098,12 +1158,12 @@ export function EmailViewer() {
         ) : body?.text ? (
           <pre className="whitespace-pre-wrap font-sans text-[14px] text-ink leading-[1.65]">{body.text}</pre>
         ) : (
-          <p className="text-ink-3 italic text-sm">No content</p>
+          <p className="text-ink-3 italic text-sm">{t('No content')}</p>
         )}
 
         {body?.attachments && body.attachments.length > 0 && (
           <div className="mt-6 border-t border-line pt-4">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3 mb-2.5">Attachments ({body.attachments.length})</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3 mb-2.5">{t('Attachments ({count})', { count: body.attachments.length })}</div>
             <div className="flex flex-wrap gap-2">
               {body.attachments.map((att, i) => (
                 <div key={i} className="flex flex-col gap-2 w-full">
@@ -1113,31 +1173,31 @@ export function EmailViewer() {
                     <span className="text-ink-3 ">({Math.round(att.size / 1024)}KB)</span>
                     {isPreviewable(att) && (
                       <button
-                        title="Preview"
+                        title={t('Preview')}
                         onClick={() => togglePreview(att, i)}
                         className="text-info hover:opacity-70 transition-opacity text-[11px]"
                       >
-                        {previewOpen[i] ? 'Hide' : 'Preview'}
+                        {previewOpen[i] ? t('Hide') : t('Preview')}
                       </button>
                     )}
                     <button
-                      title="Download"
+                      title={t('Download')}
                       onClick={() => downloadAttachment(att, i)}
                       className="text-accent hover:text-accent-ink transition-colors"
                     >
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
                     </button>
                     {(attachmentType(att) === 'application/pdf' || attachmentType(att).startsWith('text/')) && (
-                      <button onClick={() => summarizeAttachment(att, i)} className="text-ai text-[11px]">Summarize</button>
+                      <button onClick={() => summarizeAttachment(att, i)} className="text-ai text-[11px]">{t('Summarize')}</button>
                     )}
                   </div>
                   {attachmentSummaries[i] && <div className="rounded-md bg-surface-2 p-3 text-xs whitespace-pre-wrap">{attachmentSummaries[i]}</div>}
                   {previewOpen[i] && isPreviewable(att) && (
                     <div className="border border-line rounded-md overflow-hidden bg-white w-full">
                       {previewUrls[i] === 'loading' || !previewUrls[i] ? (
-                        <div className="p-4 text-xs text-ink-3">Loading preview…</div>
+                        <div className="p-4 text-xs text-ink-3">{t('Loading preview…')}</div>
                       ) : previewUrls[i] === 'error' ? (
-                        <div className="p-4 text-xs text-danger">Could not load this attachment.</div>
+                        <div className="p-4 text-xs text-danger">{t('Could not load this attachment.')}</div>
                       ) : isImage(att) ? (
                         <img src={previewUrls[i]} alt={att.filename} className="w-full h-auto max-h-[80vh] object-contain" />
                       ) : attachmentType(att) === 'application/pdf' ? (
@@ -1160,7 +1220,7 @@ export function EmailViewer() {
         )}
         {smartReplies.length > 0 && (
           <div className="mt-6 border-t border-line pt-4">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3 mb-2.5">Smart reply</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3 mb-2.5">{t('Smart reply')}</div>
             <div className="flex flex-wrap gap-2">{smartReplies.map(reply => <button key={reply} onClick={() => handleSmartReply(reply)} className="rounded-full border border-ai/40 px-3.5 py-1.5 text-[12.5px] text-ai hover:bg-ai/12 transition-colors active:scale-95">{reply}</button>)}</div>
           </div>
         )}

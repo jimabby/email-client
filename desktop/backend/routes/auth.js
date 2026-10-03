@@ -21,6 +21,11 @@ function publicAccount(account) {
   const safe = { ...account };
   for (const field of SECRET_FIELDS) delete safe[field];
   delete safe.msalHomeAccountId;
+  // What actually happens, not just the stored override, so the settings
+  // toggle shows the default correctly.
+  if (account.type === 'imap') {
+    safe.sentCopyEffective = require('../services/imapService')._internals.shouldSaveSentCopy(account);
+  }
   return safe;
 }
 
@@ -47,6 +52,15 @@ router.patch('/accounts/:id', async (req, res) => {
 
   const updates = {};
   if (typeof req.body?.name === 'string' && req.body.name.trim()) updates.name = req.body.name.trim().slice(0, 120);
+
+  // IMAP only: whether sent mail is also APPENDed to the Sent folder. null
+  // restores the default (on, unless the SMTP host files its own copy).
+  if ('saveSentCopy' in (req.body || {})) {
+    if (account.type !== 'imap') return res.status(400).json({ error: 'Only IMAP accounts need a Sent copy saved' });
+    const value = req.body.saveSentCopy;
+    if (value !== true && value !== false && value !== null) return res.status(400).json({ error: 'saveSentCopy must be true, false, or null' });
+    updates.saveSentCopy = value;
+  }
 
   if (typeof req.body?.password === 'string' && req.body.password) {
     if (account.type !== 'imap') return res.status(400).json({ error: 'Only IMAP accounts have a password; reconnect OAuth accounts by signing in again' });

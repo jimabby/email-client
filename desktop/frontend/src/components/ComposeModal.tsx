@@ -6,10 +6,11 @@ import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { useEmailStore } from '../store/emailStore'
-import { promptDialog } from './DialogHost'
+import { promptDialog, confirmDialog } from './DialogHost'
 import * as localOutbox from '../lib/localOutbox'
 import { emailsApi, streamAiSuggestion, type StreamHandle } from '../api/client'
 import type { AiMode, Alias, DraftAttachment, MailTemplate } from '../types/email'
+import { useT, t as translate } from '../lib/i18n'
 
 // Providers reject very large messages, and base64 inflates bytes by ~33%.
 // Refuse locally with a clear message instead of letting the request die with
@@ -223,7 +224,16 @@ export function ComposeModal() {
     saveDraft, deleteDraft,
   } = useEmailStore()
 
+  const t = useT()
   const isReply = !!composeData?.replyTo
+  // "Send & archive" needs to know which account owns the original, and it
+  // only makes sense for mail that is still sitting in an inbox.
+  const originalAccount = composeData?.replyTo?.id
+    ? accounts.find(a => composeData.replyTo!.id!.startsWith(a.id))
+    : undefined
+  const canSendAndArchive = !!originalAccount && /^inbox$/i.test(composeData?.replyTo?.folder || 'INBOX')
+  const [isDragging, setIsDragging] = useState(false)
+  const dragDepthRef = useRef(0)
 
   // Stable id for this compose session so repeated saves update one draft.
   const draftIdRef = useRef(
@@ -315,7 +325,7 @@ export function ComposeModal() {
       StarterKit,
       Underline,
       Link.configure({ openOnClick: false }),
-      Placeholder.configure({ placeholder: 'Write your email…' }),
+      Placeholder.configure({ placeholder: translate('Write your email…') }),
     ],
     content: initialHtml,
     editorProps: {
@@ -401,29 +411,79 @@ export function ComposeModal() {
   const totalAttachmentBytes = attachments.reduce((sum, a) => sum + a.size, 0)
   const overAttachmentLimit = totalAttachmentBytes > MAX_TOTAL_ATTACHMENT_BYTES
 
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const picked = Array.from(e.target.files || [])
-    e.target.value = ''
-    if (!picked.length) return
+  const attachmentLimitMessage = () =>
+    t('Attachments must total under {mb} MB', { mb: Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024) })
 
-    const additional = picked.reduce((sum, f) => sum + f.size, 0)
+  /** Add picked or dropped files, refusing the batch if it breaks the size cap. */
+  const addFiles = (picked: File[]) => {
+    // A dropped folder arrives as a zero-byte entry with no type; it is not a file.
+    const files = picked.filter(f => f.size > 0 || f.type)
+    if (!files.length) return
+    const additional = files.reduce((sum, f) => sum + f.size, 0)
     if (totalAttachmentBytes + additional > MAX_TOTAL_ATTACHMENT_BYTES) {
-      showNotification('error', `Attachments must total under ${Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024)} MB`)
+      showNotification('error', attachmentLimitMessage())
       return
     }
     setAttachments(prev => [
       ...prev,
-      ...picked.map(file => ({ kind: 'file' as const, file, name: file.name, size: file.size })),
+      ...files.map(file => ({ kind: 'file' as const, file, name: file.name, size: file.size })),
     ])
   }
 
-  const handleSend = async () => {
-    if (!to || !subject) { showNotification('error', 'Please fill in To and Subject fields'); return }
-    if (!accountId) { showNotification('error', 'Please select an account'); return }
-    if (showSchedule && !scheduledAt) { showNotification('error', 'Please choose a scheduled send time'); return }
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files || [])
+    e.target.value = ''
+    addFiles(picked)
+  }
+
+  // Drag-and-drop. dragenter/dragleave fire for every child element crossed,
+  // so a depth counter (not a boolean) decides when the pointer really left.
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types || []).includes('Files')
+  const dropHandlers = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return
+      e.preventDefault()
+      dragDepthRef.current += 1
+      setIsDragging(true)
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+      if (dragDepthRef.current === 0) setIsDragging(false)
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return
+      // Without this the editor (or the window) would open the file instead.
+      e.preventDefault()
+      e.stopPropagation()
+      dragDepthRef.current = 0
+      setIsDragging(false)
+      addFiles(Array.from(e.dataTransfer.files || []))
+    },
+  }
+
+  const handleSend = async (options: { archiveOriginal?: boolean } = {}) => {
+    if (isSending) return
+    if (!to.trim()) { showNotification('error', t('Add at least one recipient')); return }
+    if (!accountId) { showNotification('error', t('Please select an account')); return }
+    if (showSchedule && !scheduledAt) { showNotification('error', t('Please choose a scheduled send time')); return }
     if (overAttachmentLimit) {
-      showNotification('error', `Attachments must total under ${Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024)} MB`)
+      showNotification('error', attachmentLimitMessage())
       return
+    }
+    // An empty subject is legal mail, just usually a mistake — ask, don't refuse.
+    if (!subject.trim()) {
+      const ok = await confirmDialog({
+        title: t('Send without a subject?'),
+        body: t('This message has no subject line.'),
+        confirmLabel: t('Send anyway'),
+      })
+      if (!ok) return
     }
     setIsSending(true)
     try {
@@ -463,8 +523,8 @@ export function ComposeModal() {
         localOutbox.enqueue(accountId, payload, err)
         addContacts([to, cc, bcc].join(',').split(',').map(a => a.trim()).filter(Boolean))
         deleteDraft(draftIdRef.current)
-        showNotification('success', 'Hermes is offline — the message will send when it reconnects', {
-          action: { label: 'Outbox', onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
+        showNotification('success', t('Hermes is offline — the message will send when it reconnects'), {
+          action: { label: t('Outbox'), onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
           timeoutMs: 8000,
         })
         closeCompose()
@@ -492,16 +552,26 @@ export function ComposeModal() {
           windowSec: undoWindowSec,
         })
       } else if (sendResult.queued && isDeferred) {
-        const when = sendResult.sendAt ? new Date(sendResult.sendAt).toLocaleString() : 'soon'
-        showNotification('success', `Email scheduled for ${when}`, {
-          action: { label: 'Outbox', onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
+        const when = sendResult.sendAt ? new Date(sendResult.sendAt).toLocaleString() : t('soon')
+        showNotification('success', t('Email scheduled for {when}', { when }), {
+          action: { label: t('Outbox'), onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
         })
       } else {
-        showNotification('success', 'Email sent!', {
+        showNotification('success', options.archiveOriginal ? t('Sent — original archived') : t('Email sent!'), {
           // The send happens on the server moments from now; if it fails the
           // outbox holds it, so point there rather than claiming success blindly.
-          action: { label: 'Outbox', onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
+          action: { label: t('Outbox'), onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
         })
+      }
+
+      // Send & archive: the reply is safely queued, so the original can leave
+      // the inbox now. A failure here must not look like a failed send.
+      if (options.archiveOriginal && originalAccount && r?.id) {
+        const store = useEmailStore.getState()
+        const archiveFolder = store.getArchiveFolder(originalAccount.id)
+        emailsApi.move(originalAccount.id, r.id, archiveFolder, r.folder || 'INBOX')
+          .then(() => useEmailStore.getState().removeEmail(r.id!))
+          .catch(() => useEmailStore.getState().showNotification('error', t('Sent, but the original could not be archived')))
       }
       // Clear any saved draft for this compose (local + server copy).
       const sentRef = useEmailStore.getState().drafts.find(d => d.id === draftIdRef.current)?.serverRef
@@ -509,10 +579,10 @@ export function ComposeModal() {
       if (sentRef) emailsApi.deleteServerDraft(accountId, sentRef).catch(() => {})
       closeCompose()
     } catch (err: unknown) {
-      showNotification('error', err instanceof Error ? err.message : 'Failed to send email')
+      showNotification('error', err instanceof Error ? err.message : t('Failed to send email'))
     } finally { setIsSending(false) }
   }
-  sendRef.current = handleSend
+  sendRef.current = () => { handleSend() }
 
   // ─── Drafts ──────────────────────────────────────────────────────────────
 
@@ -559,11 +629,11 @@ export function ComposeModal() {
         replaceRef: prevRef,
       })
       saveDraft(buildDraft(ref, attachmentData))
-      showNotification('success', 'Draft saved')
+      showNotification('success', t('Draft saved'))
     } catch {
       // Provider sync failed — keep a local copy so work isn't lost.
       saveDraft(buildDraft(prevRef, attachmentData))
-      showNotification('error', 'Draft saved locally (sync to mail server failed)')
+      showNotification('error', t('Draft saved locally (sync to mail server failed)'))
     }
     closeCompose()
   }
@@ -627,7 +697,7 @@ export function ComposeModal() {
       editor?.commands.setContent(paragraphs || '<p></p>')
     }
     setAiSuggestion(''); setAiDone(false)
-    showNotification('success', 'AI suggestion applied!')
+    showNotification('success', t('AI suggestion applied!'))
   }
 
   const handleAiResizeMove = useCallback((e: MouseEvent) => {
@@ -666,13 +736,13 @@ export function ComposeModal() {
   const aiPanelContent = (
     <>
       <div className="p-3 border-b border-line ">
-        <p className="text-[10px] text-ink-3 mb-2 uppercase tracking-wide font-semibold">Mode</p>
+        <p className="text-[10px] text-ink-3 mb-2 uppercase tracking-wide font-semibold">{t('Mode')}</p>
         <div className="grid grid-cols-3 gap-1">
           {AI_MODES.map(mode => (
             <button
               key={mode.value}
               onClick={() => setAiMode(mode.value)}
-              title={mode.description}
+              title={t(mode.description)}
               className={`flex flex-col items-center gap-0.5 p-1.5 rounded-md text-[10px] transition-colors border
                 ${aiMode === mode.value
                   ? 'bg-ai/12 text-ai border-ai/40'
@@ -680,7 +750,7 @@ export function ComposeModal() {
                 }`}
             >
               <span>{mode.icon}</span>
-              <span className="leading-tight text-center">{mode.label}</span>
+              <span className="leading-tight text-center">{t(mode.label)}</span>
             </button>
           ))}
         </div>
@@ -704,7 +774,7 @@ export function ComposeModal() {
               : 'bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-500 hover:to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed'
             }`}
         >
-          {isAiLoading ? '⏹ Stop' : `✦ Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}
+          {isAiLoading ? `⏹ ${t('Stop')}` : `✦ ${t('Ask {assistant}', { assistant: aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude' })}`}
         </button>
       </div>
 
@@ -720,7 +790,7 @@ export function ComposeModal() {
         {aiSuggestion && (
           <div>
             <div className="text-[10px] text-ink-3 mb-1.5 font-semibold uppercase tracking-wide">
-              Suggestion {isAiLoading && <span className="text-violet-500 ml-1 normal-case">streaming…</span>}
+              {t('Suggestion')} {isAiLoading && <span className="text-violet-500 ml-1 normal-case">{t('streaming…')}</span>}
             </div>
             <div className="text-[12.5px] text-ink bg-ink/4 border border-line/50 rounded-xl p-3.5 whitespace-pre-wrap leading-relaxed">
               {aiSuggestion}
@@ -730,13 +800,13 @@ export function ComposeModal() {
         )}
         {aiError && (
           <div className="text-[11px] text-red-600 bg-red-50 border border-red-200 rounded-md p-2.5 leading-relaxed">
-            <div className="font-semibold mb-0.5">Error</div>
+            <div className="font-semibold mb-0.5">{t('Error')}</div>
             {aiError}
           </div>
         )}
         {!aiSuggestion && !isAiLoading && !aiError && (
           <div className="text-[11px] text-ink-3 text-center py-4 leading-relaxed">
-            Select a mode and click<br/>"{`Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}" to get started.
+            {t('Select a mode and ask the assistant to get started.')}
           </div>
         )}
       </div>
@@ -745,7 +815,7 @@ export function ComposeModal() {
         <div className="p-3 border-t border-line flex gap-2 flex-shrink-0">
           <button onClick={applyAiSuggestion}
             className="flex-1 bg-accent text-[#201500] py-2 rounded-md text-xs font-bold hover:bg-accent transition-colors">
-            ✓ Apply to Email
+            ✓ {t('Apply to Email')}
           </button>
           <button onClick={() => { setAiSuggestion(''); setAiDone(false) }}
             className="px-3 py-2 text-ink-3 hover:text-ink hover:bg-surface-3 rounded-md text-xs transition-colors">
@@ -758,10 +828,16 @@ export function ComposeModal() {
 
   // Shared compose fields + editor
   const composeFields = (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="relative flex flex-col flex-1 min-h-0" {...dropHandlers}>
+      {isDragging && (
+        <div className="absolute inset-1 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-accent/70 bg-accent/10 backdrop-blur-sm pointer-events-none animate-fade">
+          <svg width="22" height="22" viewBox="0 0 16 16" fill="none" className="text-accent-ink"><path d="M14 7.5L7.5 14A5 5 0 01.5 7L6.5 1A3.5 3.5 0 0111.5 6L5.5 12A2 2 0 012.5 9L8 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <span className="text-[13px] font-semibold text-accent-ink">{t('Drop files to attach')}</span>
+        </div>
+      )}
       {(accounts.length > 1 || aliases.length > 0) && (
         <div className={rowCls}>
-          <span className={labelCls}>From</span>
+          <span className={labelCls}>{t('From')}</span>
           <select value={accountId} onChange={e => setAccountId(e.target.value)}
             className="flex-1 text-xs bg-transparent text-ink focus:outline-none">
             {accounts.map(a => <option key={a.id} value={a.id} className="bg-white ">{a.email}</option>)}
@@ -770,11 +846,11 @@ export function ComposeModal() {
             <select
               value={sendAs}
               onChange={e => setSendAs(e.target.value)}
-              title="Send as"
+              title={t('Send as')}
               className="text-xs bg-transparent text-ink-2 focus:outline-none max-w-[45%]"
             >
               <option value="" className="bg-white ">
-                {accounts.find(a => a.id === accountId)?.email || 'Default address'}
+                {accounts.find(a => a.id === accountId)?.email || t('Default address')}
               </option>
               {aliases.map(alias => (
                 <option key={alias.email} value={alias.email} className="bg-white ">
@@ -786,7 +862,7 @@ export function ComposeModal() {
         </div>
       )}
       <div className={rowCls}>
-        <span className={labelCls}>To</span>
+        <span className={labelCls}>{t('To')}</span>
         <ContactField value={to} onChange={setTo} contacts={contacts} placeholder="recipient@example.com" label="To" />
         <button onClick={() => setShowCcBcc(!showCcBcc)} className="text-[10px] text-ink-3 hover:text-accent transition-colors flex-shrink-0">Cc Bcc</button>
       </div>
@@ -803,13 +879,13 @@ export function ComposeModal() {
         </>
       )}
       <div className={rowCls}>
-        <span className={labelCls}>Subject</span>
-        <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject"
+        <span className={labelCls}>{t('Subject')}</span>
+        <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder={t('Email subject')}
           className="flex-1 text-sm font-medium bg-transparent text-ink placeholder-ink-3 focus:outline-none" />
       </div>
       {showSchedule && (
         <div className={rowCls}>
-          <span className={labelCls}>Send at</span>
+          <span className={labelCls}>{t('Send at')}</span>
           <input
             type="datetime-local"
             value={scheduledAt}
@@ -822,7 +898,7 @@ export function ComposeModal() {
       {composeData.replyTo && (
         <div className="px-4 py-2 border-b border-line bg-surface-2 ">
           <div className="text-[10px] text-ink-3 ">
-            Replying to <span className="text-ink-2 ">{composeData.replyTo.from}</span>
+            {t('Replying to')} <span className="text-ink-2 ">{composeData.replyTo.from}</span>
           </div>
         </div>
       )}
@@ -839,8 +915,8 @@ export function ComposeModal() {
             ))}
           </div>
           <div className={`mt-1 text-[10px] ${overAttachmentLimit ? 'text-danger ' : 'text-ink-3 '}`}>
-            {Math.round(totalAttachmentBytes / 1024)} KB of {Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024)} MB
-            {overAttachmentLimit && ' — too large to send'}
+            {t('{used} KB of {max} MB', { used: Math.round(totalAttachmentBytes / 1024), max: Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024) })}
+            {overAttachmentLimit && ` — ${t('too large to send')}`}
           </div>
         </div>
       )}
@@ -850,7 +926,7 @@ export function ComposeModal() {
       </div>
       {smartCompletion && smartCompletion !== editor?.getText() && (
         <button onClick={acceptSmartCompletion} className="mx-4 mb-2 text-left rounded-md border border-dashed border-violet-400/60 bg-violet-50 px-3 py-2 text-xs text-violet-700 ">
-          <span className="opacity-70">Smart compose · Tab to accept</span><br/>{smartCompletion.slice(0, 240)}
+          <span className="opacity-70">{t('Smart compose · Tab to accept')}</span><br/>{smartCompletion.slice(0, 240)}
         </button>
       )}
     </div>
@@ -858,13 +934,24 @@ export function ComposeModal() {
 
   const bottomBar = (
     <div className="flex items-center gap-2 px-4 py-3 border-t border-line/40 flex-shrink-0 flex-wrap">
-      <button onClick={handleSend} disabled={isSending} aria-label={showSchedule ? 'Schedule email' : 'Send email'}
+      <button onClick={() => handleSend()} disabled={isSending} aria-label={showSchedule ? 'Schedule email' : 'Send email'}
         className="btn-accent flex items-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-semibold disabled:opacity-50">
         {isSending
-          ? <><svg className="animate-spin" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="2" strokeDasharray="20" strokeDashoffset="5"/></svg> Sending…</>
-          : <><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 1l10 5-10 5V7l7-1-7-1V1z" fill="currentColor"/></svg> {showSchedule ? 'Schedule' : 'Send'}</>
+          ? <><svg className="animate-spin" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="2" strokeDasharray="20" strokeDashoffset="5"/></svg> {t('Sending…')}</>
+          : <><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 1l10 5-10 5V7l7-1-7-1V1z" fill="currentColor"/></svg> {showSchedule ? t('Schedule') : t('Send')}</>
         }
       </button>
+      {canSendAndArchive && !showSchedule && (
+        <button
+          onClick={() => handleSend({ archiveOriginal: true })}
+          disabled={isSending}
+          title={t('Send the reply and archive the message you are replying to')}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium border border-accent/50 text-accent-ink hover:bg-accent/12 transition-colors disabled:opacity-50"
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 4h12v1H2zM3 5v7a1 1 0 001 1h8a1 1 0 001-1V5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M6 8h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+          {t('Send & archive')}
+        </button>
+      )}
       <button
         onClick={() => {
           setShowSchedule(v => !v)
@@ -879,33 +966,33 @@ export function ComposeModal() {
             : 'text-ink-2 border-line/60 hover:text-ink hover:bg-ink/5'
         }`}
       >
-        Schedule
+        {t('Schedule')}
       </button>
       <select
         value={undoWindowSec}
         onChange={e => setUndoWindowSec(parseInt(e.target.value, 10))}
-        title="Undo send window"
+        title={t('Undo send window')}
         className="field text-[12px] px-2 py-1.5 !rounded-xl text-ink-2"
       >
-        <option value={0}>Undo off</option>
-        <option value={60}>Undo 1 min</option>
-        <option value={120}>Undo 2 min</option>
+        <option value={0}>{t('Undo off')}</option>
+        <option value={60}>{t('Undo 1 min')}</option>
+        <option value={120}>{t('Undo 2 min')}</option>
       </select>
       <select
         value={followUpDays}
         onChange={e => setFollowUpDays(Number(e.target.value))}
-        title="Remind me if nobody replies"
+        title={t('Remind me if nobody replies')}
         aria-label="Follow-up reminder"
         className={`field text-[12px] px-2 py-1.5 !rounded-xl ${followUpDays ? 'text-accent-ink' : 'text-ink-2'}`}
       >
-        <option value={0}>No follow-up</option>
-        <option value={1}>Remind if no reply in 1 day</option>
-        <option value={3}>Remind if no reply in 3 days</option>
-        <option value={7}>Remind if no reply in 1 week</option>
-        <option value={14}>Remind if no reply in 2 weeks</option>
+        <option value={0}>{t('No follow-up')}</option>
+        <option value={1}>{t('Remind if no reply in 1 day')}</option>
+        <option value={3}>{t('Remind if no reply in 3 days')}</option>
+        <option value={7}>{t('Remind if no reply in 1 week')}</option>
+        <option value={14}>{t('Remind if no reply in 2 weeks')}</option>
       </select>
       <div className="flex-1">
-        <span className="text-[10px] text-ink-3 hidden sm:inline">Ctrl+Enter to send</span>
+        <span className="text-[10px] text-ink-3 hidden sm:inline">{t('Ctrl+Enter to send')}</span>
       </div>
       {templates.length > 0 && (
         <select defaultValue="" onChange={e => {
@@ -915,12 +1002,12 @@ export function ComposeModal() {
           editor?.commands.setContent(template.body)
           e.currentTarget.value = ''
         }} className="text-[11px] px-2 py-1.5 rounded-md border border-line bg-white text-ink-2 ">
-          <option value="">Template…</option>
+          <option value="">{t('Template…')}</option>
           {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
       )}
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
-      <button onClick={() => fileInputRef.current?.click()} title="Attach files"
+      <button onClick={() => fileInputRef.current?.click()} title={t('Attach files')}
         className="p-2 text-ink-3 hover:text-ink hover:bg-surface-3 rounded-md transition-colors relative">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M14 7.5L7.5 14A5 5 0 01.5 7L6.5 1A3.5 3.5 0 0111.5 6L5.5 12A2 2 0 012.5 9L8 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
         {attachments.length > 0 && (
@@ -935,13 +1022,13 @@ export function ComposeModal() {
             : 'text-ink-2 border-line hover:text-ink hover:border-violet-300 '
           }`}
       >
-        AI Assist
+        {t('AI Assist')}
       </button>
-      <button onClick={handleSaveDraft} title="Save draft"
+      <button onClick={handleSaveDraft} title={t('Save draft')}
         className="px-2.5 py-2 rounded-md text-[11px] font-semibold text-ink-2 border border-line hover:text-ink transition-colors">
-        Save draft
+        {t('Save draft')}
       </button>
-      <button onClick={handleDiscard} title="Discard"
+      <button onClick={handleDiscard} title={t('Discard')}
         className="p-2 text-ink-3 hover:text-danger hover:bg-surface-3 rounded-md transition-colors">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6L12 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
       </button>
@@ -953,13 +1040,13 @@ export function ComposeModal() {
       <div className="flex items-center gap-2">
         <button onClick={() => setIsExpanded(e => !e)}
           className="btn-ghost w-7 h-7 flex items-center justify-center"
-          title={isExpanded ? 'Restore' : 'Expand'}>
+          title={isExpanded ? t('Restore') : t('Expand')}>
           {isExpanded
             ? <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 4L4 10M4 4h6M4 10v-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
             : <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M4 10L10 4M10 10H4M10 4v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
           }
         </button>
-        <button onClick={handleClose} aria-label="Close composer" className="btn-ghost w-7 h-7 flex items-center justify-center hover:!text-danger hover:!bg-danger/10" title="Close">
+        <button onClick={handleClose} aria-label="Close composer" className="btn-ghost w-7 h-7 flex items-center justify-center hover:!text-danger hover:!bg-danger/10" title={t('Close')}>
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         </button>
       </div>
@@ -971,7 +1058,7 @@ export function ComposeModal() {
       <div className="absolute inset-0 z-50 flex flex-col bg-white ">
         {/* Compose area takes full space */}
         <div className="flex flex-col flex-1 min-h-0">
-          {headerBar(composeData.replyTo ? 'Reply' : 'New Message')}
+          {headerBar(composeData.replyTo ? t('Reply') : t('New Message'))}
           {composeFields}
           {/* AI panel docked at bottom when expanded */}
           {showAiPanel && (
@@ -1001,14 +1088,14 @@ export function ComposeModal() {
                 <div className="w-80 border-r border-line p-2 flex-shrink-0 overflow-y-auto">
                   <div className="grid grid-cols-3 gap-1 mb-2">
                     {AI_MODES.map(mode => (
-                      <button key={mode.value} onClick={() => setAiMode(mode.value)} title={mode.description}
+                      <button key={mode.value} onClick={() => setAiMode(mode.value)} title={t(mode.description)}
                         className={`flex flex-col items-center gap-0.5 p-1.5 rounded-md text-[10px] transition-colors border
                           ${aiMode === mode.value
                             ? 'bg-ai/12 text-ai border-ai/40'
                             : 'text-ink-2 border-transparent hover:bg-surface-3 '
                           }`}>
                         <span>{mode.icon}</span>
-                        <span className="leading-tight text-center">{mode.label}</span>
+                        <span className="leading-tight text-center">{t(mode.label)}</span>
                       </button>
                     ))}
                   </div>
@@ -1023,14 +1110,14 @@ export function ComposeModal() {
                         ? 'bg-red-50 border border-red-300 text-red-600 '
                         : 'bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-500 hover:to-blue-500 disabled:opacity-40'
                       }`}>
-                    {isAiLoading ? '⏹ Stop' : `✦ Ask ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'}`}
+                    {isAiLoading ? `⏹ ${t('Stop')}` : `✦ ${t('Ask {assistant}', { assistant: aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude' })}`}
                   </button>
                 </div>
                 {/* Suggestion column */}
                 <div className="flex-1 overflow-y-auto p-3">
                   {isAiLoading && !aiSuggestion && (
                     <div className="flex items-center gap-2 text-violet-500 text-xs">
-                      <span>Thinking…</span>
+                      <span>{t('Thinking…')}</span>
                       <span className="flex gap-1">{[0,1,2].map(i => <span key={i} className="ai-loading-dot w-1 h-1 rounded-full bg-violet-500 inline-block" />)}</span>
                     </div>
                   )}
@@ -1040,12 +1127,12 @@ export function ComposeModal() {
                     </div>
                   )}
                   {!aiSuggestion && !isAiLoading && !aiError && (
-                    <div className="text-[11px] text-ink-3 py-2">Select a mode and click Ask to get a suggestion.</div>
+                    <div className="text-[11px] text-ink-3 py-2">{t('Select a mode and ask the assistant to get started.')}</div>
                   )}
                   {aiError && <div className="text-[11px] text-red-600 bg-red-50 rounded-md p-2">{aiError}</div>}
                   {aiDone && aiSuggestion && (
                     <div className="flex gap-2 mt-2">
-                      <button onClick={applyAiSuggestion} className="flex-1 bg-accent text-[#201500] py-1.5 rounded-md text-xs font-bold hover:bg-accent transition-colors">✓ Apply</button>
+                      <button onClick={applyAiSuggestion} className="flex-1 bg-accent text-[#201500] py-1.5 rounded-md text-xs font-bold hover:bg-accent transition-colors">✓ {t('Apply')}</button>
                       <button onClick={() => { setAiSuggestion(''); setAiDone(false) }} className="px-3 text-ink-3 hover:text-ink text-xs">✕</button>
                     </div>
                   )}
@@ -1094,7 +1181,7 @@ export function ComposeModal() {
 
         {/* Compose window (float mode) */}
         <div className="w-[560px] glass-elevated rounded-2xl flex flex-col overflow-hidden animate-rise" style={{ height: '560px' }}>
-          {headerBar(composeData.replyTo ? 'Reply' : 'New Message')}
+          {headerBar(composeData.replyTo ? t('Reply') : t('New Message'))}
           {composeFields}
           {bottomBar}
         </div>

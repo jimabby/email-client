@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi } from '../api/client'
+import { t } from '../lib/i18n'
 
 /**
  * The undo-send countdown.
@@ -47,10 +48,10 @@ export function UndoSendBar() {
     try {
       await emailsApi.cancelQueuedSend(pendingSend.accountId, pendingSend.jobId)
       clearPendingSend()
-      showNotification('success', 'Send cancelled — the message is back in your drafts.')
+      showNotification('success', t('Send cancelled — the message is back in your drafts.'))
     } catch (err: unknown) {
       setCancelling(false)
-      showNotification('error', err instanceof Error ? err.message : 'Too late to cancel — the message has gone.')
+      showNotification('error', err instanceof Error ? err.message : t('Too late to cancel — the message has gone.'))
       clearPendingSend()
     }
   }
@@ -66,10 +67,10 @@ export function UndoSendBar() {
 
       <div className="min-w-0 flex-1">
         <div className="text-[13px] text-ink font-medium truncate">
-          Sending “{pendingSend.subject || '(no subject)'}”
+          {t('Sending “{subject}”', { subject: pendingSend.subject || t('(no subject)') })}
         </div>
         <div className="text-[11.5px] text-ink-3 tabular-nums">
-          Goes out in {seconds}s
+          {t('Goes out in {seconds}s', { seconds })}
         </div>
       </div>
 
@@ -78,7 +79,7 @@ export function UndoSendBar() {
         disabled={cancelling}
         className="btn-accent px-3.5 py-1.5 rounded-xl text-[12.5px] font-semibold flex-shrink-0 disabled:opacity-50"
       >
-        {cancelling ? 'Undoing…' : 'Undo'}
+        {cancelling ? t('Undoing…') : t('Undo')}
       </button>
 
       <button

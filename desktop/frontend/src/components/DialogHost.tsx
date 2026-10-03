@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { t } from '../lib/i18n'
 
 /**
  * In-app prompt and confirm dialogs.
@@ -92,7 +93,7 @@ export function DialogHost() {
   }
 
   const isPrompt = request.kind === 'prompt'
-  const confirmLabel = request.confirmLabel || (isPrompt ? 'Save' : 'Confirm')
+  const confirmLabel = request.confirmLabel || (isPrompt ? t('Save') : t('Confirm'))
   const danger = !isPrompt && request.danger === true
   // An empty prompt is a cancel — every call site treats "" as "no answer".
   const canSubmit = !isPrompt || value.trim().length > 0
@@ -144,7 +145,7 @@ export function DialogHost() {
             onClick={() => close(null)}
             className="btn-ghost px-3 py-1.5 rounded-lg text-[12.5px] font-medium"
           >
-            Cancel
+            {t('Cancel')}
           </button>
           <button
             onClick={() => close(isPrompt ? value.trim() : '')}

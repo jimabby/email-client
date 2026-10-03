@@ -2,7 +2,6 @@ const { randomUUID: uuidv4 } = require('crypto');
 const store = require('../store');
 
 let intervalHandle = null;
-let processingPromise = null;
 const processingIds = new Set(); // IDs currently being sent
 
 // Every send goes through this queue, so a message composed while the network
@@ -100,69 +99,86 @@ function retryQueuedSend(jobId) {
   });
 }
 
-async function processDueSends() {
-  if (processingPromise) return processingPromise;
-  processingPromise = _processDueSends();
-  try { await processingPromise; } finally { processingPromise = null; }
-}
+// Each account drains its own due messages one at a time, but accounts run
+// side by side: an SMTP server that hangs for minutes used to hold up every
+// other account's mail behind it.
+const busyAccounts = new Map(); // accountId -> Promise of its current drain
 
-async function _processDueSends() {
+async function processDueSends() {
   const now = Date.now();
-  const queue = store.getSendQueue()
+  const due = store.getSendQueue()
     .filter(item => item.status === 'pending' || item.status === 'retrying')
     .filter(item => new Date(item.nextAttemptAt || item.sendAt).getTime() <= now)
     .sort((a, b) => new Date(a.sendAt).getTime() - new Date(b.sendAt).getTime());
 
-  for (const item of queue) {
-    // Re-check status in case it was cancelled between iterations
-    const fresh = store.getSendQueueItem(item.id);
-    if (!fresh || (fresh.status !== 'pending' && fresh.status !== 'retrying')) continue;
-
-    processingIds.add(item.id);
-    const attempts = (fresh.attempts || 0) + 1;
-    store.updateSendQueueItem(item.id, {
-      status: 'sending',
-      sendingAt: new Date().toISOString(),
-      attempts,
-      error: null,
-    });
-
-    try {
-      const account = store.getAccount(item.accountId);
-      if (!account) throw new Error('Account no longer exists');
-      const service = getService(account.type);
-      await service.sendEmail(account, item.email);
-      store.updateSendQueueItem(item.id, {
-        status: 'sent',
-        sentAt: new Date().toISOString(),
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown send error';
-      const retryable = isTransient(err) && attempts < MAX_ATTEMPTS;
-      store.updateSendQueueItem(item.id, {
-        status: retryable ? 'retrying' : 'failed',
-        failedAt: new Date().toISOString(),
-        nextAttemptAt: retryable
-          ? new Date(Date.now() + backoffMs(attempts)).toISOString()
-          : undefined,
-        error: retryable
-          ? `${message} — retrying (attempt ${attempts} of ${MAX_ATTEMPTS})`
-          : message,
-      });
-      if (!retryable) {
-        console.error(`[outbox] Giving up on ${item.id}: ${message}`);
-        // A message that will never send on its own needs the user's attention.
-        try {
-          require('./notificationService').notifySendFailed({ subject: item.subject, error: message });
-        } catch { /* notifications are best-effort */ }
-      }
-    } finally {
-      processingIds.delete(item.id);
-    }
+  const byAccount = new Map();
+  for (const item of due) {
+    if (!byAccount.has(item.accountId)) byAccount.set(item.accountId, []);
+    byAccount.get(item.accountId).push(item);
   }
 
+  const runs = [];
+  for (const [accountId, items] of byAccount) {
+    // Already draining: whatever is due now is picked up on a later tick.
+    if (busyAccounts.has(accountId)) { runs.push(busyAccounts.get(accountId)); continue; }
+    const run = (async () => {
+      for (const item of items) await sendOne(item);
+    })().finally(() => busyAccounts.delete(accountId));
+    busyAccounts.set(accountId, run);
+    runs.push(run);
+  }
+
+  await Promise.all(runs);
   // Prune sent/cancelled items; failed ones stay visible in the outbox.
   store.pruneSendQueue();
+}
+
+async function sendOne(item) {
+  // Re-check status in case it was cancelled since the queue was read.
+  const fresh = store.getSendQueueItem(item.id);
+  if (!fresh || (fresh.status !== 'pending' && fresh.status !== 'retrying')) return;
+
+  processingIds.add(item.id);
+  const attempts = (fresh.attempts || 0) + 1;
+  store.updateSendQueueItem(item.id, {
+    status: 'sending',
+    sendingAt: new Date().toISOString(),
+    attempts,
+    error: null,
+  });
+
+  try {
+    const account = store.getAccount(item.accountId);
+    if (!account) throw new Error('Account no longer exists');
+    const service = getService(account.type);
+    await service.sendEmail(account, item.email);
+    store.updateSendQueueItem(item.id, {
+      status: 'sent',
+      sentAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown send error';
+    const retryable = isTransient(err) && attempts < MAX_ATTEMPTS;
+    store.updateSendQueueItem(item.id, {
+      status: retryable ? 'retrying' : 'failed',
+      failedAt: new Date().toISOString(),
+      nextAttemptAt: retryable
+        ? new Date(Date.now() + backoffMs(attempts)).toISOString()
+        : undefined,
+      error: retryable
+        ? `${message} — retrying (attempt ${attempts} of ${MAX_ATTEMPTS})`
+        : message,
+    });
+    if (!retryable) {
+      console.error(`[outbox] Giving up on ${item.id}: ${message}`);
+      // A message that will never send on its own needs the user's attention.
+      try {
+        require('./notificationService').notifySendFailed({ subject: item.subject, error: message });
+      } catch { /* notifications are best-effort */ }
+    }
+  } finally {
+    processingIds.delete(item.id);
+  }
 }
 
 /** Everything the outbox UI needs, without the message bodies. */

@@ -104,3 +104,11 @@ test('a quoted filename cannot break out of the Content-Disposition header', asy
   assert.ok(!/X-Injected/i.test(res.headers.get('x-injected') || ''));
   assert.ok(!disposition.includes('\n'));
 });
+
+test('a non-Latin filename still downloads, with its real name in filename*', async () => {
+  const res = await get('application/pdf', '季度报告 ✓.pdf');
+  assert.strictEqual(res.status, 200);
+  const disposition = res.headers.get('content-disposition');
+  assert.match(disposition, /filename="[\x20-\x7e]+"/);
+  assert.ok(disposition.includes(`filename*=UTF-8''${encodeURIComponent('季度报告 ✓.pdf')}`));
+});

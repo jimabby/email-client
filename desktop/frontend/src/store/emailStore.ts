@@ -201,6 +201,13 @@ interface EmailStore {
   setMutedThreads: (items: MutedThread[]) => void
   isThreadMuted: (accountId: string, threadId?: string | null) => boolean
 
+  // Sender screener review
+  showScreenerModal: boolean
+  setShowScreenerModal: (show: boolean) => void
+  /** Senders waiting in the screener, for the sidebar badge. */
+  screenerPending: number
+  setScreenerPending: (count: number) => void
+
   // Ctrl+K command palette
   showCommandPalette: boolean
   setShowCommandPalette: (show: boolean) => void
@@ -541,6 +548,11 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   setMutedThreads: (items) => set({ mutedThreads: items }),
   isThreadMuted: (accountId, threadId) =>
     !!threadId && get().mutedThreads.some(m => m.accountId === accountId && m.threadId === threadId),
+
+  showScreenerModal: false,
+  setShowScreenerModal: (show) => set({ showScreenerModal: show }),
+  screenerPending: 0,
+  setScreenerPending: (count) => set({ screenerPending: count }),
 
   showCommandPalette: false,
   setShowCommandPalette: (show) => set({ showCommandPalette: show }),
