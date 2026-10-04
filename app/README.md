@@ -32,7 +32,8 @@ so the phone cannot use it.
 
 ## Screens
 
-- **Settings** - backend URL, API token, notifications, and appearance
+- **Settings** - backend URL, API token, notifications, appearance, and language
+  (English or Simplified Chinese; follows the device by default)
 - **Accounts** - accounts stored by the cloud backend, plus **All inboxes**
 - **Folders** - every mailbox on an account, with live unread counts
 - **Inbox** - list with pull-to-refresh, infinite scroll, search, and swipe
@@ -42,6 +43,9 @@ so the phone cannot use it.
   delete, archive, snooze, reply, attachments, and the AI summary / smart
   replies when a key is configured on the server
 - **Compose** - new message, reply, drafts, send later, and undo send
+- **Screener** - first-time senders waiting for approval; allow or block each
+  one (or a whole domain). Turn it on here or in the desktop app
+- **Outbox**, **Rules**, **Follow-ups** - the same lists the desktop shows
 
 ## Notifications
 
