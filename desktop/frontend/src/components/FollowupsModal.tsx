@@ -3,6 +3,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi } from '../api/client'
 import type { Followup, FollowupStatus } from '../types/email'
+import { useT } from '../lib/i18n'
 
 const STATUS_STYLES: Record<FollowupStatus, { label: string; className: string }> = {
   due: { label: 'No reply', className: 'bg-danger/10 text-danger' },
@@ -25,6 +26,7 @@ function relative(iso?: string | null) {
 export function FollowupsModal() {
   const { setShowFollowupsModal, showNotification, followups, setFollowups, accounts, openCompose } = useEmailStore()
   const [busyId, setBusyId] = useState<string | null>(null)
+  const t = useT()
 
   const refresh = useCallback(async () => {
     try { setFollowups(await emailsApi.getFollowups()) } catch { /* informational */ }
@@ -44,7 +46,7 @@ export function FollowupsModal() {
       await action()
       await refresh()
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : failure)
+      showNotification('error', err instanceof Error ? err.message : t(failure))
     } finally {
       setBusyId(null)
     }
@@ -67,51 +69,51 @@ export function FollowupsModal() {
       <div key={item.id} className="rounded-xl border border-line/50 bg-ink/4 p-3.5">
         <div className="flex items-start gap-2">
           <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide flex-shrink-0 mt-0.5 ${style.className}`}>
-            {style.label}
+            {t(style.label)}
           </span>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-semibold text-ink truncate">{item.subject || '(no subject)'}</div>
+            <div className="text-xs font-semibold text-ink truncate">{item.subject || t('(no subject)')}</div>
             <div className="text-[11px] text-ink-2 truncate">
-              To {item.to || '—'}
-              {accountEmail(item.accountId) && <span className="text-ink-3"> · from {accountEmail(item.accountId)}</span>}
+              {t('To')} {item.to || '—'}
+              {accountEmail(item.accountId) && <span className="text-ink-3"> · {t('from {email}', { email: accountEmail(item.accountId) })}</span>}
             </div>
             <div className="text-[10px] text-ink-3 mt-0.5">
-              Sent {relative(item.sentAt)}
-              {item.status === 'waiting' && <> · reminds {relative(item.dueAt)}</>}
-              {item.status === 'due' && <> · no reply since</>}
-              {item.status === 'replied' && <> · answered {relative(item.repliedAt)}</>}
+              {t('Sent {when}', { when: relative(item.sentAt) })}
+              {item.status === 'waiting' && <> · {t('reminds {when}', { when: relative(item.dueAt) })}</>}
+              {item.status === 'due' && <> · {t('no reply since')}</>}
+              {item.status === 'replied' && <> · {t('answered {when}', { when: relative(item.repliedAt) })}</>}
             </div>
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
             {item.status === 'due' && (
               <button onClick={() => nudge(item)} className="text-[11px] px-2 py-1 rounded text-info hover:bg-info/10">
-                Follow up
+                {t('Follow up')}
               </button>
             )}
             {item.status !== 'replied' && (
               <select
                 value=""
                 disabled={busy}
-                aria-label="Remind again"
+                aria-label={t('Remind again')}
                 onChange={e => {
                   const days = Number(e.target.value)
                   if (days) run(item, () => emailsApi.remindFollowupAgain(item.id, days), 'Could not reschedule')
                 }}
                 className="field text-[11px] px-1.5 py-1 !rounded-lg text-ink-2"
               >
-                <option value="">{item.status === 'due' ? 'Remind again…' : 'Change…'}</option>
-                <option value={1}>in 1 day</option>
-                <option value={3}>in 3 days</option>
-                <option value={7}>in 1 week</option>
+                <option value="">{item.status === 'due' ? t('Remind again…') : t('Change…')}</option>
+                <option value={1}>{t('in 1 day')}</option>
+                <option value={3}>{t('in 3 days')}</option>
+                <option value={7}>{t('in 1 week')}</option>
               </select>
             )}
             <button
               onClick={() => run(item, () => emailsApi.dismissFollowup(item.id), 'Could not dismiss')}
               disabled={busy}
               className="text-[11px] px-2 py-1 rounded text-ink-2 hover:bg-ink/8 disabled:opacity-50"
-              title="Stop watching this message"
+              title={t('Stop watching this message')}
             >
-              Dismiss
+              {t('Dismiss')}
             </button>
           </div>
         </div>
@@ -134,12 +136,12 @@ export function FollowupsModal() {
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-line flex-shrink-0">
           <div>
-            <h2 className="font-semibold text-sm text-ink">Follow-ups</h2>
+            <h2 className="font-semibold text-sm text-ink">{t('Follow-ups')}</h2>
             <p className="text-[11px] text-ink-3 mt-0.5">
-              Sent messages you asked to be reminded about if nobody replies. Set one from the composer.
+              {t('Sent messages you asked to be reminded about if nobody replies. Set one from the composer.')}
             </p>
           </div>
-          <button onClick={() => setShowFollowupsModal(false)} aria-label="Close" className="text-ink-3 hover:text-ink p-1 rounded transition-colors">
+          <button onClick={() => setShowFollowupsModal(false)} aria-label={t('Close')} className="text-ink-3 hover:text-ink p-1 rounded transition-colors">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
         </div>
@@ -147,12 +149,12 @@ export function FollowupsModal() {
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
           {!followups.length && (
             <p className="text-xs text-ink-3 py-8 text-center">
-              Nothing to follow up on. Choose “Remind if no reply” when you send a message.
+              {t('Nothing to follow up on. Choose “Remind if no reply” when you send a message.')}
             </p>
           )}
-          {section('Needs a nudge', due)}
-          {section('Waiting for a reply', waiting)}
-          {section('Answered', replied)}
+          {section(t('Needs a nudge'), due)}
+          {section(t('Waiting for a reply'), waiting)}
+          {section(t('Answered'), replied)}
         </div>
       </div>
     </div>

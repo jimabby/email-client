@@ -3,6 +3,7 @@ import { format, parseISO } from 'date-fns'
 import { emailsApi } from '../api/client'
 import { useEmailStore } from '../store/emailStore'
 import type { CalendarInvite, EmailSummary } from '../types/email'
+import { useT, t as translate } from '../lib/i18n'
 
 interface Props {
   invite: CalendarInvite
@@ -20,11 +21,11 @@ const CHOICES: Array<{ value: Choice; label: string }> = [
 /** "Tue 1 Sep, 09:30 – 10:30" or "Tue 1 Sep (all day)". */
 function formatWhen(invite: CalendarInvite): string {
   const { start, end } = invite
-  if (!start) return 'Time not specified'
+  if (!start) return translate('Time not specified')
 
   try {
     if (start.allDay) {
-      return `${format(parseISO(start.iso), 'EEE d MMM')} · All day`
+      return `${format(parseISO(start.iso), 'EEE d MMM')} · ${translate('All day')}`
     }
     const startAt = parseISO(start.iso)
     const day = format(startAt, 'EEE d MMM')
@@ -33,7 +34,7 @@ function formatWhen(invite: CalendarInvite): string {
     const range = to ? `${from} – ${to}` : from
     // A floating time has no zone information, so say so rather than implying
     // it has been converted to the reader's own.
-    return `${day} · ${range}${start.floating ? ` (${start.tzid || 'local time'})` : ''}`
+    return `${day} · ${range}${start.floating ? ` (${start.tzid || translate('local time')})` : ''}`
   } catch {
     return start.iso
   }
@@ -50,15 +51,16 @@ export function InviteCard({ invite, email }: Props) {
   const showNotification = useEmailStore(s => s.showNotification)
   const [sending, setSending] = useState<Choice | null>(null)
   const [answered, setAnswered] = useState<Choice | null>(null)
+  const t = useT()
 
   const respond = async (choice: Choice) => {
     setSending(choice)
     try {
       await emailsApi.rsvp(email.accountId, email.id, choice, email.folder)
       setAnswered(choice)
-      showNotification('success', `${CHOICES.find(c => c.value === choice)!.label}ed — reply sent to the organiser`)
+      showNotification('success', t({ accepted: 'Accepted — reply sent to the organiser', tentative: 'Tentatively accepted — reply sent to the organiser', declined: 'Declined — reply sent to the organiser' }[choice]))
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not send your reply')
+      showNotification('error', err instanceof Error ? err.message : t('Could not send your reply'))
     } finally {
       setSending(null)
     }
@@ -76,10 +78,10 @@ export function InviteCard({ invite, email }: Props) {
         </svg>
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3">
-            {cancelled ? 'Cancelled meeting' : invite.method === 'REPLY' ? 'Invitation reply' : 'Meeting invitation'}
+            {cancelled ? t('Cancelled meeting') : invite.method === 'REPLY' ? t('Invitation reply') : t('Meeting invitation')}
           </div>
           <div className={`text-[15px] font-semibold text-ink mt-1 ${cancelled ? 'line-through' : ''}`}>
-            {invite.summary || '(no title)'}
+            {invite.summary || t('(no title)')}
           </div>
           <div className="text-[12.5px] text-ink-2 mt-1">{formatWhen(invite)}</div>
           {invite.recurrence && (
@@ -90,7 +92,7 @@ export function InviteCard({ invite, email }: Props) {
           )}
           {invite.organizer?.email && (
             <div className="text-[12px] text-ink-3 mt-1.5">
-              Organised by {invite.organizer.name || invite.organizer.email}
+              {t('Organised by {name}', { name: invite.organizer.name || invite.organizer.email })}
             </div>
           )}
         </div>
@@ -99,16 +101,16 @@ export function InviteCard({ invite, email }: Props) {
       {attendees.length > 0 && (
         <details className="border-t border-line/60 px-4 py-2.5">
           <summary className="cursor-pointer text-[12px] text-ink-3 hover:text-ink-2 transition-colors">
-            {attendees.length} guest{attendees.length === 1 ? '' : 's'}
+            {t(attendees.length === 1 ? '{count} guest' : '{count} guests', { count: attendees.length })}
           </summary>
           <ul className="mt-2 space-y-1">
             {attendees.slice(0, 30).map(a => (
               <li key={a.email} className="flex items-baseline justify-between gap-3 text-[12.5px]">
                 <span className="text-ink-2 truncate">
                   {a.name || a.email}
-                  {a.optional && <span className="text-ink-3"> · optional</span>}
+                  {a.optional && <span className="text-ink-3"> · {t('optional')}</span>}
                 </span>
-                <span className="text-ink-3 shrink-0">{STATUS_LABEL[a.status] || a.status}</span>
+                <span className="text-ink-3 shrink-0">{STATUS_LABEL[a.status] ? t(STATUS_LABEL[a.status]) : a.status}</span>
               </li>
             ))}
           </ul>
@@ -130,12 +132,12 @@ export function InviteCard({ invite, email }: Props) {
                     : 'border border-line text-ink-2 hover:bg-ink/6'
                 }`}
               >
-                {sending === choice.value ? 'Sending…' : choice.label}
+                {sending === choice.value ? t('Sending…') : t(choice.label)}
               </button>
             )
           })}
           {answered && (
-            <span className="text-[12px] text-ink-3 ml-1">Reply sent</span>
+            <span className="text-[12px] text-ink-3 ml-1">{t('Reply sent')}</span>
           )}
         </div>
       )}

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { aiApi } from '../api/client'
 import type { AiModelChoices, AiProvider } from '../types/email'
+import { t } from '../lib/i18n'
 
 const CUSTOM = '__custom__'
 
@@ -32,9 +33,9 @@ export function AiModelPicker({ provider }: { provider: AiProvider }) {
     try {
       const res = await aiApi.setModel(model)
       setCurrent(res.model)
-      showNotification('success', `AI model set to ${res.model}`)
+      showNotification('success', t('AI model set to {model}', { model: res.model || '' }))
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not change the model')
+      showNotification('error', err instanceof Error ? err.message : t('Could not change the model'))
     } finally {
       setSaving(false)
     }
@@ -42,7 +43,7 @@ export function AiModelPicker({ provider }: { provider: AiProvider }) {
 
   return (
     <div>
-      <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-1">Model</label>
+      <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-1">{t('Model')}</label>
       <select
         value={selectValue}
         disabled={saving}
@@ -52,31 +53,31 @@ export function AiModelPicker({ provider }: { provider: AiProvider }) {
           save(value === choices.defaults[provider] ? null : value)
         }}
         className="field w-full px-3 py-2 text-[13.5px]"
-        aria-label="AI model"
+        aria-label={t('Model')}
       >
         {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-        <option value={CUSTOM}>Other model id…</option>
+        <option value={CUSTOM}>{t('Other model id…')}</option>
       </select>
       {selectValue === CUSTOM && (
         <div className="flex gap-2 mt-2">
           <input
             value={custom}
             onChange={e => setCustom(e.target.value)}
-            placeholder="exact model id"
+            placeholder={t('exact model id')}
             className="field flex-1 px-3 py-2 text-[13px] font-mono"
-            aria-label="Custom model id"
+            aria-label={t('Other model id…')}
           />
           <button
             onClick={() => custom.trim() && save(custom.trim())}
             disabled={saving || !custom.trim()}
             className="btn-accent px-3 py-2 rounded-xl text-[12px] font-semibold disabled:opacity-50"
           >
-            Use
+            {t('Use')}
           </button>
         </div>
       )}
       <p className="mt-1.5 text-[10px] text-ink-2">
-        Used for drafting, summaries, smart replies, categories, and the assistant. Larger models cost more per message.
+        {t('Used for drafting, summaries, smart replies, categories, and the assistant. Larger models cost more per message.')}
       </p>
     </div>
   )

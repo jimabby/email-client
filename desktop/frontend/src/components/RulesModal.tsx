@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi } from '../api/client'
+import { useT, t as translate } from '../lib/i18n'
 import type { MailRule, RuleAction, RuleActionType, RuleCondition, RuleField, RuleOp } from '../types/email'
 
-const inputCls = 'field w-full px-2.5 py-1.5 text-[12.5px]'
+const inputCls = 'field min-w-0 px-2.5 py-1.5 text-[12.5px]'
 
 const FIELD_LABELS: Record<RuleField, string> = {
   from: 'From',
@@ -41,7 +42,7 @@ function newCondition(): RuleCondition {
 function newRule(): MailRule {
   return {
     id: crypto.randomUUID(),
-    name: 'New rule',
+    name: translate('New rule'),
     enabled: true,
     match: 'all',
     conditions: [newCondition()],
@@ -56,11 +57,12 @@ export function RulesModal() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [previews, setPreviews] = useState<Record<string, number | 'loading'>>({})
+  const t = useT()
 
   useEffect(() => {
     emailsApi.getRules()
       .then(setRules)
-      .catch(() => showNotification('error', 'Could not load rules'))
+      .catch(() => showNotification('error', t('Could not load rules')))
       .finally(() => setLoading(false))
   }, [])
 
@@ -85,9 +87,9 @@ export function RulesModal() {
       const valid = rules.filter(r => r.conditions.some(c => c.value.trim() || c.op === 'isTrue'))
       const saved = await emailsApi.saveRules(valid)
       setRules(saved)
-      showNotification('success', `Saved ${saved.length} rule${saved.length === 1 ? '' : 's'}`)
+      showNotification('success', t(saved.length === 1 ? 'Saved {count} rule' : 'Saved {count} rules', { count: saved.length }))
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not save rules')
+      showNotification('error', err instanceof Error ? err.message : t('Could not save rules'))
     } finally {
       setSaving(false)
     }
@@ -102,7 +104,7 @@ export function RulesModal() {
       setPreviews(p => ({ ...p, [rule.id]: matched.length }))
     } catch {
       setPreviews(p => { const next = { ...p }; delete next[rule.id]; return next })
-      showNotification('error', 'Could not test this rule')
+      showNotification('error', t('Could not test this rule'))
     }
   }
 
@@ -112,10 +114,10 @@ export function RulesModal() {
     try {
       const { applied } = await emailsApi.runRules(emails, true)
       showNotification('success', applied.length
-        ? `Applied ${applied.length} action${applied.length === 1 ? '' : 's'}`
-        : 'No messages matched')
+        ? t(applied.length === 1 ? 'Applied {count} action' : 'Applied {count} actions', { count: applied.length })
+        : t('No messages matched'))
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not run rules')
+      showNotification('error', err instanceof Error ? err.message : t('Could not run rules'))
     }
   }
 
@@ -133,21 +135,21 @@ export function RulesModal() {
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-line flex-shrink-0">
           <div>
-            <h2 className="font-semibold text-sm text-ink ">Mailbox rules</h2>
+            <h2 className="font-semibold text-sm text-ink ">{t('Mailbox rules')}</h2>
             <p className="text-[11px] text-ink-3 mt-0.5">
-              Rules run on the server as mail arrives — even with Hermes closed. Each message is processed once.
+              {t('Rules run on the server as mail arrives — even with Hermes closed. Each message is processed once.')}
             </p>
           </div>
-          <button onClick={() => setShowRulesModal(false)} aria-label="Close" className="text-ink-3 hover:text-ink p-1 rounded transition-colors">
+          <button onClick={() => setShowRulesModal(false)} aria-label={t('Close')} className="text-ink-3 hover:text-ink p-1 rounded transition-colors">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-          {loading && <p className="text-xs text-ink-3">Loading rules…</p>}
+          {loading && <p className="text-xs text-ink-3">{t('Loading rules…')}</p>}
           {!loading && !rules.length && (
             <p className="text-xs text-ink-3 py-6 text-center">
-              No rules yet. Add one to file, star, or archive mail automatically.
+              {t('No rules yet. Add one to file, star, or archive mail automatically.')}
             </p>
           )}
 
@@ -160,45 +162,45 @@ export function RulesModal() {
                   checked={rule.enabled}
                   onChange={e => patch(rule.id, { enabled: e.target.checked })}
                   className="accent-accent"
-                  aria-label={`Enable ${rule.name}`}
+                  aria-label={t('Enable {name}', { name: rule.name })}
                 />
                 <input
                   value={rule.name}
                   onChange={e => patch(rule.id, { name: e.target.value })}
                   className={`${inputCls} font-semibold flex-1`}
-                  aria-label="Rule name"
+                  aria-label={t('Rule name')}
                 />
                 <select
                   value={rule.accountId || ''}
                   onChange={e => patch(rule.id, { accountId: e.target.value || undefined })}
-                  className={`${inputCls} w-40`}
-                  aria-label="Apply to account"
+                  className={`${inputCls} w-44 flex-shrink-0`}
+                  aria-label={t('Apply to account')}
                 >
-                  <option value="">All accounts</option>
+                  <option value="">{t('All accounts')}</option>
                   {accounts.map(a => <option key={a.id} value={a.id}>{a.email}</option>)}
                 </select>
                 <button
                   onClick={() => setRules(rs => rs.filter(r => r.id !== rule.id))}
-                  className="text-[11px] text-danger px-2 py-1 rounded hover:bg-danger/10 "
+                  className="text-[11px] text-danger px-2 py-1 rounded hover:bg-danger/10 whitespace-nowrap flex-shrink-0"
                 >
-                  Delete
+                  {t('Delete')}
                 </button>
               </div>
 
               {/* Conditions */}
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2 text-[11px] text-ink-2 ">
-                  <span>Match</span>
+                  <span className="whitespace-nowrap">{t('Match')}</span>
                   <select
                     value={rule.match}
                     onChange={e => patch(rule.id, { match: e.target.value as 'all' | 'any' })}
-                    className={`${inputCls} w-24`}
-                    aria-label="Match mode"
+                    className={`${inputCls} w-24 flex-shrink-0`}
+                    aria-label={t('Match mode')}
                   >
-                    <option value="all">all of</option>
-                    <option value="any">any of</option>
+                    <option value="all">{t('all of')}</option>
+                    <option value="any">{t('any of')}</option>
                   </select>
-                  <span>these conditions:</span>
+                  <span className="whitespace-nowrap">{t('these conditions:')}</span>
                 </div>
 
                 {rule.conditions.map((condition, i) => (
@@ -206,33 +208,33 @@ export function RulesModal() {
                     <select
                       value={condition.field}
                       onChange={e => patchCondition(rule.id, i, { field: e.target.value as RuleField })}
-                      className={`${inputCls} w-36`}
-                      aria-label="Field"
+                      className={`${inputCls} w-36 flex-shrink-0`}
+                      aria-label={t('Field')}
                     >
-                      {(Object.keys(FIELD_LABELS) as RuleField[]).map(f => <option key={f} value={f}>{FIELD_LABELS[f]}</option>)}
+                      {(Object.keys(FIELD_LABELS) as RuleField[]).map(f => <option key={f} value={f}>{t(FIELD_LABELS[f])}</option>)}
                     </select>
                     <select
                       value={condition.op}
                       onChange={e => patchCondition(rule.id, i, { op: e.target.value as RuleOp })}
-                      className={`${inputCls} w-40`}
-                      aria-label="Operator"
+                      className={`${inputCls} w-40 flex-shrink-0`}
+                      aria-label={t('Operator')}
                     >
-                      {(Object.keys(OP_LABELS) as RuleOp[]).map(o => <option key={o} value={o}>{OP_LABELS[o]}</option>)}
+                      {(Object.keys(OP_LABELS) as RuleOp[]).map(o => <option key={o} value={o}>{t(OP_LABELS[o])}</option>)}
                     </select>
                     {condition.op !== 'isTrue' && (
                       <input
                         value={condition.value}
                         onChange={e => patchCondition(rule.id, i, { value: e.target.value })}
-                        placeholder="value"
+                        placeholder={t('value')}
                         className={`${inputCls} flex-1`}
-                        aria-label="Value"
+                        aria-label={t('Value')}
                       />
                     )}
                     <button
                       onClick={() => patch(rule.id, { conditions: rule.conditions.filter((_, j) => j !== i) })}
                       disabled={rule.conditions.length === 1}
                       className="text-ink-3 hover:text-danger px-1.5 disabled:opacity-30"
-                      aria-label="Remove condition"
+                      aria-label={t('Remove condition')}
                     >
                       ×
                     </button>
@@ -242,31 +244,31 @@ export function RulesModal() {
                   onClick={() => patch(rule.id, { conditions: [...rule.conditions, newCondition()] })}
                   className="text-[11px] text-info"
                 >
-                  + Add condition
+                  + {t('Add condition')}
                 </button>
               </div>
 
               {/* Actions */}
               <div className="space-y-1.5 border-t border-line/40 pt-2.5">
-                <div className="text-[11px] text-ink-2 ">Then:</div>
+                <div className="text-[11px] text-ink-2 ">{t('Then:')}</div>
                 {rule.actions.map((action, i) => (
                   <div key={i} className="flex items-center gap-1.5">
                     <select
                       value={action.type}
                       onChange={e => patchAction(rule.id, i, { type: e.target.value as RuleActionType })}
-                      className={`${inputCls} w-44`}
-                      aria-label="Action"
+                      className={`${inputCls} w-44 flex-shrink-0`}
+                      aria-label={t('Action')}
                     >
-                      {(Object.keys(ACTION_LABELS) as RuleActionType[]).map(a => <option key={a} value={a}>{ACTION_LABELS[a]}</option>)}
+                      {(Object.keys(ACTION_LABELS) as RuleActionType[]).map(a => <option key={a} value={a}>{t(ACTION_LABELS[a])}</option>)}
                     </select>
                     {action.type === 'move' && (
                       <select
                         value={action.targetFolder || ''}
                         onChange={e => patchAction(rule.id, i, { targetFolder: e.target.value })}
                         className={`${inputCls} flex-1`}
-                        aria-label="Target folder"
+                        aria-label={t('Target folder')}
                       >
-                        <option value="">Choose a folder…</option>
+                        <option value="">{t('Choose a folder…')}</option>
                         {folderOptions(rule.accountId).map(f => <option key={f.path} value={f.path}>{f.name}</option>)}
                       </select>
                     )}
@@ -274,7 +276,7 @@ export function RulesModal() {
                       onClick={() => patch(rule.id, { actions: rule.actions.filter((_, j) => j !== i) })}
                       disabled={rule.actions.length === 1}
                       className="text-ink-3 hover:text-danger px-1.5 disabled:opacity-30"
-                      aria-label="Remove action"
+                      aria-label={t('Remove action')}
                     >
                       ×
                     </button>
@@ -285,23 +287,23 @@ export function RulesModal() {
                     onClick={() => patch(rule.id, { actions: [...rule.actions, { type: 'star' }] })}
                     className="text-[11px] text-info"
                   >
-                    + Add action
+                    + {t('Add action')}
                   </button>
-                  <label className="flex items-center gap-1.5 text-[11px] text-ink-2 ">
+                  <label className="flex items-center gap-1.5 text-[11px] text-ink-2 whitespace-nowrap">
                     <input
                       type="checkbox"
                       checked={!!rule.stopProcessing}
                       onChange={e => patch(rule.id, { stopProcessing: e.target.checked })}
                       className="accent-accent"
                     />
-                    Stop after this rule
+                    {t('Stop after this rule')}
                   </label>
                   <button onClick={() => handlePreview(rule)} className="text-[11px] text-ai ml-auto">
                     {previews[rule.id] === 'loading'
-                      ? 'Testing…'
+                      ? t('Testing…')
                       : previews[rule.id] !== undefined
-                        ? `Matches ${previews[rule.id]} of ${emails.length} loaded`
-                        : 'Test against loaded mail'}
+                        ? t('Matches {count} of {total} loaded', { count: previews[rule.id] as number, total: emails.length })
+                        : t('Test against loaded mail')}
                   </button>
                 </div>
               </div>
@@ -311,17 +313,17 @@ export function RulesModal() {
 
         <div className="flex items-center gap-2 px-5 py-3 border-t border-line flex-shrink-0">
           <button onClick={() => setRules(rs => [...rs, newRule()])} className="px-3 py-2 rounded-md text-xs font-semibold border border-line text-ink ">
-            + Add rule
+            + {t('Add rule')}
           </button>
           <button onClick={handleRunNow} className="px-3 py-2 rounded-md text-xs font-semibold border border-line text-ink ">
-            Run on loaded mail
+            {t('Run on loaded mail')}
           </button>
           <div className="flex-1" />
           <button onClick={() => setShowRulesModal(false)} className="px-3 py-2 rounded-md text-xs text-ink-2 ">
-            Cancel
+            {t('Cancel')}
           </button>
           <button onClick={handleSave} disabled={saving} className="px-4 py-2 rounded-md bg-accent text-xs font-bold text-[#201500] hover:bg-accent disabled:opacity-50">
-            {saving ? 'Saving…' : 'Save rules'}
+            {saving ? t('Saving…') : t('Save rules')}
           </button>
         </div>
       </div>

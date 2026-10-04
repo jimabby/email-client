@@ -1,8 +1,10 @@
 import DOMPurify from 'dompurify'
 import { useEmailStore } from '../store/emailStore'
+import { useT } from '../lib/i18n'
 
 export function DailyReportModal() {
   const { pendingReport, clearPendingReport } = useEmailStore()
+  const t = useT()
 
   if (!pendingReport) return null
 
@@ -15,11 +17,12 @@ export function DailyReportModal() {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-line ">
           <div>
-            <h2 className="font-semibold text-ink text-sm">Daily Report</h2>
+            <h2 className="font-semibold text-ink text-sm">{t('Daily report')}</h2>
             <p className="text-[11px] text-ink-2 mt-0.5">{pendingReport.subject}</p>
           </div>
           <button
             onClick={clearPendingReport}
+            aria-label={t('Close')}
             className="btn-ghost w-8 h-8 flex items-center justify-center text-lg leading-none"
           >
             ×
@@ -38,7 +41,7 @@ export function DailyReportModal() {
             onClick={clearPendingReport}
             className="btn-accent px-4 py-2 text-[13px] font-semibold rounded-xl"
           >
-            Got it
+            {t('Got it')}
           </button>
         </div>
       </div>

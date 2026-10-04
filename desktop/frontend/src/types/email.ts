@@ -87,6 +87,11 @@ export interface EmailBody {
 /** The receiving provider's sender-authentication result. */
 export interface SenderAuthentication {
   status: 'pass' | 'partial' | 'fail' | 'unknown';
+  /** Which explanation applies; absent on results cached by older versions. */
+  kind?: 'none' | 'fail' | 'verified' | 'otherDomain' | 'partial' | 'inconclusive';
+  fromDomain?: string | null;
+  signerDomain?: string | null;
+  softfail?: boolean;
   label: string;
   detail: string;
   spf: string | null;

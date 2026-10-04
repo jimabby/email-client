@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { streamAiChat } from '../api/client'
 import { useEmailStore } from '../store/emailStore'
+import { useT } from '../lib/i18n'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -15,6 +16,7 @@ export function AiChatPanel() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const controllerRef = useRef<{ abort: () => void } | null>(null)
+  const t = useT()
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -64,7 +66,7 @@ export function AiChatPanel() {
       (err) => {
         setMessages(prev => [
           ...prev.slice(0, -1),
-          { role: 'assistant', content: `Error: ${err}` },
+          { role: 'assistant', content: `${t('Error')}: ${err}` },
         ])
         setIsStreaming(false)
       }
@@ -93,9 +95,9 @@ export function AiChatPanel() {
           <path d="M5.5 6.5C5.5 5.12 6.62 4 8 4s2.5 1.12 2.5 2.5c0 1.5-1.5 2-2 2.5v.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           <circle cx="8" cy="11.5" r=".75" fill="currentColor"/>
         </svg>
-        <span className="text-[14px] font-semibold text-ink flex-1 tracking-[-0.01em]">AI assistant</span>
+        <span className="text-[14px] font-semibold text-ink flex-1 tracking-[-0.01em]">{t('AI assistant')}</span>
         {messages.length > 0 && (
-          <button onClick={clear} title="Clear chat"
+          <button onClick={clear} title={t('Clear chat')}
             className="btn-ghost w-7 h-7 flex items-center justify-center hover:!text-danger">
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
@@ -114,16 +116,17 @@ export function AiChatPanel() {
               </svg>
             </div>
             <div>
-              <p className="text-[14px] font-medium text-ink mb-1.5 tracking-[-0.01em]">Ask about your emails</p>
-              <p className="text-[12.5px] text-ink-3 leading-relaxed">Summarise, find patterns, or ask<br/>questions about your inbox</p>
+              <p className="text-[14px] font-medium text-ink mb-1.5 tracking-[-0.01em]">{t('Ask about your emails')}</p>
+              <p className="text-[12.5px] text-ink-3 leading-relaxed">{t('Summarise, find patterns, or ask questions about your inbox')}</p>
             </div>
             {!aiConfigured && (
               <p className="text-[11.5px] text-danger bg-danger/10 px-3 py-2 rounded-xl leading-relaxed">
-                Set up an AI provider in <button onClick={() => useEmailStore.getState().setShowAccountModal(true)} className="underline font-semibold hover:text-danger transition-colors">Settings</button> to get started
+                {t('Set up an AI provider in Settings to get started.')}{' '}
+                <button onClick={() => useEmailStore.getState().setShowAccountModal(true)} className="underline font-semibold hover:text-danger transition-colors">{t('Open settings')}</button>
               </p>
             )}
             <div className="flex flex-col gap-1.5 w-full mt-1">
-              {['Summarize my inbox', 'What needs a reply?', 'Any important emails?'].map(q => (
+              {[t('Summarize my inbox'), t('What needs a reply?'), t('Any important emails?')].map(q => (
                 <button key={q} onClick={() => { setInput(q); inputRef.current?.focus() }}
                   className="text-[12.5px] text-left px-3 py-2 rounded-xl border border-line/60 text-ink-2 hover:border-ai/50 hover:text-ai hover:bg-ai/6 transition-colors">
                   {q}
@@ -171,21 +174,21 @@ export function AiChatPanel() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about your emails…"
+            placeholder={t('Ask about your emails…')}
             rows={1}
             disabled={isStreaming}
             className="flex-1 bg-transparent text-[13px] text-ink placeholder-ink-3 resize-none focus:outline-none min-h-[22px] max-h-[96px] overflow-y-auto py-0.5"
             style={{ height: 'auto' }}
             onInput={e => {
-              const t = e.currentTarget
-              t.style.height = 'auto'
-              t.style.height = Math.min(t.scrollHeight, 96) + 'px'
+              const el = e.currentTarget
+              el.style.height = 'auto'
+              el.style.height = Math.min(el.scrollHeight, 96) + 'px'
             }}
           />
           <button
             onClick={send}
             disabled={!input.trim() || isStreaming}
-            aria-label="Send message"
+            aria-label={t('Send')}
             className="flex-shrink-0 w-7 h-7 rounded-full bg-ai disabled:opacity-30 flex items-center justify-center transition-all hover:brightness-110 active:scale-90"
           >
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
@@ -193,7 +196,7 @@ export function AiChatPanel() {
             </svg>
           </button>
         </div>
-        <p className="text-[11px] text-ink-3 mt-1.5 text-center">Enter to send · Shift+Enter for a new line</p>
+        <p className="text-[11px] text-ink-3 mt-1.5 text-center">{t('Enter to send · Shift+Enter for a new line')}</p>
       </div>
     </div>
   )

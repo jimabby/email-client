@@ -123,37 +123,37 @@ export function AccountModal() {
         allowInsecureTLS: form.allowInsecureTLS,
       })
       addAccount(data.account as Account)
-      showNotification('success', `${form.email} added!`)
+      showNotification('success', t('{email} added!', { email: form.email }))
       setShowAccountModal(false)
     } catch (err: unknown) {
       const msg = (err as any)?.response?.data?.error
-        || (err instanceof Error ? err.message : 'Failed to add account')
+        || (err instanceof Error ? err.message : t('Failed to add account'))
       showNotification('error', msg)
     } finally { setIsLoading(false) }
   }
 
   const handleGmailOAuth = async () => {
     try { const { url } = await accountsApi.getGmailAuthUrl(); window.open(url, '_blank', 'width=500,height=600'); setShowAccountModal(false) }
-    catch (err: unknown) { showNotification('error', (err as any)?.response?.data?.error || (err instanceof Error ? err.message : 'Failed to start Gmail OAuth')) }
+    catch (err: unknown) { showNotification('error', (err as any)?.response?.data?.error || (err instanceof Error ? err.message : t('Failed to start Gmail sign-in'))) }
   }
 
   const handleOutlookOAuth = async () => {
     try { const { url } = await accountsApi.getOutlookAuthUrl(); window.open(url, '_blank', 'width=500,height=600'); setShowAccountModal(false) }
-    catch (err: unknown) { showNotification('error', (err as any)?.response?.data?.error || (err instanceof Error ? err.message : 'Failed to start Outlook OAuth')) }
+    catch (err: unknown) { showNotification('error', (err as any)?.response?.data?.error || (err instanceof Error ? err.message : t('Failed to start Outlook sign-in'))) }
   }
 
   const handleAiSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!aiApiKey.trim()) { showNotification('error', 'Please enter an API key'); return }
+    if (!aiApiKey.trim()) { showNotification('error', t('Please enter an API key')); return }
     setAiSaving(true)
     try {
       await aiApi.saveSettings(aiSelectedProvider, aiApiKey)
       setAiConfig(aiSelectedProvider, true)
       setAiApiKey('')
       const name = aiSelectedProvider === 'claude' ? 'Claude' : aiSelectedProvider === 'openai' ? 'ChatGPT' : 'Gemini'
-      showNotification('success', `${name} AI configured!`)
+      showNotification('success', t('{name} configured!', { name }))
     } catch (err: unknown) {
-      showNotification('error', err instanceof Error ? err.message : 'Failed to save AI settings')
+      showNotification('error', err instanceof Error ? err.message : t('Failed to save AI settings'))
     } finally { setAiSaving(false) }
   }
 
@@ -161,13 +161,13 @@ export function AccountModal() {
     try {
       await aiApi.clearSettings()
       setAiConfig(null, false)
-      showNotification('success', 'AI settings cleared')
-    } catch { showNotification('error', 'Failed to clear AI settings') }
+      showNotification('success', t('AI settings cleared'))
+    } catch { showNotification('error', t('Failed to clear AI settings')) }
   }
 
   const handleSignatureSave = () => {
     setSignature(signatureText)
-    showNotification('success', 'Signature saved!')
+    showNotification('success', t('Signature saved!'))
   }
 
   const tabs = [
@@ -229,7 +229,7 @@ export function AccountModal() {
           {tab === 'imap' && (
             <form onSubmit={handleImapSubmit} className="space-y-4">
               <div>
-                <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-2">Provider</label>
+                <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-2">{t('Provider')}</label>
                 <div className="flex flex-wrap gap-1.5">
                   {Object.keys(IMAP_PRESETS).map(p => (
                     <button key={p} type="button" onClick={() => applyPreset(p)}
@@ -238,55 +238,55 @@ export function AccountModal() {
                           ? 'bg-accent/12 text-accent-ink border-accent/30'
                           : 'bg-surface-2 text-ink-2 border-line hover:text-ink '
                         }`}
-                    >{p}</button>
+                    >{t(p)}</button>
                   ))}
                 </div>
               </div>
 
               {preset === 'Gmail (App Password)' && (
                 <div className="bg-accent/10 border border-accent/25 rounded-xl p-3 text-[12.5px] text-accent-ink leading-relaxed">
-                  <strong>Gmail App Password required:</strong> Enable 2FA → Google Account → Security → App Passwords → create one and paste it below.
+                  <strong>{t('Gmail App Password required:')}</strong> {t('Enable 2FA → Google Account → Security → App Passwords → create one and paste it below.')}
                 </div>
               )}
 
               <div className="space-y-3">
                 <div>
-                  <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-1">Email Address *</label>
+                  <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-1">{t('Email address')} *</label>
                   <input type="email" required value={form.email} onChange={e => update('email', e.target.value)} className={inputCls} placeholder="you@example.com" />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-1">Display Name</label>
-                  <input type="text" value={form.name} onChange={e => update('name', e.target.value)} className={inputCls} placeholder="Your Name" />
+                  <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-1">{t('Display name')}</label>
+                  <input type="text" value={form.name} onChange={e => update('name', e.target.value)} className={inputCls} placeholder={t('Your name')} />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-1">Password / App Password *</label>
+                  <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-1">{t('Password / app password')} *</label>
                   <input type="password" required value={form.password} onChange={e => update('password', e.target.value)} className={inputCls} placeholder="••••••••••••••••" />
                 </div>
               </div>
 
               <div className="border-t border-line pt-4">
-                <p className="text-[10px] font-semibold text-ink-2 uppercase tracking-wide mb-2">Incoming Mail (IMAP)</p>
+                <p className="text-[10px] font-semibold text-ink-2 uppercase tracking-wide mb-2">{t('Incoming mail (IMAP)')}</p>
                 <div className="grid grid-cols-3 gap-2">
                   <div className="col-span-2">
-                    <label className="block text-[10px] text-ink-3 mb-1">Host *</label>
+                    <label className="block text-[10px] text-ink-3 mb-1">{t('Host')} *</label>
                     <input type="text" required value={form.imapHost} onChange={e => update('imapHost', e.target.value)} className={inputCls} />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-ink-3 mb-1">Port</label>
+                    <label className="block text-[10px] text-ink-3 mb-1">{t('Port')}</label>
                     <input type="number" value={form.imapPort} onChange={e => update('imapPort', parseInt(e.target.value))} className={inputCls} />
                   </div>
                 </div>
               </div>
 
               <div className="border-t border-line pt-4">
-                <p className="text-[10px] font-semibold text-ink-2 uppercase tracking-wide mb-2">Outgoing Mail (SMTP)</p>
+                <p className="text-[10px] font-semibold text-ink-2 uppercase tracking-wide mb-2">{t('Outgoing mail (SMTP)')}</p>
                 <div className="grid grid-cols-3 gap-2">
                   <div className="col-span-2">
-                    <label className="block text-[10px] text-ink-3 mb-1">Host *</label>
+                    <label className="block text-[10px] text-ink-3 mb-1">{t('Host')} *</label>
                     <input type="text" required value={form.smtpHost} onChange={e => update('smtpHost', e.target.value)} className={inputCls} />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-ink-3 mb-1">Port</label>
+                    <label className="block text-[10px] text-ink-3 mb-1">{t('Port')}</label>
                     <input type="number" value={form.smtpPort} onChange={e => update('smtpPort', parseInt(e.target.value))} className={inputCls} />
                   </div>
                 </div>
@@ -300,17 +300,16 @@ export function AccountModal() {
                   className="accent-danger mt-0.5"
                 />
                 <span>
-                  Accept self-signed certificates
+                  {t('Accept self-signed certificates')}
                   <span className="block text-[10px] text-danger ">
-                    Only for a server you control. This disables certificate checks, so anyone able to
-                    intercept the connection can read your password and your mail.
+                    {t('Only for a server you control. This disables certificate checks, so anyone able to intercept the connection can read your password and your mail.')}
                   </span>
                 </span>
               </label>
 
               <button type="submit" disabled={isLoading}
                 className="w-full bg-accent text-[#201500] py-2.5 rounded-md text-sm font-bold hover:bg-accent transition-colors disabled:opacity-50">
-                {isLoading ? '⟳ Testing connection…' : 'Add Account'}
+                {isLoading ? `⟳ ${t('Testing connection…')}` : t('Add account')}
               </button>
             </form>
           )}
@@ -326,8 +325,8 @@ export function AccountModal() {
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                   </svg>
                 </div>
-                <h3 className="font-semibold text-ink mb-2">Sign in with Google</h3>
-                <p className="text-xs text-ink-2 mb-6 leading-relaxed">Connect your Gmail account using Google OAuth.<br/>You'll be redirected to Google to authorize access.</p>
+                <h3 className="font-semibold text-ink mb-2">{t('Sign in with Google')}</h3>
+                <p className="text-xs text-ink-2 mb-6 leading-relaxed">{t("Connect your Gmail account using Google OAuth. You'll be redirected to Google to authorize access.")}</p>
                 <button onClick={handleGmailOAuth}
                   className="flex items-center gap-3 mx-auto bg-white border border-line text-ink px-5 py-2.5 rounded-md text-sm font-semibold hover:bg-surface-2 transition-colors shadow-sm">
                   <svg width="18" height="18" viewBox="0 0 24 24">
@@ -336,11 +335,11 @@ export function AccountModal() {
                     <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                   </svg>
-                  Sign in with Google
+                  {t('Sign in with Google')}
                 </button>
               </div>
               <div className="bg-surface-2 border border-line rounded-md p-3 text-xs text-ink-2 ">
-                <strong className="text-ink ">Note:</strong> Requires GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in backend .env
+                <strong className="text-ink ">{t('Note:')}</strong> {t('Requires {keys} in backend .env', { keys: 'GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET' })}
               </div>
             </div>
           )}
@@ -356,8 +355,8 @@ export function AccountModal() {
                     <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
                   </svg>
                 </div>
-                <h3 className="font-semibold text-ink mb-2">Sign in with Microsoft</h3>
-                <p className="text-xs text-ink-2 mb-6 leading-relaxed">Connect your Outlook, Hotmail, or Microsoft 365 account<br/>using Microsoft OAuth.</p>
+                <h3 className="font-semibold text-ink mb-2">{t('Sign in with Microsoft')}</h3>
+                <p className="text-xs text-ink-2 mb-6 leading-relaxed">{t('Connect your Outlook, Hotmail, or Microsoft 365 account using Microsoft OAuth.')}</p>
                 <button onClick={handleOutlookOAuth}
                   className="flex items-center gap-3 mx-auto bg-[#0078d4] text-white px-5 py-2.5 rounded-md text-sm font-semibold hover:bg-[#106ebe] transition-colors shadow-sm">
                   <svg width="18" height="18" viewBox="0 0 21 21">
@@ -366,11 +365,11 @@ export function AccountModal() {
                     <rect x="1" y="11" width="9" height="9" fill="white" opacity="0.7"/>
                     <rect x="11" y="11" width="9" height="9" fill="white" opacity="0.9"/>
                   </svg>
-                  Sign in with Microsoft
+                  {t('Sign in with Microsoft')}
                 </button>
               </div>
               <div className="bg-surface-2 border border-line rounded-md p-3 text-xs text-ink-2 ">
-                <strong className="text-ink ">Note:</strong> Requires OUTLOOK_CLIENT_ID and OUTLOOK_CLIENT_SECRET in backend .env
+                <strong className="text-ink ">{t('Note:')}</strong> {t('Requires {keys} in backend .env', { keys: 'OUTLOOK_CLIENT_ID / OUTLOOK_CLIENT_SECRET' })}
               </div>
             </div>
           )}
@@ -383,35 +382,35 @@ export function AccountModal() {
               {/* Default signature */}
               <div>
                 <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-2">
-                  Default Signature
+                  {t('Default signature')}
                 </label>
                 <p className="text-xs text-ink-2 mb-3">
-                  Used for all accounts unless overridden below.
+                  {t('Used for all accounts unless overridden below.')}
                 </p>
                 <textarea
                   value={signatureText}
                   onChange={e => setSignatureText(e.target.value)}
-                  placeholder="Best regards,&#10;Your Name"
+                  placeholder={t('Best regards,\nYour name')}
                   rows={4}
                   className="w-full px-3 py-2 text-sm bg-surface-2 border border-line text-ink placeholder-ink-3 rounded-md focus:outline-none focus:border-accent/60 transition-colors resize-none font-sans"
                 />
                 {signatureText !== signature && (
                   <div className="flex items-center gap-2 mt-2">
-                    <div className="text-[10px] text-ink-3 ">Unsaved changes</div>
+                    <div className="text-[10px] text-ink-3 ">{t('Unsaved changes')}</div>
                     <button
                       onClick={handleSignatureSave}
                       className="px-3 py-1 text-xs font-semibold bg-accent text-[#201500] rounded-md hover:bg-accent transition-colors"
                     >
-                      Save
+                      {t('Save')}
                     </button>
                   </div>
                 )}
                 {signature && signatureText === signature && (
                   <button
-                    onClick={() => { setSignatureText(''); setSignature(''); showNotification('success', 'Default signature cleared') }}
+                    onClick={() => { setSignatureText(''); setSignature(''); showNotification('success', t('Default signature cleared')) }}
                     className="mt-2 text-xs text-danger hover:underline"
                   >
-                    Clear default signature
+                    {t('Clear default signature')}
                   </button>
                 )}
               </div>
@@ -420,10 +419,10 @@ export function AccountModal() {
               {accounts.length > 0 && (
                 <div>
                   <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-2">
-                    Per-Account Signatures
+                    {t('Per-account signatures')}
                   </label>
                   <p className="text-xs text-ink-2 mb-3">
-                    Override the default signature for specific accounts.
+                    {t('Override the default signature for specific accounts.')}
                   </p>
                   <div className="space-y-3">
                     {accounts.map(acc => (
@@ -434,22 +433,22 @@ export function AccountModal() {
                           </div>
                           <span className="text-xs font-medium text-ink truncate">{acc.email}</span>
                           {accountSignatures[acc.id] && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent-ink ">custom</span>
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent-ink ">{t('custom')}</span>
                           )}
                         </div>
                         <textarea
                           value={accountSignatures[acc.id] ?? ''}
                           onChange={e => setAccountSignature(acc.id, e.target.value)}
-                          placeholder={signature ? `Using default: "${signature.slice(0, 40)}..."` : 'Uses default signature'}
+                          placeholder={signature ? t('Using default: “{preview}…”', { preview: signature.slice(0, 40) }) : t('Uses default signature')}
                           rows={3}
                           className="w-full px-3 py-2 text-xs bg-surface-2 border border-line text-ink placeholder-ink-3 rounded-md focus:outline-none focus:border-accent/60 transition-colors resize-none font-sans"
                         />
                         {accountSignatures[acc.id] && (
                           <button
-                            onClick={() => { setAccountSignature(acc.id, ''); showNotification('success', `Signature for ${acc.email} cleared — using default`) }}
+                            onClick={() => { setAccountSignature(acc.id, ''); showNotification('success', t('Signature for {email} cleared — using default', { email: acc.email })) }}
                             className="mt-1 text-[10px] text-danger hover:underline"
                           >
-                            Use default instead
+                            {t('Use default instead')}
                           </button>
                         )}
                       </div>
@@ -473,27 +472,27 @@ export function AccountModal() {
                   {aiConfigured ? (
                     <>
                       <p className="text-xs font-semibold text-green-700 ">
-                        {aiProvider === 'claude' ? 'Claude (Anthropic)' : aiProvider === 'openai' ? 'ChatGPT (OpenAI)' : 'Gemini (Google)'} active
+                        {t('{provider} active', { provider: aiProvider === 'claude' ? 'Claude (Anthropic)' : aiProvider === 'openai' ? 'ChatGPT (OpenAI)' : 'Gemini (Google)' })}
                       </p>
-                      <p className="text-[11px] text-green-600 ">AI suggestions are enabled in Compose</p>
+                      <p className="text-[11px] text-green-600 ">{t('AI suggestions are enabled in the composer')}</p>
                     </>
                   ) : (
                     <>
-                      <p className="text-xs font-semibold text-ink-2 ">No AI configured</p>
-                      <p className="text-[11px] text-ink-3 ">Add an API key below to enable AI suggestions</p>
+                      <p className="text-xs font-semibold text-ink-2 ">{t('No AI configured')}</p>
+                      <p className="text-[11px] text-ink-3 ">{t('Add an API key below to enable AI suggestions')}</p>
                     </>
                   )}
                 </div>
                 {aiConfigured && (
                   <button onClick={handleAiClear} className="text-[11px] text-danger hover:underline flex-shrink-0">
-                    Remove
+                    {t('Remove')}
                   </button>
                 )}
               </div>
 
               {/* Provider cards */}
               <div>
-                <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-2">Choose Provider</label>
+                <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-2">{t('Choose provider')}</label>
                 <div className="grid grid-cols-3 gap-2">
                   {([
                     { id: 'claude', label: 'Claude', sub: 'Anthropic', color: '#d97706', letter: 'C' },
@@ -527,7 +526,7 @@ export function AccountModal() {
               <form onSubmit={handleAiSave} className="space-y-3">
                 <div>
                   <label className="block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-1">
-                    {aiSelectedProvider === 'claude' ? 'Anthropic API Key' : aiSelectedProvider === 'openai' ? 'OpenAI API Key' : 'Google AI API Key'}
+                    {t('{provider} API key', { provider: aiSelectedProvider === 'claude' ? 'Anthropic' : aiSelectedProvider === 'openai' ? 'OpenAI' : 'Google AI' })}
                   </label>
                   <input
                     type="password"
@@ -538,16 +537,16 @@ export function AccountModal() {
                   />
                   <p className="mt-1.5 text-[10px] text-ink-2 ">
                     {aiSelectedProvider === 'claude'
-                      ? 'Get your key at console.anthropic.com → API Keys'
+                      ? t('Get your key at {where}', { where: 'console.anthropic.com → API Keys' })
                       : aiSelectedProvider === 'openai'
-                      ? 'Get your key at platform.openai.com → API Keys'
-                      : 'Get your free key at aistudio.google.com → Get API key'
+                      ? t('Get your key at {where}', { where: 'platform.openai.com → API Keys' })
+                      : t('Get your free key at {where}', { where: 'aistudio.google.com → Get API key' })
                     }
                   </p>
                 </div>
                 <button type="submit" disabled={aiSaving || !aiApiKey.trim()}
                   className="w-full bg-accent text-[#201500] py-2.5 rounded-md text-sm font-bold hover:bg-accent transition-colors disabled:opacity-50">
-                  {aiSaving ? '⟳ Saving…' : `Save ${aiSelectedProvider === 'claude' ? 'Claude' : aiSelectedProvider === 'openai' ? 'ChatGPT' : 'Gemini'} Key`}
+                  {aiSaving ? `⟳ ${t('Saving…')}` : t('Save {name} key', { name: aiSelectedProvider === 'claude' ? 'Claude' : aiSelectedProvider === 'openai' ? 'ChatGPT' : 'Gemini' })}
                 </button>
               </form>
 
@@ -558,17 +557,15 @@ export function AccountModal() {
           {tab === 'privacy' && (
             <div className="space-y-6">
               <section>
-                <h3 className="text-[15px] font-semibold text-ink mb-1 tracking-[-0.01em]">Contact pictures</h3>
+                <h3 className="text-[15px] font-semibold text-ink mb-1 tracking-[-0.01em]">{t('Contact pictures')}</h3>
                 <p className="text-[12.5px] text-ink-3 mb-4 leading-relaxed">
-                  Hermes shows coloured initials by default. Fetching a real picture asks
-                  gravatar.com for it, which tells that service the address of every person who
-                  writes to you — the same disclosure the reader blocks remote images to prevent.
+                  {t('Hermes shows coloured initials by default. Fetching a real picture asks gravatar.com for it, which tells that service the address of every person who writes to you — the same disclosure the reader blocks remote images to prevent.')}
                 </p>
                 <Toggle
                   checked={gravatarEnabled}
                   onChange={setGravatarEnabled}
-                  label="Load contact pictures from Gravatar"
-                  hint={gravatarEnabled ? 'Sender addresses are sent (hashed) to gravatar.com' : 'Nothing leaves this machine'}
+                  label={t('Load contact pictures from Gravatar')}
+                  hint={gravatarEnabled ? t('Sender addresses are sent (hashed) to gravatar.com') : t('Nothing leaves this machine')}
                 />
               </section>
 
@@ -648,7 +645,7 @@ export function AccountModal() {
               <section className="border-t border-line pt-5">
                 <h3 className="text-sm font-semibold text-ink mb-1">{t('Mailbox rules')}</h3>
                 <p className="text-[11px] text-ink-3 mb-3">
-                  Rules run on the server as mail arrives, with multiple conditions and actions per rule.
+                  {t('Rules run on the server as mail arrives, with multiple conditions and actions per rule.')}
                 </p>
                 <button
                   onClick={() => { setShowAccountModal(false); setShowRulesModal(true) }}
@@ -659,16 +656,15 @@ export function AccountModal() {
               </section>
 
               <section className="border-t border-line pt-5">
-                <h3 className="text-sm font-semibold text-ink mb-1">Send-as addresses</h3>
+                <h3 className="text-sm font-semibold text-ink mb-1">{t('Send-as addresses')}</h3>
                 <p className="text-[11px] text-ink-3 mb-3">
-                  Extra identities you can pick in the From field. The address must already be authorised
-                  with your provider, or it will reject the message.
+                  {t('Extra identities you can pick in the From field. The address must already be authorised with your provider, or it will reject the message.')}
                 </p>
                 <select
                   value={aliasAccountId}
                   onChange={e => setAliasAccountId(e.target.value)}
                   className={`${inputCls} mb-3`}
-                  aria-label="Account for aliases"
+                  aria-label={t('Account')}
                 >
                   {accounts.map(a => <option key={a.id} value={a.id}>{a.email}</option>)}
                 </select>
@@ -683,7 +679,7 @@ export function AccountModal() {
                       />
                       <input
                         value={alias.name || ''}
-                        placeholder="Display name"
+                        placeholder={t('Display name')}
                         onChange={e => setAliasList(list => list.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
                         className={inputCls}
                       />
@@ -695,14 +691,14 @@ export function AccountModal() {
                           onChange={() => setAliasList(list => list.map((x, j) => ({ ...x, isDefault: j === i })))}
                           className="accent-accent"
                         />
-                        Default
+                        {t('Default')}
                       </label>
                       <button onClick={() => setAliasList(list => list.filter((_, j) => j !== i))} className="text-xs text-danger">×</button>
                     </div>
                   ))}
                 </div>
                 <div className="flex gap-2 mt-3">
-                  <button onClick={() => setAliasList(list => [...list, { email: '', name: '' }])} className="text-xs text-info">+ Add address</button>
+                  <button onClick={() => setAliasList(list => [...list, { email: '', name: '' }])} className="text-xs text-info">+ {t('Add address')}</button>
                   <div className="flex-1" />
                   <button
                     onClick={async () => {
@@ -710,23 +706,23 @@ export function AccountModal() {
                         const saved = await emailsApi.saveAliases(aliasAccountId, aliasList.filter(a => a.email.trim()))
                         setAliasList(saved)
                         setAliases(aliasAccountId, saved)
-                        showNotification('success', 'Send-as addresses saved')
+                        showNotification('success', t('Send-as addresses saved'))
                       } catch (err) {
-                        showNotification('error', err instanceof Error ? err.message : 'Could not save addresses')
+                        showNotification('error', err instanceof Error ? err.message : t('Could not save addresses'))
                       }
                     }}
                     disabled={!aliasAccountId}
                     className="px-3 py-2 rounded-md bg-accent text-xs font-bold text-[#201500] disabled:opacity-50"
                   >
-                    Save addresses
+                    {t('Save addresses')}
                   </button>
                 </div>
               </section>
 
               <section className="border-t border-line pt-5">
-                <div className="flex items-center justify-between mb-3"><h3 className="text-sm font-semibold text-ink ">Templates</h3><button onClick={() => setTemplates(t => [...t, { id: crypto.randomUUID(), name: 'New template', subject: '', body: '' }])} className="text-xs text-info">+ Add template</button></div>
-                <div className="space-y-2">{templates.map((template, i) => <div key={template.id} className="rounded-lg border border-line p-3 space-y-2"><div className="flex gap-2"><input value={template.name} onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,name:e.target.value} : x))} className={inputCls}/><button onClick={() => setTemplates(t => t.filter(x => x.id !== template.id))} className="text-xs text-danger">Remove</button></div><input value={template.subject} placeholder="Subject" onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,subject:e.target.value} : x))} className={inputCls}/><textarea rows={3} value={template.body} placeholder="Message body" onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,body:e.target.value} : x))} className={inputCls}/></div>)}</div>
-                <button onClick={async () => { const saved = await emailsApi.saveTemplates(templates); setTemplates(saved); showNotification('success','Templates saved') }} className="mt-3 px-3 py-2 rounded-md bg-accent text-xs font-bold text-[#201500]">Save templates</button>
+                <div className="flex items-center justify-between mb-3"><h3 className="text-sm font-semibold text-ink ">{t('Templates')}</h3><button onClick={() => setTemplates(list => [...list, { id: crypto.randomUUID(), name: t('New template'), subject: '', body: '' }])} className="text-xs text-info">+ {t('Add template')}</button></div>
+                <div className="space-y-2">{templates.map((template, i) => <div key={template.id} className="rounded-lg border border-line p-3 space-y-2"><div className="flex gap-2"><input value={template.name} onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,name:e.target.value} : x))} className={inputCls}/><button onClick={() => setTemplates(t => t.filter(x => x.id !== template.id))} className="text-xs text-danger">{t('Remove')}</button></div><input value={template.subject} placeholder={t('Subject')} onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,subject:e.target.value} : x))} className={inputCls}/><textarea rows={3} value={template.body} placeholder={t('Message body')} onChange={e => setTemplates(t => t.map((x,j) => j === i ? {...x,body:e.target.value} : x))} className={inputCls}/></div>)}</div>
+                <button onClick={async () => { const saved = await emailsApi.saveTemplates(templates); setTemplates(saved); showNotification('success', t('Templates saved')) }} className="mt-3 px-3 py-2 rounded-md bg-accent text-xs font-bold text-[#201500]">{t('Save templates')}</button>
               </section>
             </div>
           )}

@@ -20,7 +20,7 @@ export function CategoryTabs() {
   return (
     // A segmented control rather than underlined tabs: the selected pill reads
     // at a glance in a pane this narrow, and it keeps the list's soft geometry.
-    <div className="flex gap-0.5 p-1.5 pb-1 mx-1 rounded-xl" role="tablist" aria-label="Inbox categories">
+    <div className="flex gap-0.5 p-1.5 pb-1 mx-1 rounded-xl" role="tablist" aria-label={t('Inbox categories')}>
       {EMAIL_CATEGORIES.map(cat => {
         const unread = getUnreadCount(cat)
         const isActive = activeCategory === cat

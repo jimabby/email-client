@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { apiToken, setApiToken, setUnauthorizedHandler, verifyToken } from '../api/client'
 import { HermesLogo } from './HermesLogo'
+import { t } from '../lib/i18n'
 
 /**
  * Stands in front of the app when the backend wants a token we do not have.
@@ -58,10 +59,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
         setApiToken(candidate)
         unlock()
       } else {
-        setError('That token was rejected. Check it against API_TOKEN on the server.')
+        setError(t('That token was rejected. Check it against API_TOKEN on the server.'))
       }
     } catch {
-      setError('Could not reach the server. Check the address and try again.')
+      setError(t('Could not reach the server. Check the address and try again.'))
     } finally {
       setSubmitting(false)
     }
@@ -79,20 +80,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
         </div>
 
         <h1 className="text-[19px] font-semibold text-ink tracking-[-0.02em] mb-2">
-          Enter your access token
+          {t('Enter your access token')}
         </h1>
         <p className="text-[13.5px] leading-relaxed text-ink-2 mb-5">
-          This server is password-protected. Paste the <code className="rounded bg-ink/8 px-1 py-0.5 text-[12.5px]">API_TOKEN</code> from
-          its configuration — the same one the mobile app uses.
+          {t('This server is password-protected. Paste the API_TOKEN from its configuration — the same one the mobile app uses.')}
         </p>
 
         <label className="block">
-          <span className="sr-only">API token</span>
+          <span className="sr-only">{t('API token')}</span>
           <input
             type="password"
             value={token}
             onChange={e => setToken(e.target.value)}
-            placeholder="API token"
+            placeholder={t('API token')}
             autoFocus
             autoComplete="current-password"
             className="field w-full px-3.5 py-2.5 text-[13.5px]"
@@ -108,11 +108,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
           disabled={!token.trim() || submitting}
           className="btn-primary mt-4 w-full py-2.5 text-[13.5px] font-medium disabled:opacity-50"
         >
-          {submitting ? 'Checking…' : 'Unlock'}
+          {submitting ? t('Checking…') : t('Unlock')}
         </button>
 
         <p className="mt-4 text-[12px] leading-relaxed text-ink-3">
-          The token is kept for this tab only and is cleared when you close it.
+          {t('The token is kept for this tab only and is cleared when you close it.')}
         </p>
       </form>
     </div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { emailsApi } from '../api/client'
 import { useEmailStore } from '../store/emailStore'
 import type { VacationSettings } from '../types/email'
+import { t } from '../lib/i18n'
 
 const EMPTY: VacationSettings = {
   enabled: false,
@@ -35,7 +36,7 @@ export function AwaySettings() {
   useEffect(() => {
     emailsApi.getVacation()
       .then(setSettings)
-      .catch(() => showNotification('error', 'Could not load your auto-reply settings'))
+      .catch(() => showNotification('error', t('Could not load your auto-reply settings')))
       .finally(() => setLoading(false))
   }, [])
 
@@ -44,15 +45,15 @@ export function AwaySettings() {
 
   const save = async () => {
     if (settings.enabled && !settings.message.trim()) {
-      showNotification('error', 'Write the message people will receive before turning this on')
+      showNotification('error', t('Write the message people will receive before turning this on'))
       return
     }
     setSaving(true)
     try {
       setSettings(await emailsApi.saveVacation(settings))
-      showNotification('success', settings.enabled ? 'Auto-reply is on' : 'Auto-reply is off')
+      showNotification('success', settings.enabled ? t('Auto-reply is on') : t('Auto-reply is off'))
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not save')
+      showNotification('error', err instanceof Error ? err.message : t('Could not save'))
     } finally {
       setSaving(false)
     }
@@ -65,7 +66,7 @@ export function AwaySettings() {
       // let it show its own download progress rather than buffering it here.
       triggerDownload(await emailsApi.exportUrl(accountId, 'INBOX'))
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not start the export')
+      showNotification('error', err instanceof Error ? err.message : t('Could not start the export'))
     } finally {
       window.setTimeout(() => setExporting(null), 3000)
     }
@@ -81,7 +82,7 @@ export function AwaySettings() {
       triggerDownload(url, `hermes-settings-${new Date().toISOString().slice(0, 10)}.json`)
       window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Could not export settings')
+      showNotification('error', err instanceof Error ? err.message : t('Could not export settings'))
     }
   }
 
@@ -94,16 +95,16 @@ export function AwaySettings() {
       // The auto-responder is restored switched off; reload what is shown.
       setSettings(await emailsApi.getVacation())
       showNotification('success', skipped.length
-        ? `Settings restored. Skipped ${skipped.length} item${skipped.length === 1 ? '' : 's'} for accounts not added here.`
-        : 'Settings restored')
+        ? t(skipped.length === 1 ? 'Settings restored. Skipped {count} item for accounts not added here.' : 'Settings restored. Skipped {count} items for accounts not added here.', { count: skipped.length })
+        : t('Settings restored'))
     } catch (err) {
-      showNotification('error', err instanceof SyntaxError ? 'That file is not a Hermes settings backup' : (err instanceof Error ? err.message : 'Could not import settings'))
+      showNotification('error', err instanceof SyntaxError ? t('That file is not a Hermes settings backup') : (err instanceof Error ? err.message : t('Could not import settings')))
     } finally {
       setImporting(false)
     }
   }
 
-  if (loading) return <div className="text-[12.5px] text-ink-3">Loading…</div>
+  if (loading) return <div className="text-[12.5px] text-ink-3">{t('Loading…')}</div>
 
   const label = 'block text-[10px] font-semibold text-ink-3 uppercase tracking-wide mb-2'
   const field = 'w-full px-3 py-2 text-sm bg-surface-2 border border-line text-ink placeholder-ink-3 rounded-md focus:outline-none focus:border-accent/60 transition-colors'
@@ -113,10 +114,9 @@ export function AwaySettings() {
       <section>
         <div className="flex items-start justify-between gap-4 mb-3">
           <div>
-            <h3 className="text-[13px] font-semibold text-ink">Vacation auto-reply</h3>
+            <h3 className="text-[13px] font-semibold text-ink">{t('Vacation auto-reply')}</h3>
             <p className="text-xs text-ink-2 mt-1 max-w-md leading-relaxed">
-              Replies once to each person who writes to you. Runs on the server, so it
-              keeps working with Hermes closed.
+              {t('Replies once to each person who writes to you. Runs on the server, so it keeps working with Hermes closed.')}
             </p>
           </div>
           <label className="flex items-center gap-2 shrink-0 cursor-pointer">
@@ -126,24 +126,24 @@ export function AwaySettings() {
               onChange={e => update('enabled', e.target.checked)}
               className="accent-accent"
             />
-            <span className="text-[12.5px] text-ink-2">On</span>
+            <span className="text-[12.5px] text-ink-2">{t('On')}</span>
           </label>
         </div>
 
         {settings.active && (
           <p className="mb-3 rounded-lg bg-ok/12 px-3 py-2 text-[12px] text-ok">
-            Currently replying to incoming mail.
+            {t('Currently replying to incoming mail.')}
           </p>
         )}
         {settings.enabled && !settings.active && (
           <p className="mb-3 rounded-lg bg-accent/12 px-3 py-2 text-[12px] text-ink-2">
-            Switched on, but outside the dates below — nothing is being sent yet.
+            {t('Switched on, but outside the dates below — nothing is being sent yet.')}
           </p>
         )}
 
         <div className="space-y-3">
           <div>
-            <label className={label} htmlFor="away-subject">Subject</label>
+            <label className={label} htmlFor="away-subject">{t('Subject')}</label>
             <input
               id="away-subject"
               value={settings.subject}
@@ -153,20 +153,20 @@ export function AwaySettings() {
           </div>
 
           <div>
-            <label className={label} htmlFor="away-message">Message</label>
+            <label className={label} htmlFor="away-message">{t('Message')}</label>
             <textarea
               id="away-message"
               value={settings.message}
               onChange={e => update('message', e.target.value)}
               rows={5}
-              placeholder={"I'm away until 3 March and will reply when I'm back.\nFor anything urgent, contact…"}
+              placeholder={t("I'm away until 3 March and will reply when I'm back.\nFor anything urgent, contact…")}
               className={`${field} resize-none font-sans`}
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={label} htmlFor="away-start">Start</label>
+              <label className={label} htmlFor="away-start">{t('Start')}</label>
               <input
                 id="away-start"
                 type="datetime-local"
@@ -176,7 +176,7 @@ export function AwaySettings() {
               />
             </div>
             <div>
-              <label className={label} htmlFor="away-end">End</label>
+              <label className={label} htmlFor="away-end">{t('End')}</label>
               <input
                 id="away-end"
                 type="datetime-local"
@@ -186,11 +186,11 @@ export function AwaySettings() {
               />
             </div>
           </div>
-          <p className="text-[11.5px] text-ink-3">Leave either blank to run without that limit.</p>
+          <p className="text-[11.5px] text-ink-3">{t('Leave either blank to run without that limit.')}</p>
 
           {accounts.length > 1 && (
             <div>
-              <span className={label}>Accounts</span>
+              <span className={label}>{t('Accounts')}</span>
               <div className="space-y-1.5">
                 {accounts.map(account => (
                   <label key={account.id} className="flex items-center gap-2 text-[12.5px] text-ink-2 cursor-pointer">
@@ -224,15 +224,15 @@ export function AwaySettings() {
               className="mt-0.5 accent-accent"
             />
             <span>
-              Only reply to people I have corresponded with
+              {t('Only reply to people I have corresponded with')}
               <span className="block text-[11.5px] text-ink-3">
-                Keeps the auto-reply away from strangers and cold outreach.
+                {t('Keeps the auto-reply away from strangers and cold outreach.')}
               </span>
             </span>
           </label>
 
           <div>
-            <label className={label} htmlFor="away-cooldown">Reply to the same person at most once every</label>
+            <label className={label} htmlFor="away-cooldown">{t('Reply to the same person at most once every')}</label>
             <div className="flex items-center gap-2">
               <input
                 id="away-cooldown"
@@ -243,7 +243,7 @@ export function AwaySettings() {
                 onChange={e => update('cooldownDays', Number(e.target.value))}
                 className={`${field} w-20`}
               />
-              <span className="text-[12.5px] text-ink-2">days</span>
+              <span className="text-[12.5px] text-ink-2">{t('days')}</span>
             </div>
           </div>
 
@@ -252,19 +252,18 @@ export function AwaySettings() {
             disabled={saving}
             className="px-3 py-1.5 text-xs font-semibold bg-accent text-[#201500] rounded-md disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? t('Saving…') : t('Save')}
           </button>
         </div>
       </section>
 
       <section className="border-t border-line pt-6">
-        <h3 className="text-[13px] font-semibold text-ink">Export your mail</h3>
+        <h3 className="text-[13px] font-semibold text-ink">{t('Export your mail')}</h3>
         <p className="text-xs text-ink-2 mt-1 mb-3 max-w-md leading-relaxed">
-          Downloads a folder as an mbox file — the format Thunderbird, Apple Mail, and
-          mutt all import. Useful as a backup, and as a way out.
+          {t('Downloads a folder as an mbox file — the format Thunderbird, Apple Mail, and mutt all import. Useful as a backup, and as a way out.')}
         </p>
         {accounts.length === 0 ? (
-          <p className="text-[12.5px] text-ink-3">Add an account first.</p>
+          <p className="text-[12.5px] text-ink-3">{t('Add an account first.')}</p>
         ) : (
           <div className="space-y-1.5">
             {accounts.map(account => (
@@ -275,7 +274,7 @@ export function AwaySettings() {
                   disabled={exporting === account.id}
                   className="shrink-0 text-[12px] font-medium text-accent-ink hover:underline disabled:opacity-50"
                 >
-                  {exporting === account.id ? 'Preparing…' : 'Export inbox'}
+                  {exporting === account.id ? t('Preparing…') : t('Export inbox')}
                 </button>
               </div>
             ))}
@@ -286,21 +285,19 @@ export function AwaySettings() {
       <ImportMail />
 
       <section className="border-t border-line pt-6">
-        <h3 className="text-[13px] font-semibold text-ink">Back up your settings</h3>
+        <h3 className="text-[13px] font-semibold text-ink">{t('Back up your settings')}</h3>
         <p className="text-xs text-ink-2 mt-1 mb-3 max-w-md leading-relaxed">
-          Rules, templates, signatures, send-as addresses, and the auto-reply, as one
-          file. Passwords and sign-ins are never included — re-add accounts first,
-          then restore.
+          {t('Rules, templates, signatures, send-as addresses, the screener, and the auto-reply, as one file. Passwords and sign-ins are never included — re-add accounts first, then restore.')}
         </p>
         <div className="flex items-center gap-3">
           <button
             onClick={exportSettings}
             className="px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-line text-ink rounded-md hover:border-accent/60"
           >
-            Download backup
+            {t('Download backup')}
           </button>
           <label className={`px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-line text-ink rounded-md hover:border-accent/60 cursor-pointer ${importing ? 'opacity-50 pointer-events-none' : ''}`}>
-            {importing ? 'Restoring…' : 'Restore from file…'}
+            {importing ? t('Restoring…') : t('Restore from file…')}
             <input
               type="file"
               accept="application/json,.json"
@@ -337,14 +334,14 @@ function ImportMail() {
     setResult(null)
     try {
       const res = await emailsApi.importMailbox(accountId, file, folder)
-      const summary = `Imported ${res.imported} of ${res.total} message${res.total === 1 ? '' : 's'} into ${res.folder}`
-        + (res.failed ? ` — ${res.failed} failed${res.errors[0] ? ` (${res.errors[0]})` : ''}` : '')
-        + (res.skipped ? ` — ${res.skipped} over the per-file limit were skipped` : '')
+      const summary = t('Imported {imported} of {total} into {folder}', { imported: res.imported, total: res.total, folder: res.folder })
+        + (res.failed ? ` — ${t('{count} failed', { count: res.failed })}${res.errors[0] ? ` (${res.errors[0]})` : ''}` : '')
+        + (res.skipped ? ` — ${t('{count} over the per-file limit were skipped', { count: res.skipped })}` : '')
       setResult(summary)
       showNotification(res.failed ? 'error' : 'success', summary)
       window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
     } catch (err) {
-      showNotification('error', err instanceof Error ? err.message : 'Import failed')
+      showNotification('error', err instanceof Error ? err.message : t('Import failed'))
     } finally {
       setBusy(false)
     }
@@ -352,23 +349,22 @@ function ImportMail() {
 
   return (
     <section className="border-t border-line pt-6">
-      <h3 className="text-[13px] font-semibold text-ink">Import mail</h3>
+      <h3 className="text-[13px] font-semibold text-ink">{t('Import mail')}</h3>
       <p className="text-xs text-ink-2 mt-1 mb-3 max-w-md leading-relaxed">
-        Upload an .mbox file (from Thunderbird, Apple Mail, or Google Takeout) or a single
-        .eml message. Messages keep their original dates and are not re-sent to anyone.
+        {t('Upload an .mbox file (from Thunderbird, Apple Mail, or Google Takeout) or a single .eml message. Messages keep their original dates and are not re-sent to anyone.')}
       </p>
       {accounts.length === 0 ? (
-        <p className="text-[12.5px] text-ink-3">Add an account first.</p>
+        <p className="text-[12.5px] text-ink-3">{t('Add an account first.')}</p>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <select value={accountId} onChange={e => setAccountId(e.target.value)} className="field px-2 py-1.5 text-[12.5px]" aria-label="Import into account">
+          <select value={accountId} onChange={e => setAccountId(e.target.value)} className="field px-2 py-1.5 text-[12.5px]" aria-label={t('Import into account')}>
             {accounts.map(a => <option key={a.id} value={a.id}>{a.email}</option>)}
           </select>
-          <select value={folder} onChange={e => setFolder(e.target.value)} className="field px-2 py-1.5 text-[12.5px]" aria-label="Import into folder">
+          <select value={folder} onChange={e => setFolder(e.target.value)} className="field px-2 py-1.5 text-[12.5px]" aria-label={t('Import into folder')}>
             {folderOptions.map(path => <option key={path} value={path}>{path}</option>)}
           </select>
           <label className={`px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-line text-ink rounded-md hover:border-accent/60 cursor-pointer ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
-            {busy ? 'Importing… (large files take a while)' : 'Choose .mbox or .eml…'}
+            {busy ? t('Importing… (large files take a while)') : t('Choose .mbox or .eml…')}
             <input
               type="file"
               accept=".mbox,.mbx,.eml,message/rfc822,application/mbox"

@@ -156,7 +156,7 @@ export function CommandPalette() {
     <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[110] flex items-start justify-center pt-[12vh] p-4 animate-fade" onClick={close}>
       <div
         role="dialog"
-        aria-label="Command palette"
+        aria-label={t('Command palette')}
         onClick={e => e.stopPropagation()}
         className="glass-elevated rounded-2xl w-full max-w-xl overflow-hidden animate-rise"
       >
@@ -171,7 +171,7 @@ export function CommandPalette() {
             onChange={e => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder={t('Type a command, folder, or search…')}
-            aria-label="Command"
+            aria-label={t('Type a command, folder, or search…')}
             role="combobox"
             aria-expanded="true"
             aria-controls="command-palette-list"

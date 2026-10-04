@@ -621,7 +621,7 @@ export function EmailList() {
     const selected = getSelectedEmails()
     if (!selected.length) { clearEmailSelection(); return }
     const ok = await confirmDialog({
-      title: `Delete ${selected.length} email${selected.length > 1 ? 's' : ''}?`,
+      title: t(selected.length === 1 ? 'Delete {count} email?' : 'Delete {count} emails?', { count: selected.length }),
       body: t('They move to the Trash folder, where the provider will keep them for a while.'),
       confirmLabel: t('Delete'),
       danger: true,
@@ -1097,7 +1097,7 @@ export function EmailList() {
                 onClick={saveCurrentSearch}
                 disabled={!searchInput.trim() || isCurrentSearchSaved}
                 title={isCurrentSearchSaved ? t('Already saved') : t('Save this search')}
-                aria-label="Save this search"
+                aria-label={t('Save this search')}
                 className={`px-2 py-1 text-[10px] rounded-full border transition-colors disabled:opacity-40
                   ${isCurrentSearchSaved
                     ? 'text-accent-ink bg-accent/14 border-accent/40'

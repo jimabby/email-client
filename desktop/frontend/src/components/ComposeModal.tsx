@@ -183,10 +183,10 @@ function RichToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
   const setLink = async () => {
     const prev = editor.getAttributes('link').href
     const url = await promptDialog({
-      title: prev ? 'Edit link' : 'Insert link',
-      label: 'Destination',
+      title: prev ? translate('Edit link') : translate('Insert link'),
+      label: translate('Destination'),
       defaultValue: prev || 'https://',
-      confirmLabel: prev ? 'Update' : 'Insert',
+      confirmLabel: prev ? translate('Update') : translate('Insert'),
     })
     // Cancelling leaves the document alone; clearing the field removes the
     // link, which is the only way to unlink from this button.
@@ -197,18 +197,18 @@ function RichToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
 
   return (
     <div className="flex items-center gap-0.5 px-3 py-2 border-b border-line/40">
-      <button type="button" onClick={() => editor.chain().focus().toggleBold().run()} className={btn(editor.isActive('bold'))} title="Bold">B</button>
-      <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={`${btn(editor.isActive('italic'))} italic`} title="Italic">I</button>
-      <button type="button" onClick={() => editor.chain().focus().toggleUnderline().run()} className={`${btn(editor.isActive('underline'))} underline`} title="Underline">U</button>
+      <button type="button" onClick={() => editor.chain().focus().toggleBold().run()} className={btn(editor.isActive('bold'))} title={translate('Bold')}>B</button>
+      <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={`${btn(editor.isActive('italic'))} italic`} title={translate('Italic')}>I</button>
+      <button type="button" onClick={() => editor.chain().focus().toggleUnderline().run()} className={`${btn(editor.isActive('underline'))} underline`} title={translate('Underline')}>U</button>
       <div className="w-px h-4 bg-line mx-1" />
-      <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={btn(editor.isActive('bulletList'))} title="Bullet list">
+      <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={btn(editor.isActive('bulletList'))} title={translate('Bullet list')}>
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><circle cx="2" cy="3.5" r="1" fill="currentColor"/><line x1="5" y1="3.5" x2="12" y2="3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="2" cy="7" r="1" fill="currentColor"/><line x1="5" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="2" cy="10.5" r="1" fill="currentColor"/><line x1="5" y1="10.5" x2="12" y2="10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
       </button>
-      <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={btn(editor.isActive('orderedList'))} title="Ordered list">
+      <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={btn(editor.isActive('orderedList'))} title={translate('Numbered list')}>
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><text x="0" y="5" fontSize="5" fill="currentColor">1.</text><line x1="5" y1="3.5" x2="12" y2="3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><text x="0" y="9" fontSize="5" fill="currentColor">2.</text><line x1="5" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><text x="0" y="13" fontSize="5" fill="currentColor">3.</text><line x1="5" y1="10.5" x2="12" y2="10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
       </button>
       <div className="w-px h-4 bg-line mx-1" />
-      <button type="button" onClick={setLink} className={btn(editor.isActive('link'))} title="Insert link">
+      <button type="button" onClick={setLink} className={btn(editor.isActive('link'))} title={translate('Insert link')}>
         <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5.5 8.5a3.5 3.5 0 005 0l2-2a3.5 3.5 0 00-5-5L6.5 2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M8.5 5.5a3.5 3.5 0 00-5 0l-2 2a3.5 3.5 0 005 5l1-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
       </button>
     </div>
@@ -770,7 +770,7 @@ export function ComposeModal() {
           <textarea
             value={customPrompt}
             onChange={e => setCustomPrompt(e.target.value)}
-            placeholder={`What should ${aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} do with this email?`}
+            placeholder={t('What should {assistant} do with this email?', { assistant: aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude' })}
             className="field mt-2 w-full p-2.5 text-[12.5px] resize-none"
             rows={2}
           />
@@ -792,7 +792,7 @@ export function ComposeModal() {
       <div className={`overflow-y-auto p-3 ${isExpanded ? 'flex-1' : 'flex-1'}`}>
         {isAiLoading && !aiSuggestion && (
           <div className="flex items-center gap-2 text-violet-500 text-xs">
-            <span>{aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} is thinking</span>
+            <span>{t('{assistant} is thinking', { assistant: aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude' })}</span>
             <span className="flex gap-1">
               {[0,1,2].map(i => <span key={i} className="ai-loading-dot w-1 h-1 rounded-full bg-violet-500 inline-block" />)}
             </span>
@@ -875,16 +875,16 @@ export function ComposeModal() {
       <div className={rowCls}>
         <span className={labelCls}>{t('To')}</span>
         <ContactField value={to} onChange={setTo} contacts={contacts} placeholder="recipient@example.com" label="To" />
-        <button onClick={() => setShowCcBcc(!showCcBcc)} className="text-[10px] text-ink-3 hover:text-accent transition-colors flex-shrink-0">Cc Bcc</button>
+        <button onClick={() => setShowCcBcc(!showCcBcc)} className="text-[10px] text-ink-3 hover:text-accent transition-colors flex-shrink-0">{t('Cc')} {t('Bcc')}</button>
       </div>
       {showCcBcc && (
         <>
           <div className={rowCls}>
-            <span className={labelCls}>Cc</span>
+            <span className={labelCls}>{t('Cc')}</span>
             <ContactField value={cc} onChange={setCc} contacts={contacts} placeholder="cc@example.com" label="Cc" />
           </div>
           <div className={rowCls}>
-            <span className={labelCls}>Bcc</span>
+            <span className={labelCls}>{t('Bcc')}</span>
             <ContactField value={bcc} onChange={setBcc} contacts={contacts} placeholder="bcc@example.com" label="Bcc" />
           </div>
         </>
@@ -993,7 +993,7 @@ export function ComposeModal() {
         value={followUpDays}
         onChange={e => setFollowUpDays(Number(e.target.value))}
         title={t('Remind me if nobody replies')}
-        aria-label="Follow-up reminder"
+        aria-label={t('Remind me if nobody replies')}
         className={`field text-[12px] px-2 py-1.5 !rounded-xl ${followUpDays ? 'text-accent-ink' : 'text-ink-2'}`}
       >
         <option value={0}>{t('No follow-up')}</option>
@@ -1057,7 +1057,7 @@ export function ComposeModal() {
             : <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M4 10L10 4M10 10H4M10 4v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
           }
         </button>
-        <button onClick={handleClose} aria-label="Close composer" className="btn-ghost w-7 h-7 flex items-center justify-center hover:!text-danger hover:!bg-danger/10" title={t('Close')}>
+        <button onClick={handleClose} aria-label={t('Close')} className="btn-ghost w-7 h-7 flex items-center justify-center hover:!text-danger hover:!bg-danger/10" title={t('Close')}>
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         </button>
       </div>
@@ -1077,7 +1077,7 @@ export function ComposeModal() {
               <div
                 className="h-2 cursor-row-resize bg-surface-3 hover:bg-line transition-colors"
                 onMouseDown={handleAiResizeStart}
-                title="Drag to resize AI panel"
+                title={t('Drag to resize AI panel')}
               />
               <div className="flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-line ">
                 <div className="flex items-center gap-2">
@@ -1090,7 +1090,7 @@ export function ComposeModal() {
                     {aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} AI
                   </span>
                 </div>
-                <button onClick={() => setShowAiPanel(false)} aria-label="Close AI panel" className="btn-ghost w-7 h-7 flex items-center justify-center">
+                <button onClick={() => setShowAiPanel(false)} aria-label={t('Close')} className="btn-ghost w-7 h-7 flex items-center justify-center">
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
                 </button>
               </div>
@@ -1112,7 +1112,7 @@ export function ComposeModal() {
                   </div>
                   {aiMode === 'custom' && (
                     <textarea value={customPrompt} onChange={e => setCustomPrompt(e.target.value)}
-                      placeholder="Your instruction…" rows={2}
+                      placeholder={t('Your instruction…')} rows={2}
                       className="w-full p-2 text-xs bg-surface-2 border border-line text-ink placeholder-ink-3 rounded-md resize-none focus:outline-none focus:border-violet-400" />
                   )}
                   <button onClick={handleAiSuggest} disabled={aiMode === 'custom' && !customPrompt}
@@ -1179,10 +1179,10 @@ export function ComposeModal() {
                   {aiProvider === 'openai' ? 'ChatGPT' : aiProvider === 'gemini' ? 'Gemini' : 'Claude'} AI
                 </span>
                 {!aiConfigured && (
-                  <span className="text-[10px] bg-accent/18 text-accent-ink px-1.5 py-0.5 rounded-md font-medium">no key</span>
+                  <span className="text-[10px] bg-accent/18 text-accent-ink px-1.5 py-0.5 rounded-md font-medium">{t('no key')}</span>
                 )}
               </div>
-              <button onClick={() => setShowAiPanel(false)} aria-label="Close AI panel" className="btn-ghost w-7 h-7 flex items-center justify-center">
+              <button onClick={() => setShowAiPanel(false)} aria-label={t('Close')} className="btn-ghost w-7 h-7 flex items-center justify-center">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
               </button>
             </div>

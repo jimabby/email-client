@@ -52,13 +52,17 @@ function domainMatches(candidate, base) {
 /**
  * Reduce the mechanism results to one verdict the UI can render.
  *
- * @returns {{ status: 'pass'|'partial'|'fail'|'unknown', label, detail, spf, dkim, dmarc, alignedDomain }}
+ * `kind` names which explanation applies, with the domains it mentions, so a
+ * client can phrase it in its own language; `label`/`detail` stay as English.
+ *
+ * @returns {{ status: 'pass'|'partial'|'fail'|'unknown', kind, label, detail, spf, dkim, dmarc, alignedDomain, fromDomain, signerDomain, softfail }}
  */
 function summarize(headerValue, fromHeader) {
   const parsed = parseAuthResults(headerValue);
   if (!parsed) {
     return {
       status: 'unknown',
+      kind: 'none',
       label: 'Not verified',
       detail: 'This message carries no sender-authentication results.',
       spf: null, dkim: null, dmarc: null, alignedDomain: null,
@@ -73,11 +77,15 @@ function summarize(headerValue, fromHeader) {
     || domainMatches(parsed.spfDomain, fromDomain);
 
   const failed = [spf, dkim, dmarc].filter(v => v === 'fail' || v === 'softfail');
+  const signerDomain = parsed.dkimDomain || parsed.spfDomain || null;
+  const context = { fromDomain: fromDomain || null, signerDomain };
   const passed = [spf, dkim, dmarc].filter(v => v === 'pass');
 
   if (dmarc === 'fail' || (dkim === 'fail' && spf === 'fail')) {
     return {
       status: 'fail',
+      kind: 'fail',
+      ...context,
       label: 'Failed authentication',
       detail: `This message claims to be from ${fromDomain || 'its sender'} but did not pass that domain's checks. Treat links and attachments as untrusted.`,
       spf, dkim, dmarc, alignedDomain: parsed.dkimDomain || parsed.spfDomain,
@@ -87,6 +95,8 @@ function summarize(headerValue, fromHeader) {
   if (dmarc === 'pass' || (passed.length >= 2 && !failed.length)) {
     return {
       status: aligned || dmarc === 'pass' ? 'pass' : 'partial',
+      kind: aligned || dmarc === 'pass' ? 'verified' : 'otherDomain',
+      ...context,
       label: aligned || dmarc === 'pass' ? 'Verified sender' : 'Signed by another domain',
       detail: aligned || dmarc === 'pass'
         ? `Confirmed as genuinely sent from ${fromDomain || 'the stated domain'}.`
@@ -98,6 +108,9 @@ function summarize(headerValue, fromHeader) {
   if (failed.length) {
     return {
       status: 'partial',
+      kind: 'partial',
+      ...context,
+      softfail: failed.includes('softfail'),
       label: 'Partly verified',
       detail: `Some sender checks did not pass${failed.includes('softfail') ? ' (soft failure)' : ''}. Be cautious with links and attachments.`,
       spf, dkim, dmarc, alignedDomain: parsed.dkimDomain || parsed.spfDomain,
@@ -106,6 +119,8 @@ function summarize(headerValue, fromHeader) {
 
   return {
     status: 'unknown',
+    kind: 'inconclusive',
+    ...context,
     label: 'Not verified',
     detail: 'Sender authentication was inconclusive for this message.',
     spf, dkim, dmarc, alignedDomain: parsed.dkimDomain || parsed.spfDomain,
