@@ -10,6 +10,7 @@ import { radius, space, type Palette } from '../theme';
 import type { Ui } from '../ui';
 import { registerForPush, unregisterPush } from '../push';
 import type { RootStackParamList } from '../navigation';
+import { useTr, useLanguageStore, LANGUAGE_NAMES, type LanguagePreference } from '../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
@@ -19,10 +20,19 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: 'dark', label: 'Dark' },
 ];
 
+const LANGUAGE_OPTIONS: { value: LanguagePreference; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'en', label: LANGUAGE_NAMES.en },
+  { value: 'zh', label: LANGUAGE_NAMES.zh },
+];
+
 export default function SettingsScreen({ navigation }: Props) {
   const { serverUrl, apiToken, setServerUrl, setApiToken } = useAppStore();
   const { t, ui, preference, setPreference } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const tr = useTr();
+  const languagePreference = useLanguageStore((s) => s.preference);
+  const setLanguagePreference = useLanguageStore((s) => s.setPreference);
 
   const [url, setUrl] = useState(serverUrl);
   const [token, setToken] = useState(apiToken);
@@ -42,7 +52,7 @@ export default function SettingsScreen({ navigation }: Props) {
 
   const save = async () => {
     await Promise.all([setServerUrl(url), setApiToken(token)]);
-    setStatus({ ok: true, msg: 'Saved' });
+    setStatus({ ok: true, msg: tr('Saved') });
   };
 
   const test = async () => {
@@ -51,7 +61,7 @@ export default function SettingsScreen({ navigation }: Props) {
     setStatus(null);
     try {
       await api.health();
-      setStatus({ ok: true, msg: 'Connected — backend is reachable.' });
+      setStatus({ ok: true, msg: tr('Connected — backend is reachable.') });
     } catch (err) {
       setStatus({ ok: false, msg: errorMessage(err) });
     } finally {
@@ -68,7 +78,7 @@ export default function SettingsScreen({ navigation }: Props) {
         if (!registered) {
           setStatus({
             ok: false,
-            msg: 'Could not enable notifications. Check that this is a physical device and that permission was granted.',
+            msg: tr('Could not enable notifications. Check that this is a physical device and that permission was granted.'),
           });
         }
       } else {
@@ -82,9 +92,9 @@ export default function SettingsScreen({ navigation }: Props) {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20 }}>
-      <Text style={styles.label}>Backend server URL</Text>
+      <Text style={styles.label}>{tr('Backend server URL')}</Text>
       <Text style={styles.help}>
-        Enter the public HTTPS address of your Hermes backend.
+        {tr('Enter the public HTTPS address of your Hermes backend.')}
       </Text>
       <TextInput
         value={url}
@@ -97,15 +107,14 @@ export default function SettingsScreen({ navigation }: Props) {
         style={styles.input}
       />
 
-      <Text style={[styles.label, { marginTop: 20 }]}>API token</Text>
+      <Text style={[styles.label, { marginTop: 20 }]}>{tr('API token')}</Text>
       <Text style={styles.help}>
-        Use the same API_TOKEN configured on the cloud server. It is kept in the
-        phone's encrypted credential storage.
+        {tr("Use the same API_TOKEN configured on the cloud server. It is kept in the phone's encrypted credential storage.")}
       </Text>
       <TextInput
         value={token}
         onChangeText={setToken}
-        placeholder="Paste your private API token"
+        placeholder={tr('Paste your private API token')}
         placeholderTextColor={t.textFaint}
         autoCapitalize="none"
         autoCorrect={false}
@@ -118,11 +127,11 @@ export default function SettingsScreen({ navigation }: Props) {
           {testing ? (
             <ActivityIndicator color={t.text} />
           ) : (
-            <Text style={styles.btnGhostText}>Test connection</Text>
+            <Text style={styles.btnGhostText}>{tr('Test connection')}</Text>
           )}
         </TouchableOpacity>
         <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={save}>
-          <Text style={styles.btnPrimaryText}>Save</Text>
+          <Text style={styles.btnPrimaryText}>{tr('Save')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -133,13 +142,12 @@ export default function SettingsScreen({ navigation }: Props) {
       )}
 
       {/* ─── Notifications ───────────────────────────────────────────────── */}
-      <Text style={[styles.label, { marginTop: 28 }]}>Notifications</Text>
+      <Text style={[styles.label, { marginTop: 28 }]}>{tr('Notifications')}</Text>
       <Text style={styles.help}>
-        The backend watches every mailbox continuously. Turn this on and it will
-        notify this device the moment mail arrives, even with the app closed.
+        {tr('The backend watches every mailbox continuously. Turn this on and it will notify this device the moment mail arrives, even with the app closed.')}
       </Text>
       <View style={styles.switchRow}>
-        <Text style={styles.switchLabel}>New mail notifications</Text>
+        <Text style={styles.switchLabel}>{tr('New mail notifications')}</Text>
         {pushBusy
           ? <ActivityIndicator color={t.accent} />
           : (
@@ -153,9 +161,9 @@ export default function SettingsScreen({ navigation }: Props) {
       </View>
 
       {/* ─── Appearance ──────────────────────────────────────────────────── */}
-      <Text style={[styles.label, { marginTop: 28 }]}>Appearance</Text>
+      <Text style={[styles.label, { marginTop: 28 }]}>{tr('Appearance')}</Text>
       <Text style={styles.help}>
-        Matches the desktop client. "System" follows your device setting.
+        {tr('Matches the desktop client. "System" follows your device setting.')}
       </Text>
       <View style={styles.segment}>
         {THEME_OPTIONS.map((option) => {
@@ -169,7 +177,31 @@ export default function SettingsScreen({ navigation }: Props) {
               accessibilityState={{ selected: active }}
             >
               <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
-                {option.label}
+                {tr(option.label)}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* ─── Language ────────────────────────────────────────────────────── */}
+      <Text style={[styles.label, { marginTop: 28 }]}>{tr('Language')}</Text>
+      <Text style={styles.help}>
+        {tr('The language of Hermes itself. Your mail is never translated.')}
+      </Text>
+      <View style={styles.segment}>
+        {LANGUAGE_OPTIONS.map((option) => {
+          const active = languagePreference === option.value;
+          return (
+            <TouchableOpacity
+              key={option.value}
+              style={[styles.segmentItem, active && styles.segmentItemActive]}
+              onPress={() => setLanguagePreference(option.value)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+            >
+              <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                {option.value === 'system' ? tr(option.label) : option.label}
               </Text>
             </TouchableOpacity>
           );
@@ -179,8 +211,8 @@ export default function SettingsScreen({ navigation }: Props) {
       {aiConfigured !== null && (
         <Text style={styles.note}>
           {aiConfigured
-            ? 'AI is configured on the server — summaries, smart replies, and draft help in Compose are available.'
-            : 'No AI key is configured on the server, so summaries, smart replies, and draft help are hidden. Add one in the desktop app under Settings → AI.'}
+            ? tr('AI is configured on the server — summaries, smart replies, and draft help in Compose are available.')
+            : tr('No AI key is configured on the server, so summaries, smart replies, and draft help are hidden. Add one in the desktop app under Settings → AI.')}
         </Text>
       )}
 
@@ -189,13 +221,12 @@ export default function SettingsScreen({ navigation }: Props) {
           style={[styles.btn, styles.btnPrimary, { marginTop: 28 }]}
           onPress={() => navigation.navigate('Accounts')}
         >
-          <Text style={styles.btnPrimaryText}>Go to accounts</Text>
+          <Text style={styles.btnPrimaryText}>{tr('Go to accounts')}</Text>
         </TouchableOpacity>
       ) : null}
 
       <Text style={styles.note}>
-        The cloud backend stays online independently of your PC. For internet use,
-        always use HTTPS and a long random API token.
+        {tr('The cloud backend stays online independently of your PC. For internet use, always use HTTPS and a long random API token.')}
       </Text>
     </ScrollView>
   );

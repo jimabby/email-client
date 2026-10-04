@@ -10,6 +10,7 @@ import type { Ui } from '../ui';
 import { relativeTime } from '../utils';
 import type { Account, Followup } from '../types';
 import type { RootStackParamList } from '../navigation';
+import { useTr } from '../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Followups'>;
 
@@ -19,6 +20,7 @@ const ORDER: Record<Followup['status'], number> = { due: 0, waiting: 1, replied:
 export default function FollowupsScreen({ navigation }: Props) {
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const tr = useTr();
 
   const [items, setItems] = useState<Followup[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -64,31 +66,31 @@ export default function FollowupsScreen({ navigation }: Props) {
       ListHeaderComponent={error ? <Text style={styles.error}>{error}</Text> : null}
       ListEmptyComponent={
         <View style={styles.center}>
-          <Text style={styles.emptyTitle}>Nothing to follow up on</Text>
-          <Text style={styles.help}>Choose a reminder when you send a message, and it shows up here if nobody replies.</Text>
+          <Text style={styles.emptyTitle}>{tr('Nothing to follow up on')}</Text>
+          <Text style={styles.help}>{tr('Choose a reminder when you send a message, and it shows up here if nobody replies.')}</Text>
         </View>
       }
       renderItem={({ item }) => (
         <View style={styles.row}>
           <View style={styles.rowTop}>
             <Text style={[styles.status, item.status === 'due' ? styles.statusDue : item.status === 'replied' ? styles.statusReplied : null]}>
-              {item.status === 'due' ? 'No reply' : item.status === 'replied' ? 'Replied' : 'Waiting'}
+              {item.status === 'due' ? tr('No reply') : item.status === 'replied' ? tr('Replied') : tr('Waiting')}
             </Text>
             <Text style={styles.subject} numberOfLines={1}>{item.subject}</Text>
           </View>
-          <Text style={styles.meta} numberOfLines={1}>To {item.to}</Text>
+          <Text style={styles.meta} numberOfLines={1}>{tr('To')} {item.to}</Text>
           <Text style={styles.meta}>
-            Sent {relativeTime(item.sentAt)}
-            {item.status === 'waiting' ? ` · reminds ${relativeTime(item.dueAt)}` : ''}
+            {tr('Sent {when}', { when: relativeTime(item.sentAt) })}
+            {item.status === 'waiting' ? ` · ${tr('reminds {when}', { when: relativeTime(item.dueAt) })}` : ''}
           </Text>
           <View style={styles.actions}>
             {item.status === 'due' && (
-              <TouchableOpacity onPress={() => nudge(item)}><Text style={styles.action}>Follow up</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => nudge(item)}><Text style={styles.action}>{tr('Follow up')}</Text></TouchableOpacity>
             )}
             {item.status !== 'replied' && (
-              <TouchableOpacity onPress={() => act(() => api.remindAgain(item.id, 3))}><Text style={styles.action}>Remind in 3 days</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => act(() => api.remindAgain(item.id, 3))}><Text style={styles.action}>{tr('Remind in 3 days')}</Text></TouchableOpacity>
             )}
-            <TouchableOpacity onPress={() => act(() => api.dismissFollowup(item.id))}><Text style={styles.dismiss}>Dismiss</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => act(() => api.dismissFollowup(item.id))}><Text style={styles.dismiss}>{tr('Dismiss')}</Text></TouchableOpacity>
           </View>
         </View>
       )}

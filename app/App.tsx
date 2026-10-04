@@ -14,6 +14,7 @@ import { ThemeProvider, useTheme } from './src/ThemeContext';
 import { api } from './src/api';
 import { registerForPush, targetFromNotification, type PushTarget } from './src/push';
 import type { RootStackParamList } from './src/navigation';
+import { useLanguageStore, useTr } from './src/i18n';
 
 import SettingsScreen from './src/screens/SettingsScreen';
 import AccountsScreen from './src/screens/AccountsScreen';
@@ -25,12 +26,14 @@ import OutboxScreen from './src/screens/OutboxScreen';
 import AddAccountScreen from './src/screens/AddAccountScreen';
 import RulesScreen from './src/screens/RulesScreen';
 import FollowupsScreen from './src/screens/FollowupsScreen';
+import ScreenerScreen from './src/screens/ScreenerScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function Root() {
   const { serverReady, serverUrl, loadServerUrl } = useAppStore();
   const { t, ui, mode } = useTheme();
+  const tr = useTr();
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
   // A notification can arrive before the navigator is mounted (a cold start
   // from a tapped banner), so the target is held until navigation is ready.
@@ -38,6 +41,7 @@ function Root() {
 
   useEffect(() => {
     loadServerUrl();
+    useLanguageStore.getState().load();
   }, [loadServerUrl]);
 
   // Register for push once the server address and token are known — the
@@ -154,10 +158,10 @@ function Root() {
               headerRight: () => (
                 <View style={{ flexDirection: 'row', gap: 16 }}>
                   <TouchableOpacity onPress={() => navigation.navigate('Outbox')}>
-                    <Text style={ui.headerAction}>Outbox</Text>
+                    <Text style={ui.headerAction}>{tr('Outbox')}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => navigation.navigate('Settings')}>
-                    <Text style={ui.headerAction}>Settings</Text>
+                    <Text style={ui.headerAction}>{tr('Settings')}</Text>
                   </TouchableOpacity>
                 </View>
               ),
@@ -172,16 +176,17 @@ function Root() {
               account's inbox, or the unified list. */}
           <Stack.Screen name="Inbox" component={InboxScreen} />
           <Stack.Screen name="Viewer" component={ViewerScreen} options={{ title: '' }} />
-          <Stack.Screen name="Compose" component={ComposeScreen} options={{ title: 'New message' }} />
-          <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
-          <Stack.Screen name="Outbox" component={OutboxScreen} options={{ title: 'Outbox' }} />
+          <Stack.Screen name="Compose" component={ComposeScreen} options={{ title: tr('New message') }} />
+          <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: tr('Settings') }} />
+          <Stack.Screen name="Outbox" component={OutboxScreen} options={{ title: tr('Outbox') }} />
           <Stack.Screen
             name="AddAccount"
             component={AddAccountScreen}
-            options={({ route }) => ({ title: route.params?.reconnect ? 'Reconnect' : 'Add account' })}
+            options={({ route }) => ({ title: route.params?.reconnect ? tr('Reconnect') : tr('Add account') })}
           />
-          <Stack.Screen name="Rules" component={RulesScreen} options={{ title: 'Rules' }} />
-          <Stack.Screen name="Followups" component={FollowupsScreen} options={{ title: 'Follow-ups' }} />
+          <Stack.Screen name="Rules" component={RulesScreen} options={{ title: tr('Rules') }} />
+          <Stack.Screen name="Followups" component={FollowupsScreen} options={{ title: tr('Follow-ups') }} />
+          <Stack.Screen name="Screener" component={ScreenerScreen} options={{ title: tr('Screener') }} />
         </Stack.Navigator>
       </NavigationContainer>
     </>

@@ -124,6 +124,24 @@ export interface MutedThread {
 /** Draft-assist modes, the same set the desktop composer offers. */
 export type AiMode = 'improve' | 'concise' | 'grammar' | 'formal' | 'friendly' | 'reply';
 
+/** Mail from one first-time sender, waiting in the screener. */
+export interface ScreenerGroup {
+  sender: string;
+  name: string;
+  count: number;
+  latest: string | null;
+  emails: EmailSummary[];
+}
+
+export interface ScreenerState {
+  enabled: boolean;
+  folder: string;
+  allowed: string[];
+  blocked: string[];
+  pending: ScreenerGroup[];
+  errors: { accountId: string; email: string; error: string }[];
+}
+
 export interface ThreadSummary {
   summary: string;
   keyPoints: string[];

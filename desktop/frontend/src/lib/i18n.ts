@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { create } from 'zustand'
-import { ZH } from './i18n.zh'
+import { ZH } from '../../../../shared/i18n.zh'
 
 /**
  * Interface language.

@@ -12,6 +12,7 @@ import { ActionSheet } from '../components/ActionSheet';
 import { senderName, stripHtml } from '../utils';
 import type { RootStackParamList } from '../navigation';
 import type { AiMode } from '../types';
+import { useTr, tr as translate } from '../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Compose'>;
 
@@ -35,6 +36,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
   const { account, replyTo, prefill } = route.params;
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const tr = useTr();
 
   const [to, setTo] = useState(replyTo ? replyTo.from : prefill?.to ?? '');
   const [cc, setCc] = useState(prefill?.cc ?? '');
@@ -77,7 +79,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
         setText(suggestion.trim());
       }
     } catch (err) {
-      Alert.alert('AI could not help', errorMessage(err));
+      Alert.alert(translate('AI could not help'), errorMessage(err));
     } finally {
       setAiBusy(false);
     }
@@ -106,22 +108,22 @@ export default function ComposeScreen({ navigation, route }: Props) {
       return d;
     })();
     return [
-      { label: 'In 1 hour', at: new Date(now.getTime() + 3600 * 1000) },
-      { label: 'Tomorrow morning', at: tomorrow },
-      { label: 'Monday morning', at: nextWeek },
+      { label: tr('In 1 hour'), at: new Date(now.getTime() + 3600 * 1000) },
+      { label: tr('Tomorrow morning'), at: tomorrow },
+      { label: tr('Monday morning'), at: nextWeek },
     ];
   };
 
   const dispatch = async (sendAt?: Date, confirmedNoSubject = false) => {
     if (!to.trim()) {
-      Alert.alert('Missing recipient', 'Please add at least one recipient.');
+      Alert.alert(tr('Missing recipient'), tr('Add at least one recipient'));
       return;
     }
     // An empty subject is legal mail, just usually a mistake — ask, don't refuse.
     if (!subject.trim() && !confirmedNoSubject) {
-      Alert.alert('Send without a subject?', 'This message has no subject line.', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Send anyway', onPress: () => { dispatch(sendAt, true); } },
+      Alert.alert(tr('Send without a subject?'), tr('This message has no subject line.'), [
+        { text: tr('Cancel'), style: 'cancel' },
+        { text: tr('Send anyway'), onPress: () => { dispatch(sendAt, true); } },
       ]);
       return;
     }
@@ -142,26 +144,26 @@ export default function ComposeScreen({ navigation, route }: Props) {
       });
 
       const when = sendAt
-        ? `Scheduled for ${sendAt.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}.`
-        : `Sending in ${UNDO_WINDOW_SEC} seconds.`;
+        ? tr('Scheduled for {when}.', { when: sendAt.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) })
+        : tr('Sending in {seconds} seconds.', { seconds: UNDO_WINDOW_SEC });
 
-      Alert.alert('Queued', when, [
+      Alert.alert(tr('Queued'), when, [
         {
-          text: 'Undo',
+          text: tr('Undo'),
           style: 'destructive',
           onPress: async () => {
             try {
               await api.cancelSend(account.id, result.jobId);
-              Alert.alert('Recalled', 'The message was not sent. It is still in your outbox.');
+              Alert.alert(tr('Recalled'), tr('The message was not sent. It is still in your outbox.'));
             } catch (err) {
-              Alert.alert('Too late', errorMessage(err));
+              Alert.alert(tr('Too late'), errorMessage(err));
             }
           },
         },
-        { text: 'OK', onPress: () => navigation.goBack() },
+        { text: tr('OK'), onPress: () => navigation.goBack() },
       ]);
     } catch (err) {
-      Alert.alert('Failed to send', errorMessage(err));
+      Alert.alert(tr('Failed to send email'), errorMessage(err));
     } finally {
       setSending(false);
     }
@@ -181,11 +183,11 @@ export default function ComposeScreen({ navigation, route }: Props) {
         text,
         html: bodyHtml(),
       });
-      Alert.alert('Draft saved', 'Saved to your Drafts folder.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
+      Alert.alert(tr('Draft saved'), tr('Saved to your Drafts folder.'), [
+        { text: tr('OK'), onPress: () => navigation.goBack() },
       ]);
     } catch (err) {
-      Alert.alert('Failed to save draft', errorMessage(err));
+      Alert.alert(tr('Failed to save draft'), errorMessage(err));
     } finally {
       setSavingDraft(false);
     }
@@ -193,22 +195,22 @@ export default function ComposeScreen({ navigation, route }: Props) {
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      title: replyTo ? 'Reply' : 'New message',
+      title: replyTo ? tr('Reply') : tr('New message'),
       headerRight: () =>
         sending ? (
           <ActivityIndicator color={t.accent} />
         ) : (
           <View style={styles.headerActions}>
             <TouchableOpacity onPress={() => setLaterOpen(true)} hitSlop={8}>
-              <Text style={styles.laterBtn}>Later</Text>
+              <Text style={styles.laterBtn}>{tr('Later')}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={send} hitSlop={8}>
-              <Text style={styles.sendBtn}>Send</Text>
+              <Text style={styles.sendBtn}>{tr('Send')}</Text>
             </TouchableOpacity>
           </View>
         ),
     });
-  }, [navigation, to, cc, bcc, subject, text, sending, followUpDays, styles, t]);
+  }, [navigation, to, cc, bcc, subject, text, sending, followUpDays, styles, t, tr]);
 
   return (
     <KeyboardAvoidingView
@@ -217,11 +219,11 @@ export default function ComposeScreen({ navigation, route }: Props) {
     >
       <ScrollView contentContainerStyle={{ padding: 0 }} keyboardShouldPersistTaps="handled">
         <View style={styles.fieldRow}>
-          <Text style={styles.label}>From</Text>
+          <Text style={styles.label}>{tr('From')}</Text>
           <Text style={styles.fromValue}>{account.email}</Text>
         </View>
         <View style={styles.fieldRow}>
-          <Text style={styles.label}>To</Text>
+          <Text style={styles.label}>{tr('To')}</Text>
           <TextInput
             value={to}
             onChangeText={setTo}
@@ -233,14 +235,14 @@ export default function ComposeScreen({ navigation, route }: Props) {
           />
           {!showCcBcc && (
             <TouchableOpacity onPress={() => setShowCcBcc(true)} hitSlop={8}>
-              <Text style={styles.ccToggle}>Cc/Bcc</Text>
+              <Text style={styles.ccToggle}>{tr('Cc')}/{tr('Bcc')}</Text>
             </TouchableOpacity>
           )}
         </View>
         {showCcBcc && (
           <>
             <View style={styles.fieldRow}>
-              <Text style={styles.label}>Cc</Text>
+              <Text style={styles.label}>{tr('Cc')}</Text>
               <TextInput
                 value={cc}
                 onChangeText={setCc}
@@ -252,7 +254,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
               />
             </View>
             <View style={styles.fieldRow}>
-              <Text style={styles.label}>Bcc</Text>
+              <Text style={styles.label}>{tr('Bcc')}</Text>
               <TextInput
                 value={bcc}
                 onChangeText={setBcc}
@@ -266,11 +268,11 @@ export default function ComposeScreen({ navigation, route }: Props) {
           </>
         )}
         <View style={styles.fieldRow}>
-          <Text style={styles.label}>Subject</Text>
+          <Text style={styles.label}>{tr('Subject')}</Text>
           <TextInput
             value={subject}
             onChangeText={setSubject}
-            placeholder="Subject"
+            placeholder={tr('Subject')}
             placeholderTextColor={t.textFaint}
             style={styles.input}
           />
@@ -281,17 +283,17 @@ export default function ComposeScreen({ navigation, route }: Props) {
             <TouchableOpacity style={styles.tool} onPress={() => setAiOpen(true)} disabled={aiBusy}>
               {aiBusy
                 ? <ActivityIndicator color={t.ai} size="small" />
-                : <Text style={styles.toolAi}>✦ AI help</Text>}
+                : <Text style={styles.toolAi}>✦ {tr('AI help')}</Text>}
             </TouchableOpacity>
           )}
           {beforeAi !== null && !aiBusy && (
             <TouchableOpacity style={styles.tool} onPress={() => { setText(beforeAi); setBeforeAi(null); }}>
-              <Text style={styles.toolText}>Undo AI</Text>
+              <Text style={styles.toolText}>{tr('Undo AI')}</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity style={styles.tool} onPress={() => setFollowUpOpen(true)}>
             <Text style={followUpDays ? styles.toolActive : styles.toolText}>
-              {followUpDays ? `Remind in ${followUpDays}d if no reply` : 'Follow-up reminder'}
+              {followUpDays ? tr('Remind in {days}d if no reply', { days: followUpDays }) : tr('Follow-up reminder')}
             </Text>
           </TouchableOpacity>
         </View>
@@ -299,7 +301,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
         <TextInput
           value={text}
           onChangeText={setText}
-          placeholder="Write your message…"
+          placeholder={tr('Write your email…')}
           placeholderTextColor={t.textFaint}
           multiline
           textAlignVertical="top"
@@ -309,7 +311,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
         {replyTo && (
           <View style={styles.quote}>
             <Text style={styles.quoteHeader}>
-              On {new Date(replyTo.date).toLocaleString()}, {senderName(replyTo.from)} wrote:
+              {tr('On {date}, {sender} wrote:', { date: new Date(replyTo.date).toLocaleString(), sender: senderName(replyTo.from) })}
             </Text>
             <Text style={styles.quoteText} numberOfLines={8}>
               {replyTo.snippet || stripHtml(replyTo.subject)}
@@ -320,13 +322,13 @@ export default function ComposeScreen({ navigation, route }: Props) {
         <TouchableOpacity style={styles.draftBtn} onPress={saveDraft} disabled={savingDraft}>
           {savingDraft
             ? <ActivityIndicator color={t.text} />
-            : <Text style={styles.draftText}>Save draft</Text>}
+            : <Text style={styles.draftText}>{tr('Save draft')}</Text>}
         </TouchableOpacity>
       </ScrollView>
 
       <ActionSheet
         visible={laterOpen}
-        title="Send later"
+        title={tr('Send later')}
         onClose={() => setLaterOpen(false)}
         options={scheduleChoices().map((choice) => ({
           label: choice.label,
@@ -337,16 +339,16 @@ export default function ComposeScreen({ navigation, route }: Props) {
 
       <ActionSheet
         visible={aiOpen}
-        title="AI help"
+        title={tr('AI help')}
         onClose={() => setAiOpen(false)}
         options={AI_MODES
           .filter(m => (m.mode === 'reply' ? !!replyTo : true))
           .map((m) => ({
-            label: m.label,
-            detail: m.needsText && !text.trim() ? 'write something first' : undefined,
+            label: tr(m.label),
+            detail: m.needsText && !text.trim() ? tr('write something first') : undefined,
             onPress: () => {
               if (m.needsText && !text.trim()) {
-                Alert.alert('Nothing to rewrite', 'Write a draft first, then ask AI to improve it.');
+                Alert.alert(tr('Nothing to rewrite'), tr('Write a draft first, then ask AI to improve it.'));
                 return;
               }
               runAi(m.mode);
@@ -356,10 +358,10 @@ export default function ComposeScreen({ navigation, route }: Props) {
 
       <ActionSheet
         visible={followUpOpen}
-        title="Remind me"
+        title={tr('Remind me')}
         onClose={() => setFollowUpOpen(false)}
         options={FOLLOW_UP_CHOICES.map((choice) => ({
-          label: choice.label,
+          label: tr(choice.label),
           detail: choice.days === followUpDays ? '✓' : undefined,
           onPress: () => setFollowUpDays(choice.days),
         }))}

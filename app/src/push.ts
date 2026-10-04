@@ -3,6 +3,7 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from './api';
+import { tr } from './i18n';
 
 /**
  * Push notifications.
@@ -62,7 +63,7 @@ export async function registerForPush(): Promise<string | null> {
       // Android needs the channel to exist before a notification names it, or
       // the message arrives silently in the default channel.
       await Notifications.setNotificationChannelAsync('new-mail', {
-        name: 'New mail',
+        name: tr('New mail'),
         importance: Notifications.AndroidImportance.HIGH,
         vibrationPattern: [0, 200, 100, 200],
         lightColor: '#fbbf24',

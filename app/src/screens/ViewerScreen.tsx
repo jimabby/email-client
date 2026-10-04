@@ -14,6 +14,7 @@ import { ActionSheet } from '../components/ActionSheet';
 import { initials, senderName, formatFullDate, stripHtml } from '../utils';
 import type { EmailBody, EmailSummary, ThreadSummary } from '../types';
 import type { RootStackParamList } from '../navigation';
+import { useTr, tr as translate } from '../i18n';
 
 // Quick snooze choices (mirrors the desktop viewer).
 function snoozeChoices(): { label: string; until: Date }[] {
@@ -22,10 +23,10 @@ function snoozeChoices(): { label: string; until: Date }[] {
   const tomorrow = at(new Date(now.getTime() + 86400000), 8);
   const nextWeek = (() => { const d = at(now, 8); const add = ((1 - d.getDay()) + 7) % 7 || 7; d.setDate(d.getDate() + add); return d; })();
   return [
-    { label: 'Later today', until: new Date(now.getTime() + 3 * 3600 * 1000) },
-    { label: 'Tomorrow', until: tomorrow },
-    { label: 'This weekend', until: (() => { const d = at(now, 9); const add = ((6 - d.getDay()) + 7) % 7 || 7; d.setDate(d.getDate() + add); return d; })() },
-    { label: 'Next week', until: nextWeek },
+    { label: translate('Later today'), until: new Date(now.getTime() + 3 * 3600 * 1000) },
+    { label: translate('Tomorrow'), until: tomorrow },
+    { label: translate('This weekend'), until: (() => { const d = at(now, 9); const add = ((6 - d.getDay()) + 7) % 7 || 7; d.setDate(d.getDate() + add); return d; })() },
+    { label: translate('Next week'), until: nextWeek },
   ];
 }
 
@@ -47,6 +48,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
   const { width } = useWindowDimensions();
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const tr = useTr();
 
   const [body, setBody] = useState<EmailBody | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,7 +119,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
     try {
       setReplies(await api.smartReplies({ from: email.from, subject: email.subject, body: plainBody() }));
     } catch (err) {
-      Alert.alert('Could not suggest replies', errorMessage(err));
+      Alert.alert(tr('Could not suggest replies'), errorMessage(err));
     } finally {
       setRepliesLoading(false);
     }
@@ -138,7 +140,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
         messages: [...earlier, { from: email.from, date: body?.date || email.date, body: plainBody() }],
       }));
     } catch (err) {
-      Alert.alert('Could not summarise', errorMessage(err));
+      Alert.alert(tr('Could not summarise'), errorMessage(err));
     } finally {
       setSummaryLoading(false);
     }
@@ -155,17 +157,17 @@ export default function ViewerScreen({ navigation, route }: Props) {
   };
 
   const remove = () => {
-    Alert.alert('Delete email', 'Move this email to trash?', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(tr('Delete email'), tr('Move this email to trash?'), [
+      { text: tr('Cancel'), style: 'cancel' },
       {
-        text: 'Delete',
+        text: tr('Delete'),
         style: 'destructive',
         onPress: async () => {
           try {
             await api.delete(account.id, email.id, email.folder);
             navigation.goBack();
           } catch (err) {
-            Alert.alert('Error', errorMessage(err));
+            Alert.alert(tr('Error'), errorMessage(err));
           }
         },
       },
@@ -177,7 +179,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
       await api.markUnread(account.id, email.id, email.folder);
       navigation.goBack();
     } catch (err) {
-      Alert.alert('Error', errorMessage(err));
+      Alert.alert(tr('Error'), errorMessage(err));
     }
   };
 
@@ -187,7 +189,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
       await api.move(account.id, email.id, resolveArchiveFolder(folders), email.folder);
       navigation.goBack();
     } catch (err) {
-      Alert.alert('Error', errorMessage(err));
+      Alert.alert(tr('Error'), errorMessage(err));
     }
   };
 
@@ -196,17 +198,17 @@ export default function ViewerScreen({ navigation, route }: Props) {
   const mute = () => {
     const threadId = email.threadId;
     if (!threadId) return;
-    Alert.alert('Mute this conversation?', 'New replies will skip the inbox and never notify. Unmute any time from the desktop settings.', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(tr('Mute this conversation?'), tr('New replies will skip the inbox and never notify. Unmute any time from the desktop settings.'), [
+      { text: tr('Cancel'), style: 'cancel' },
       {
-        text: 'Mute',
+        text: tr('Mute'),
         onPress: async () => {
           try {
             await api.mute(account.id, threadId, email.subject);
             if ((email.folder || 'INBOX') === 'INBOX') await archive();
             else navigation.goBack();
           } catch (err) {
-            Alert.alert('Error', errorMessage(err));
+            Alert.alert(tr('Error'), errorMessage(err));
           }
         },
       },
@@ -218,7 +220,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
       await api.snooze(account.id, email.id, until.toISOString(), email, email.folder);
       navigation.goBack();
     } catch (err) {
-      Alert.alert('Error', errorMessage(err));
+      Alert.alert(tr('Error'), errorMessage(err));
     }
   };
 
@@ -227,7 +229,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
       account,
       prefill: {
         subject: `Fwd: ${email.subject.replace(/^fwd:\s*/i, '')}`,
-        body: `\n\n---------- Forwarded message ----------\nFrom: ${email.from}\nSubject: ${email.subject}\n\n${plainBody()}`,
+        body: `\n\n---------- ${tr('Forwarded message')} ----------\n${tr('From')}: ${email.from}\n${tr('Subject')}: ${email.subject}\n\n${plainBody()}`,
       },
     });
   };
@@ -236,30 +238,30 @@ export default function ViewerScreen({ navigation, route }: Props) {
     navigation.setOptions({
       headerRight: () => (
         <View style={styles.headerActions}>
-          <TouchableOpacity onPress={toggleStar} hitSlop={8} accessibilityLabel={starred ? 'Unstar' : 'Star'}>
+          <TouchableOpacity onPress={toggleStar} hitSlop={8} accessibilityLabel={starred ? tr('Unstar') : tr('Star')}>
             <Text style={[styles.star, starred && styles.starOn]}>{starred ? '★' : '☆'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={markUnread} hitSlop={8} accessibilityLabel="Mark unread">
+          <TouchableOpacity onPress={markUnread} hitSlop={8} accessibilityLabel={tr('Mark unread')}>
             <Text style={styles.headerIcon}>✉︎</Text>
           </TouchableOpacity>
           {email.threadId ? (
-            <TouchableOpacity onPress={mute} hitSlop={8} accessibilityLabel="Mute conversation">
+            <TouchableOpacity onPress={mute} hitSlop={8} accessibilityLabel={tr('Mute conversation')}>
               <Text style={styles.headerIcon}>🔕</Text>
             </TouchableOpacity>
           ) : null}
-          <TouchableOpacity onPress={remove} hitSlop={8} accessibilityLabel="Delete">
+          <TouchableOpacity onPress={remove} hitSlop={8} accessibilityLabel={tr('Delete')}>
             <Text style={styles.trash}>🗑</Text>
           </TouchableOpacity>
         </View>
       ),
     });
-  }, [navigation, starred, body, styles]);
+  }, [navigation, starred, body, styles, tr]);
 
   return (
     <>
       <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={styles.header}>
-          <Text style={styles.subject}>{email.subject || '(no subject)'}</Text>
+          <Text style={styles.subject}>{email.subject || tr('(no subject)')}</Text>
           <View style={styles.fromRow}>
             <View style={[styles.avatar, { backgroundColor: avatarColor(email.from) }]}>
               <Text style={styles.avatarText}>{initials(email.from)}</Text>
@@ -286,7 +288,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
                 >
                   {summaryLoading
                     ? <ActivityIndicator color={t.ai} size="small" />
-                    : <Text style={styles.aiChipText}>✦ Summarise</Text>}
+                    : <Text style={styles.aiChipText}>✦ {tr('Summarise thread')}</Text>}
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.aiChip}
@@ -295,14 +297,14 @@ export default function ViewerScreen({ navigation, route }: Props) {
                 >
                   {repliesLoading
                     ? <ActivityIndicator color={t.ai} size="small" />
-                    : <Text style={styles.aiChipText}>✦ Suggest replies</Text>}
+                    : <Text style={styles.aiChipText}>✦ {tr('Suggest replies')}</Text>}
                 </TouchableOpacity>
               </View>
             )}
 
             {thread.length > 0 && (
               <View style={styles.thread}>
-                <Text style={styles.threadTitle}>Earlier in this conversation ({thread.length})</Text>
+                <Text style={styles.threadTitle}>{tr('Earlier in this conversation')} ({thread.length})</Text>
                 {thread.map(({ summary: item, body: prior }) => {
                   const open = expanded.has(item.id);
                   return (
@@ -333,11 +335,11 @@ export default function ViewerScreen({ navigation, route }: Props) {
 
             {summary && (
               <View style={styles.aiCard}>
-                <Text style={styles.aiCardTitle}>Summary</Text>
+                <Text style={styles.aiCardTitle}>{tr('AI thread summary')}</Text>
                 <Text style={styles.aiCardBody}>{summary.summary}</Text>
                 {summary.keyPoints.length > 0 && (
                   <>
-                    <Text style={styles.aiCardHeading}>Key points</Text>
+                    <Text style={styles.aiCardHeading}>{tr('Key points')}</Text>
                     {summary.keyPoints.map((point, i) => (
                       <Text key={i} style={styles.aiBullet}>• {point}</Text>
                     ))}
@@ -345,7 +347,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
                 )}
                 {summary.actionItems.length > 0 && (
                   <>
-                    <Text style={styles.aiCardHeading}>Action items</Text>
+                    <Text style={styles.aiCardHeading}>{tr('Action items')}</Text>
                     {summary.actionItems.map((item, i) => (
                       <Text key={i} style={styles.aiBullet}>• {item}</Text>
                     ))}
@@ -379,16 +381,16 @@ export default function ViewerScreen({ navigation, route }: Props) {
                     <Text style={styles.privacyText}>
                       {[
                         sanitized.blocked.pixels
-                          ? `${sanitized.blocked.pixels} tracking pixel${sanitized.blocked.pixels === 1 ? '' : 's'} removed`
+                          ? tr(sanitized.blocked.pixels === 1 ? '{count} tracking pixel removed' : '{count} tracking pixels removed', { count: sanitized.blocked.pixels })
                           : null,
                         sanitized.blocked.images
-                          ? `${sanitized.blocked.images} remote image${sanitized.blocked.images === 1 ? '' : 's'} blocked`
+                          ? tr(sanitized.blocked.images === 1 ? '{count} remote image blocked' : '{count} remote images blocked', { count: sanitized.blocked.images })
                           : null,
                       ].filter(Boolean).join(' · ')}
                     </Text>
                     {sanitized.blocked.images > 0 && (
                       <TouchableOpacity onPress={() => setShowRemoteImages(true)} hitSlop={8}>
-                        <Text style={styles.privacyAction}>Show images</Text>
+                        <Text style={styles.privacyAction}>{tr('Show images')}</Text>
                       </TouchableOpacity>
                     )}
                   </View>
@@ -407,14 +409,14 @@ export default function ViewerScreen({ navigation, route }: Props) {
             ) : body?.text ? (
               <Text style={styles.plainBody} selectable>{body.text}</Text>
             ) : (
-              <Text style={styles.error}>No content</Text>
+              <Text style={styles.error}>{tr('No content')}</Text>
             )}
           </>
         )}
 
         {body?.attachments && body.attachments.length > 0 && (
           <View style={styles.attachments}>
-            <Text style={styles.attachTitle}>Attachments ({body.attachments.length})</Text>
+            <Text style={styles.attachTitle}>{tr('Attachments ({count})', { count: body.attachments.length })}</Text>
             {body.attachments.map((a, i) => (
               <TouchableOpacity
                 key={i}
@@ -427,7 +429,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
                   try {
                     await openAttachment(email.accountId, email.id, i, a.filename, email.folder);
                   } catch (err) {
-                    Alert.alert('Could not open attachment', errorMessage(err));
+                    Alert.alert(tr('Could not open attachment'), errorMessage(err));
                   } finally {
                     setOpeningAttachment(null);
                   }
@@ -435,7 +437,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
               >
                 <Text style={styles.attachName} numberOfLines={1}>📎 {a.filename}</Text>
                 <Text style={styles.attachSize}>
-                  {openingAttachment === i ? 'Opening…' : `${Math.round((a.size || 0) / 1024)} KB`}
+                  {openingAttachment === i ? tr('Opening…') : `${Math.round((a.size || 0) / 1024)} KB`}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -447,16 +449,16 @@ export default function ViewerScreen({ navigation, route }: Props) {
             style={styles.replyBtn}
             onPress={() => navigation.navigate('Compose', { account, replyTo: email })}
           >
-            <Text style={styles.replyText}>Reply</Text>
+            <Text style={styles.replyText}>{tr('Reply')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.secondaryBtn} onPress={forward}>
-            <Text style={styles.secondaryText}>Forward</Text>
+            <Text style={styles.secondaryText}>{tr('Forward')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.secondaryBtn} onPress={() => setSnoozeOpen(true)}>
-            <Text style={styles.secondaryText}>Snooze</Text>
+            <Text style={styles.secondaryText}>{tr('Snooze')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.secondaryBtn} onPress={archive}>
-            <Text style={styles.secondaryText}>Archive</Text>
+            <Text style={styles.secondaryText}>{tr('Archive')}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -468,7 +470,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
       */}
       <ActionSheet
         visible={snoozeOpen}
-        title="Snooze until"
+        title={tr('Snooze until')}
         onClose={() => setSnoozeOpen(false)}
         options={snoozeChoices().map((choice) => ({
           label: choice.label,

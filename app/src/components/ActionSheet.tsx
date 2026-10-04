@@ -3,6 +3,7 @@ import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'reac
 import { useTheme } from '../ThemeContext';
 import { radius, space, type Palette } from '../theme';
 import type { Ui } from '../ui';
+import { tr } from '../i18n';
 
 /**
  * A bottom sheet for picking one of several options.
@@ -55,7 +56,7 @@ export function ActionSheet({ visible, title, options, onClose }: Props) {
           ))}
           <View style={styles.divider} />
           <TouchableOpacity style={styles.cancel} onPress={onClose} accessibilityRole="button">
-            <Text style={styles.cancelText}>Cancel</Text>
+            <Text style={styles.cancelText}>{tr('Cancel')}</Text>
           </TouchableOpacity>
         </Pressable>
       </Pressable>

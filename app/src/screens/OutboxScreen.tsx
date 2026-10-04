@@ -7,6 +7,7 @@ import { useTheme } from '../ThemeContext';
 import { space, type Palette } from '../theme';
 import type { Ui } from '../ui';
 import type { OutboxItem, OutboxStatus } from '../types';
+import { useTr, tr as translate } from '../i18n';
 
 // Sends are queued on the server, so a message composed on a flaky connection
 // is retried rather than lost. This screen is where a stuck one surfaces.
@@ -35,6 +36,7 @@ export default function OutboxScreen() {
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
   const colors = useMemo(() => statusColor(t), [t]);
+  const tr = useTr();
 
   const [items, setItems] = useState<OutboxItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,7 +69,7 @@ export default function OutboxScreen() {
       else await api.discardOutbox(item.id);
       await load();
     } catch (err) {
-      Alert.alert('Error', errorMessage(err));
+      Alert.alert(translate('Error'), errorMessage(err));
     }
   };
 
@@ -88,21 +90,21 @@ export default function OutboxScreen() {
         />
       }
       ListEmptyComponent={
-        <Text style={styles.empty}>{error || 'Nothing waiting to send.'}</Text>
+        <Text style={styles.empty}>{error || tr('Nothing waiting to send.')}</Text>
       }
       renderItem={({ item }) => (
         <View style={styles.row}>
           <View style={styles.rowHeader}>
             <Text style={[styles.status, { color: colors[item.status] }]}>
-              {STATUS_LABEL[item.status] ?? item.status}
+              {STATUS_LABEL[item.status] ? tr(STATUS_LABEL[item.status]) : item.status}
             </Text>
-            <Text style={styles.subject} numberOfLines={1}>{item.subject || '(no subject)'}</Text>
+            <Text style={styles.subject} numberOfLines={1}>{item.subject || tr('(no subject)')}</Text>
           </View>
-          <Text style={styles.to} numberOfLines={1}>To {item.to || '—'}</Text>
+          <Text style={styles.to} numberOfLines={1}>{tr('To')} {item.to || '—'}</Text>
 
           {item.status === 'retrying' && (
             <Text style={styles.detail}>
-              Attempt {item.attempts} failed — will try again automatically
+              {tr('Attempt {count} failed — will try again automatically', { count: item.attempts ?? 0 })}
             </Text>
           )}
           {item.status === 'failed' && !!item.error && (
@@ -112,16 +114,16 @@ export default function OutboxScreen() {
           <View style={styles.actions}>
             {item.status === 'failed' && (
               <TouchableOpacity onPress={() => act(item, 'retry')}>
-                <Text style={styles.action}>Retry now</Text>
+                <Text style={styles.action}>{tr('Retry now')}</Text>
               </TouchableOpacity>
             )}
             {(item.status === 'pending' || item.status === 'retrying' || item.status === 'failed') && (
               <TouchableOpacity onPress={() => act(item, 'cancel')}>
-                <Text style={styles.action}>Cancel</Text>
+                <Text style={styles.action}>{tr('Cancel')}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity onPress={() => act(item, 'discard')}>
-              <Text style={[styles.action, styles.danger]}>Discard</Text>
+              <Text style={[styles.action, styles.danger]}>{tr('Discard')}</Text>
             </TouchableOpacity>
           </View>
         </View>

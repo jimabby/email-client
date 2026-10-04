@@ -1,3 +1,5 @@
+import { tr } from './i18n';
+
 export function senderName(from: string): string {
   const m = from.match(/^([^<]+)</);
   if (m) return m[1].trim().replace(/^"|"$/g, '');
@@ -47,15 +49,18 @@ export function relativeTime(dateStr?: string | null): string {
   const ms = new Date(dateStr).getTime() - Date.now();
   if (Number.isNaN(ms)) return '';
   const abs = Math.abs(ms);
-  const units: [number, string][] = [[86400000, 'day'], [3600000, 'hour'], [60000, 'minute']];
+  const units: [number, 'day' | 'hour' | 'minute'][] = [[86400000, 'day'], [3600000, 'hour'], [60000, 'minute']];
   for (const [size, unit] of units) {
     if (abs >= size) {
-      const n = Math.round(abs / size);
-      const label = `${n} ${unit}${n === 1 ? '' : 's'}`;
-      return ms < 0 ? `${label} ago` : `in ${label}`;
+      const count = Math.round(abs / size);
+      const plural = count === 1 ? '' : 's';
+      // Whole phrases, not glued fragments, so a language can reorder them.
+      return ms < 0
+        ? tr(`{count} ${unit}${plural} ago`, { count })
+        : tr(`in {count} ${unit}${plural}`, { count });
     }
   }
-  return ms < 0 ? 'just now' : 'in a moment';
+  return ms < 0 ? tr('just now') : tr('in a moment');
 }
 
 export function stripHtml(html: string): string {

@@ -13,6 +13,7 @@ import { initials, senderName, formatDate } from '../utils';
 import { clearBadge } from '../push';
 import type { EmailSummary } from '../types';
 import type { RootStackParamList } from '../navigation';
+import { useTr } from '../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Inbox'>;
 
@@ -22,6 +23,7 @@ export default function InboxScreen({ navigation, route }: Props) {
   const { account, folder = 'INBOX', unified = false } = route.params;
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const tr = useTr();
 
   const [emails, setEmails] = useState<EmailSummary[]>([]);
   const [nextToken, setNextToken] = useState<string | null>(null);
@@ -134,14 +136,14 @@ export default function InboxScreen({ navigation, route }: Props) {
   useLayoutEffect(() => {
     if (selecting) {
       navigation.setOptions({
-        title: `${selected.size} selected`,
+        title: tr('{count} selected', { count: selected.size }),
         headerRight: () => (
           <View style={styles.headerActions}>
             <TouchableOpacity onPress={() => setSelected(new Set(data.map((e) => e.id)))} hitSlop={8}>
-              <Text style={styles.headerAction}>All</Text>
+              <Text style={styles.headerAction}>{tr('All')}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setSelected(new Set())} hitSlop={8}>
-              <Text style={styles.headerAction}>Cancel</Text>
+              <Text style={styles.headerAction}>{tr('Cancel')}</Text>
             </TouchableOpacity>
           </View>
         ),
@@ -149,22 +151,22 @@ export default function InboxScreen({ navigation, route }: Props) {
       return;
     }
     navigation.setOptions({
-      title: unified ? 'All inboxes' : folder === 'INBOX' ? (account.name || account.email) : folder,
+      title: unified ? tr('All inboxes') : folder === 'INBOX' ? (account.name || account.email) : tr(folder),
       headerRight: () => (
         <View style={styles.headerActions}>
           {!unified && (
             <TouchableOpacity onPress={() => navigation.navigate('Folders', { account })} hitSlop={8}>
-              <Text style={styles.headerAction}>Folders</Text>
+              <Text style={styles.headerAction}>{tr('Folders')}</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity onPress={() => navigation.navigate('Compose', { account })} hitSlop={8}>
-            <Text style={styles.headerAction}>Compose</Text>
+            <Text style={styles.headerAction}>{tr('Compose')}</Text>
           </TouchableOpacity>
         </View>
       ),
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, account, folder, unified, styles, selecting, selected.size, data.length]);
+  }, [navigation, account, folder, unified, styles, selecting, selected.size, data.length, tr]);
 
   const loadMore = async () => {
     if (!nextToken || loadingMore || searchResults) return;
@@ -235,7 +237,7 @@ export default function InboxScreen({ navigation, route }: Props) {
     try {
       const { undoId } = await api.delete(email.accountId, email.id, email.folder);
       if (undoId) {
-        offerUndo('Moved to Trash', async () => {
+        offerUndo(tr('Moved to Trash'), async () => {
           await api.untrash(email.accountId, undoId, email.folder || 'INBOX');
           load();
         });
@@ -294,7 +296,7 @@ export default function InboxScreen({ navigation, route }: Props) {
         }
         failed += result.failed;
       }
-      if (failed) setError(`${failed} message${failed === 1 ? '' : 's'} could not be updated`);
+      if (failed) setError(tr(failed === 1 ? '{count} message could not be updated' : '{count} messages could not be updated', { count: failed }));
     } catch (err) {
       setError(errorMessage(err));
       load();
@@ -330,7 +332,7 @@ export default function InboxScreen({ navigation, route }: Props) {
         ]}
       >
         <Text style={styles.swipeGlyph}>{isArchive ? '🗄' : '🗑'}</Text>
-        <Text style={styles.swipeLabel}>{isArchive ? 'Archive' : 'Delete'}</Text>
+        <Text style={styles.swipeLabel}>{isArchive ? tr('Archive') : tr('Delete')}</Text>
       </Animated.View>
     );
   };
@@ -343,7 +345,7 @@ export default function InboxScreen({ navigation, route }: Props) {
           value={query}
           onChangeText={setQuery}
           onSubmitEditing={runSearch}
-          placeholder={unified ? 'Search all mail…' : 'Search mail…'}
+          placeholder={unified ? tr('Search all mail…') : tr('Search emails…')}
           placeholderTextColor={t.textFaint}
           autoCapitalize="none"
           returnKeyType="search"
@@ -364,7 +366,7 @@ export default function InboxScreen({ navigation, route }: Props) {
         <View style={styles.center}>
           <Text style={styles.errorMsg}>{error}</Text>
           <TouchableOpacity style={styles.retry} onPress={load}>
-            <Text style={styles.retryText}>Retry</Text>
+            <Text style={styles.retryText}>{tr('Retry')}</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -386,12 +388,12 @@ export default function InboxScreen({ navigation, route }: Props) {
                 <Text style={styles.emptyGlyph}>{searchResults ? '⌕' : '✉'}</Text>
               </View>
               <Text style={styles.emptyTitle}>
-                {searchResults ? 'No results' : folder === 'INBOX' ? 'Inbox zero' : `Nothing in ${folder}`}
+                {searchResults ? tr('No results found') : folder === 'INBOX' ? tr('Inbox zero') : tr('Nothing in {folder}', { folder: tr(folder) })}
               </Text>
               <Text style={styles.emptyBody}>
                 {searchResults
-                  ? 'Try a different term, or pull down to refresh.'
-                  : 'New mail will appear here as it arrives.'}
+                  ? tr('Try a different term, or pull down to refresh.')
+                  : tr('New emails will appear here when they arrive')}
               </Text>
             </View>
           }
@@ -419,10 +421,10 @@ export default function InboxScreen({ navigation, route }: Props) {
                 onLongPress={() => toggleSelected(item.id)}
                 accessibilityRole="button"
                 accessibilityState={{ selected: selected.has(item.id) }}
-                accessibilityLabel={`${item.read ? '' : 'Unread. '}${senderName(item.from)}. ${item.subject || 'No subject'}`}
+                accessibilityLabel={`${item.read ? '' : `${tr('Unread')}. `}${senderName(item.from)}. ${item.subject || tr('(no subject)')}`}
                 accessibilityHint={selecting
-                  ? 'Tap to select or deselect.'
-                  : 'Swipe right to archive, left to delete. Long press to select several.'}
+                  ? tr('Tap to select or deselect.')
+                  : tr('Swipe right to archive, left to delete. Long press to select several.')}
               >
                 {/* Unread reads as a bar on the leading edge, matching the
                     desktop list — a trailing dot competed with the timestamp. */}
@@ -442,12 +444,12 @@ export default function InboxScreen({ navigation, route }: Props) {
                       {senderName(item.from)}
                     </Text>
                     {item.hasAttachments && (
-                      <Text style={styles.clip} accessibilityLabel="Has attachments">📎</Text>
+                      <Text style={styles.clip} accessibilityLabel={tr('Has attachments')}>📎</Text>
                     )}
                     <Text style={[styles.date, !item.read && styles.dateUnread]}>{formatDate(item.date)}</Text>
                   </View>
                   <Text style={[styles.subject, !item.read && styles.subjectUnread]} numberOfLines={1}>
-                    {item.subject || '(no subject)'}
+                    {item.subject || tr('(no subject)')}
                   </Text>
                   {!!item.snippet && (
                     <Text style={styles.snippet} numberOfLines={1}>{item.snippet}</Text>
@@ -462,10 +464,10 @@ export default function InboxScreen({ navigation, route }: Props) {
       {selecting && (
         <View style={styles.bulkBar}>
           {([
-            ['archive', 'Archive'],
-            ['delete', 'Delete'],
-            ['read', 'Read'],
-            ['unread', 'Unread'],
+            ['archive', tr('Archive')],
+            ['delete', tr('Delete')],
+            ['read', tr('Read')],
+            ['unread', tr('Unread')],
           ] as const).map(([action, label]) => (
             <TouchableOpacity
               key={action}
@@ -491,7 +493,7 @@ export default function InboxScreen({ navigation, route }: Props) {
             }}
             hitSlop={8}
           >
-            <Text style={styles.undoAction}>Undo</Text>
+            <Text style={styles.undoAction}>{tr('Undo')}</Text>
           </TouchableOpacity>
         </View>
       )}

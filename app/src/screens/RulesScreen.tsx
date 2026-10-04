@@ -9,6 +9,7 @@ import { radius, space, type Palette } from '../theme';
 import type { Ui } from '../ui';
 import type { MailRule, RuleActionType, RuleField } from '../types';
 import type { RootStackParamList } from '../navigation';
+import { useTr, tr } from '../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Rules'>;
 
@@ -27,19 +28,28 @@ const ACTIONS: { value: RuleActionType; label: string }[] = [
   { value: 'delete', label: 'Delete' },
 ];
 
+// The same wording the desktop rules editor uses, so both translate alike.
+const FIELD_LABEL: Record<string, string> = {
+  from: 'From', fromAddress: 'Sender address', to: 'To', subject: 'Subject',
+  snippet: 'Preview text', hasAttachment: 'Has attachment',
+};
+const OP_LABEL: Record<string, string> = {
+  contains: 'contains', notContains: 'does not contain', equals: 'is exactly',
+  startsWith: 'starts with', endsWith: 'ends with', matches: 'matches regex', isTrue: 'is true',
+};
 const ACTION_LABEL: Record<string, string> = {
-  move: 'move', archive: 'archive', markRead: 'mark read', markUnread: 'mark unread',
-  star: 'star', spam: 'report spam', delete: 'delete',
+  move: 'Move to folder', archive: 'Archive', markRead: 'Mark as read', markUnread: 'Mark as unread',
+  star: 'Star', spam: 'Report as spam', delete: 'Delete',
 };
 
-/** One line describing a rule, e.g. "Subject contains "invoice" → archive". */
+/** One line describing a rule, e.g. "Subject contains "invoice" → Archive". */
 function describe(rule: MailRule): string {
-  const join = rule.match === 'any' ? ' or ' : ' and ';
+  const join = rule.match === 'any' ? ` ${tr('or')} ` : ` ${tr('and')} `;
   const conditions = rule.conditions
-    .map(c => `${c.field} ${c.op}${c.op === 'isTrue' ? '' : ` "${c.value}"`}`)
+    .map(c => `${tr(FIELD_LABEL[c.field] || c.field)} ${tr(OP_LABEL[c.op] || c.op)}${c.op === 'isTrue' ? '' : ` "${c.value}"`}`)
     .join(join);
-  const actions = rule.actions.map(a => ACTION_LABEL[a.type] || a.type).join(', ');
-  return `${conditions || 'no conditions'} → ${actions}`;
+  const actions = rule.actions.map(a => tr(ACTION_LABEL[a.type] || a.type)).join(', ');
+  return `${conditions || tr('no conditions')} → ${actions}`;
 }
 
 /**
@@ -51,6 +61,7 @@ function describe(rule: MailRule): string {
 export default function RulesScreen(_props: Props) {
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const tr = useTr();
 
   const [rules, setRules] = useState<MailRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,17 +101,17 @@ export default function RulesScreen(_props: Props) {
     persist(rules.map(r => (r.id === rule.id ? { ...r, enabled } : r)));
 
   const remove = (rule: MailRule) => {
-    Alert.alert('Delete rule?', rule.name, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => persist(rules.filter(r => r.id !== rule.id)) },
+    Alert.alert(tr('Delete rule?'), rule.name, [
+      { text: tr('Cancel'), style: 'cancel' },
+      { text: tr('Delete'), style: 'destructive', onPress: () => persist(rules.filter(r => r.id !== rule.id)) },
     ]);
   };
 
   const add = () => {
     const trimmed = value.trim();
     if (!trimmed) return;
-    const fieldLabel = FIELDS.find(f => f.value === field)?.label || field;
-    const actionLabel = ACTIONS.find(a => a.value === action)?.label || action;
+    const fieldLabel = tr(FIELDS.find(f => f.value === field)?.label || field);
+    const actionLabel = tr(ACTIONS.find(a => a.value === action)?.label || action);
     const rule: MailRule = {
       // The server assigns a real id to anything it has not seen.
       id: '',
@@ -112,9 +123,11 @@ export default function RulesScreen(_props: Props) {
     };
     const confirm = () => { persist([...rules, rule]); setValue(''); };
     if (action === 'delete' || action === 'spam') {
-      Alert.alert('Create this rule?', `Every new message where ${fieldLabel.toLowerCase()} "${trimmed}" will be ${action === 'delete' ? 'deleted' : 'reported as spam'}.`, [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Create', style: 'destructive', onPress: confirm },
+      Alert.alert(tr('Create this rule?'), tr(action === 'delete'
+        ? 'Every new message matching “{condition} {value}” will be deleted.'
+        : 'Every new message matching “{condition} {value}” will be reported as spam.', { condition: fieldLabel, value: trimmed }), [
+        { text: tr('Cancel'), style: 'cancel' },
+        { text: tr('Create'), style: 'destructive', onPress: confirm },
       ]);
     } else {
       confirm();
@@ -127,11 +140,11 @@ export default function RulesScreen(_props: Props) {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: space.lg }} keyboardShouldPersistTaps="handled">
-      <Text style={styles.heading}>New rule</Text>
+      <Text style={styles.heading}>{tr('New rule')}</Text>
       <View style={styles.chips}>
         {FIELDS.map(f => (
           <TouchableOpacity key={f.value} style={[styles.chip, field === f.value && styles.chipActive]} onPress={() => setField(f.value)}>
-            <Text style={[styles.chipText, field === f.value && styles.chipTextActive]}>{f.label}</Text>
+            <Text style={[styles.chipText, field === f.value && styles.chipTextActive]}>{tr(f.label)}</Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -140,26 +153,26 @@ export default function RulesScreen(_props: Props) {
         onChangeText={setValue}
         autoCapitalize="none"
         autoCorrect={false}
-        placeholder={field === 'fromAddress' ? 'news@shop.com' : 'text to match'}
+        placeholder={field === 'fromAddress' ? 'news@shop.com' : tr('text to match')}
         placeholderTextColor={t.textFaint}
         style={styles.input}
       />
-      <Text style={styles.then}>then</Text>
+      <Text style={styles.then}>{tr('then')}</Text>
       <View style={styles.chips}>
         {ACTIONS.map(a => (
           <TouchableOpacity key={a.value} style={[styles.chip, action === a.value && styles.chipActive]} onPress={() => setAction(a.value)}>
-            <Text style={[styles.chipText, action === a.value && styles.chipTextActive]}>{a.label}</Text>
+            <Text style={[styles.chipText, action === a.value && styles.chipTextActive]}>{tr(a.label)}</Text>
           </TouchableOpacity>
         ))}
       </View>
       <TouchableOpacity style={[styles.primary, !value.trim() && { opacity: 0.5 }]} onPress={add} disabled={!value.trim() || saving}>
-        {saving ? <ActivityIndicator color={t.accentText} /> : <Text style={styles.primaryText}>Add rule</Text>}
+        {saving ? <ActivityIndicator color={t.accentText} /> : <Text style={styles.primaryText}>{tr('Add rule')}</Text>}
       </TouchableOpacity>
 
       {error && <Text style={styles.error}>{error}</Text>}
 
-      <Text style={[styles.heading, { marginTop: space.xl }]}>Your rules</Text>
-      {!rules.length && <Text style={styles.help}>No rules yet. They run on the server as mail arrives.</Text>}
+      <Text style={[styles.heading, { marginTop: space.xl }]}>{tr('Your rules')}</Text>
+      {!rules.length && <Text style={styles.help}>{tr('No rules yet. They run on the server as mail arrives.')}</Text>}
       <View style={rules.length ? styles.card : undefined}>
         {rules.map((rule, index) => (
           <View key={rule.id}>
@@ -169,7 +182,7 @@ export default function RulesScreen(_props: Props) {
                 <Text style={styles.ruleName} numberOfLines={1}>{rule.name}</Text>
                 <Text style={styles.ruleDetail} numberOfLines={2}>{describe(rule)}</Text>
                 <TouchableOpacity onPress={() => remove(rule)} hitSlop={8}>
-                  <Text style={styles.delete}>Delete</Text>
+                  <Text style={styles.delete}>{tr('Delete')}</Text>
                 </TouchableOpacity>
               </View>
               <Switch

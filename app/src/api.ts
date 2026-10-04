@@ -3,7 +3,7 @@ import { Linking } from 'react-native';
 import { useAppStore } from './store';
 import type {
   Account, EmailSummary, EmailBody, Folder, OutboxItem, UnreadCounts, UnifiedPage,
-  ThreadSummary, MailRule, Followup, MutedThread, AiMode,
+  ThreadSummary, MailRule, Followup, MutedThread, AiMode, ScreenerState,
 } from './types';
 
 // The base URL and private token are configured on the Settings screen. In
@@ -164,6 +164,15 @@ export const api = {
   remindAgain: (id: string, days: number) =>
     client().post<Followup>(`/emails/followups/${id}/remind`, { days }).then((r) => r.data),
   dismissFollowup: (id: string) => client().delete(`/emails/followups/${id}`).then((r) => r.data),
+
+  // ─── Sender screener ──────────────────────────────────────────────────────
+  // Listing reads a folder per account, so it gets more time than the default.
+  screener: () => client().get<ScreenerState>('/emails/screener', { timeout: 45000 }).then((r) => r.data),
+  configureScreener: (settings: { enabled?: boolean; folder?: string }) =>
+    client().put<ScreenerState>('/emails/screener', settings).then((r) => r.data),
+  /** `sender` is an address or "@domain". */
+  decideSender: (sender: string, decision: 'allow' | 'block') =>
+    client().post<{ success: boolean; moved: number; failed: number }>('/emails/screener/decide', { sender, decision }, { timeout: 60000 }).then((r) => r.data),
 
   // ─── Muted conversations ──────────────────────────────────────────────────
   muted: () => client().get<MutedThread[]>('/emails/muted').then((r) => r.data),

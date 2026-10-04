@@ -10,6 +10,7 @@ import { radius, space, type Palette } from '../theme';
 import type { Ui } from '../ui';
 import { initials } from '../utils';
 import { clearBadge } from '../push';
+import { useTr } from '../i18n';
 import type { Account, UnreadCounts } from '../types';
 import type { RootStackParamList } from '../navigation';
 
@@ -24,8 +25,10 @@ export default function AccountsScreen({ navigation }: Props) {
   const { serverUrl } = useAppStore();
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const tr = useTr();
 
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [screenerPending, setScreenerPending] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +40,8 @@ export default function AccountsScreen({ navigation }: Props) {
       setAccounts(await api.listAccounts());
       // Real inbox totals from the provider, not a count of a fetched page.
       api.unreadCounts(['INBOX']).then(setUnread).catch(() => {});
+      // How many first-time senders are waiting, for the Screener button.
+      api.screener().then(s => setScreenerPending(s.enabled ? s.pending.length : 0)).catch(() => {});
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -73,10 +78,10 @@ export default function AccountsScreen({ navigation }: Props) {
   if (error) {
     return (
       <View style={styles.center}>
-        <Text style={styles.errorTitle}>Can't reach the backend</Text>
+        <Text style={styles.errorTitle}>{tr("Can't reach the backend")}</Text>
         <Text style={styles.errorMsg}>{error}</Text>
         <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Settings')}>
-          <Text style={styles.btnText}>Open settings</Text>
+          <Text style={styles.btnText}>{tr('Open settings')}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -102,12 +107,12 @@ export default function AccountsScreen({ navigation }: Props) {
             style={styles.unifiedRow}
             onPress={() => navigation.navigate('Inbox', { account: accounts[0], unified: true })}
             accessibilityRole="button"
-            accessibilityLabel={`All inboxes${totalUnread ? `, ${totalUnread} unread` : ''}`}
+            accessibilityLabel={`${tr('All inboxes')}${totalUnread ? `, ${tr('{count} unread', { count: totalUnread })}` : ''}`}
           >
             <View style={styles.unifiedIcon}>
               <Text style={styles.unifiedGlyph}>≡</Text>
             </View>
-            <Text style={styles.unifiedLabel}>All inboxes</Text>
+            <Text style={styles.unifiedLabel}>{tr('All inboxes')}</Text>
             {totalUnread > 0 && (
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{totalUnread > 99 ? '99+' : totalUnread}</Text>
@@ -119,23 +124,31 @@ export default function AccountsScreen({ navigation }: Props) {
       }
       ListEmptyComponent={
         <View style={styles.center}>
-          <Text style={styles.errorTitle}>No accounts yet</Text>
+          <Text style={styles.errorTitle}>{tr('No accounts yet')}</Text>
           <Text style={styles.errorMsg}>
-            Add one below, or in the desktop app — either way it shows up everywhere.
+            {tr('Add one below, or in the desktop app — either way it shows up everywhere.')}
           </Text>
         </View>
       }
       ListFooterComponent={
         <View style={styles.footer}>
           <TouchableOpacity style={styles.footerBtn} onPress={() => navigation.navigate('AddAccount')}>
-            <Text style={styles.footerBtnText}>+ Add account</Text>
+            <Text style={styles.footerBtnText}>+ {tr('Add account')}</Text>
           </TouchableOpacity>
           <View style={styles.footerRow}>
             <TouchableOpacity style={[styles.footerBtn, { flex: 1 }]} onPress={() => navigation.navigate('Followups')}>
-              <Text style={styles.footerBtnText}>Follow-ups</Text>
+              <Text style={styles.footerBtnText}>{tr('Follow-ups')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.footerBtn, { flex: 1 }]} onPress={() => navigation.navigate('Rules')}>
-              <Text style={styles.footerBtnText}>Rules</Text>
+              <Text style={styles.footerBtnText}>{tr('Rules')}</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={[styles.footerBtn, styles.footerBtnRow, { flex: 1 }]} onPress={() => navigation.navigate('Screener')}>
+              <Text style={styles.footerBtnText}>{tr('Screener')}</Text>
+              {screenerPending > 0 && (
+                <View style={styles.badge}><Text style={styles.badgeText}>{screenerPending}</Text></View>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -145,7 +158,7 @@ export default function AccountsScreen({ navigation }: Props) {
           style={styles.row}
           onPress={() => navigation.navigate('Inbox', { account: item })}
           onLongPress={() => navigation.navigate('Folders', { account: item })}
-          accessibilityHint="Long press to browse this account's folders"
+          accessibilityHint={tr("Long press to browse this account's folders")}
         >
           <View style={[styles.avatar, { backgroundColor: TYPE_COLOR[item.type] || t.accent }]}>
             <Text style={styles.avatarText}>{initials(item.name || item.email)}</Text>
@@ -160,7 +173,7 @@ export default function AccountsScreen({ navigation }: Props) {
                 accessibilityRole="button"
               >
                 <Text style={styles.authError} numberOfLines={2}>
-                  {item.type === 'imap' ? 'Password no longer accepted' : 'Sign-in expired'} — tap to reconnect
+                  {item.type === 'imap' ? tr('Password no longer accepted') : tr('Sign-in expired')} — {tr('tap to reconnect')}
                 </Text>
               </TouchableOpacity>
             )}
@@ -175,9 +188,9 @@ export default function AccountsScreen({ navigation }: Props) {
           <TouchableOpacity
             onPress={() => navigation.navigate('Folders', { account: item })}
             hitSlop={10}
-            accessibilityLabel={`Folders for ${item.email}`}
+            accessibilityLabel={tr('Folders for {email}', { email: item.email })}
           >
-            <Text style={styles.folders}>Folders</Text>
+            <Text style={styles.folders}>{tr('Folders')}</Text>
           </TouchableOpacity>
         </TouchableOpacity>
       )}
@@ -234,5 +247,6 @@ function makeStyles(t: Palette, ui: Ui) {
     footerRow: { flexDirection: 'row', gap: space.sm },
     footerBtn: ui.btnSecondary,
     footerBtnText: ui.btnSecondaryText,
+    footerBtnRow: { flexDirection: 'row', gap: space.sm },
   });
 }

@@ -9,6 +9,7 @@ import { radius, space, type Palette } from '../theme';
 import type { Ui } from '../ui';
 import type { Folder, UnreadCounts } from '../types';
 import type { RootStackParamList } from '../navigation';
+import { useTr } from '../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Folders'>;
 
@@ -42,6 +43,7 @@ export default function FoldersScreen({ navigation, route }: Props) {
   const { account } = route.params;
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const tr = useTr();
 
   const [folders, setFolders] = useState<Folder[]>([]);
   const [counts, setCounts] = useState<UnreadCounts>({});
@@ -85,7 +87,7 @@ export default function FoldersScreen({ navigation, route }: Props) {
       <View style={styles.center}>
         <Text style={styles.errorMsg}>{error}</Text>
         <TouchableOpacity style={styles.retry} onPress={load}>
-          <Text style={styles.retryText}>Retry</Text>
+          <Text style={styles.retryText}>{tr('Retry')}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -120,10 +122,10 @@ export default function FoldersScreen({ navigation, route }: Props) {
             activeOpacity={0.7}
             onPress={() => navigation.navigate('Inbox', { account, folder: item.path })}
             accessibilityRole="button"
-            accessibilityLabel={`${item.name}${unread ? `, ${unread} unread` : ''}`}
+            accessibilityLabel={`${tr(item.name)}${unread ? `, ${tr('{count} unread', { count: unread })}` : ''}`}
           >
             <Text style={styles.glyph}>{glyphFor(item)}</Text>
-            <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+            <Text style={styles.name} numberOfLines={1}>{tr(item.name)}</Text>
             {unread > 0 && (
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{unread > 99 ? '99+' : unread}</Text>

@@ -8,6 +8,7 @@ import { useTheme } from '../ThemeContext';
 import { radius, space, type Palette } from '../theme';
 import type { Ui } from '../ui';
 import type { RootStackParamList } from '../navigation';
+import { useTr } from '../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddAccount'>;
 
@@ -30,6 +31,7 @@ export default function AddAccountScreen({ navigation, route }: Props) {
   const reconnect = route.params?.reconnect;
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
+  const tr = useTr();
 
   const [preset, setPreset] = useState(0);
   const [email, setEmail] = useState(reconnect?.email || '');
@@ -91,17 +93,16 @@ export default function AddAccountScreen({ navigation, route }: Props) {
     const provider = reconnect.type;
     return (
       <ScrollView style={styles.container} contentContainerStyle={{ padding: space.xl }}>
-        <Text style={styles.heading}>Sign in to {reconnect.email} again</Text>
+        <Text style={styles.heading}>{tr('Sign in to {email} again', { email: reconnect.email })}</Text>
         <Text style={styles.help}>
-          {provider === 'gmail' ? 'Google' : 'Microsoft'} stopped accepting Hermes' access to this mailbox.
-          Signing in again restores it; nothing else changes.
+          {tr("{provider} stopped accepting Hermes' access to this mailbox. Signing in again restores it; nothing else changes.", { provider: provider === 'gmail' ? 'Google' : 'Microsoft' })}
         </Text>
         <TouchableOpacity style={styles.primary} onPress={() => signIn(provider)}>
-          <Text style={styles.primaryText}>Sign in with {provider === 'gmail' ? 'Google' : 'Microsoft'}</Text>
+          <Text style={styles.primaryText}>{provider === 'gmail' ? tr('Sign in with Google') : tr('Sign in with Microsoft')}</Text>
         </TouchableOpacity>
         {oauthStarted && (
           <TouchableOpacity style={[styles.secondary, { marginTop: space.md }]} onPress={() => navigation.goBack()}>
-            <Text style={styles.secondaryText}>I've signed in — back to accounts</Text>
+            <Text style={styles.secondaryText}>{tr("I've signed in — back to accounts")}</Text>
           </TouchableOpacity>
         )}
         {error && <Text style={styles.error}>{error}</Text>}
@@ -117,7 +118,7 @@ export default function AddAccountScreen({ navigation, route }: Props) {
     <ScrollView style={styles.container} contentContainerStyle={{ padding: space.xl }} keyboardShouldPersistTaps="handled">
       {!reconnect && (
         <>
-          <Text style={styles.heading}>Sign in with your provider</Text>
+          <Text style={styles.heading}>{tr('Sign in with your provider')}</Text>
           <View style={styles.row}>
             <TouchableOpacity style={[styles.secondary, { flex: 1 }]} onPress={() => signIn('gmail')}>
               <Text style={styles.secondaryText}>Google</Text>
@@ -128,11 +129,11 @@ export default function AddAccountScreen({ navigation, route }: Props) {
           </View>
           <Text style={styles.help}>
             {oauthStarted
-              ? 'Finish signing in in the browser, then come back — the account will appear in the list.'
-              : 'Opens the sign-in page in your browser. The server must have Google or Microsoft sign-in configured.'}
+              ? tr('Finish signing in in the browser, then come back — the account will appear in the list.')
+              : tr('Opens the sign-in page in your browser. The server must have Google or Microsoft sign-in configured.')}
           </Text>
 
-          <Text style={[styles.heading, { marginTop: space.xl }]}>Or connect by IMAP</Text>
+          <Text style={[styles.heading, { marginTop: space.xl }]}>{tr('Or connect by IMAP')}</Text>
           <View style={styles.chips}>
             {PRESETS.map((p, i) => (
               <TouchableOpacity
@@ -141,57 +142,57 @@ export default function AddAccountScreen({ navigation, route }: Props) {
                 onPress={() => choosePreset(i)}
                 accessibilityState={{ selected: preset === i }}
               >
-                <Text style={[styles.chipText, preset === i && styles.chipTextActive]}>{p.label}</Text>
+                <Text style={[styles.chipText, preset === i && styles.chipTextActive]}>{tr(p.label)}</Text>
               </TouchableOpacity>
             ))}
           </View>
 
-          <Text style={styles.label}>Email address</Text>
+          <Text style={styles.label}>{tr('Email address')}</Text>
           <TextInput value={email} onChangeText={setEmail} autoCapitalize="none" autoCorrect={false}
             keyboardType="email-address" style={styles.input} placeholder="you@example.com" placeholderTextColor={t.textFaint} />
-          <Text style={styles.label}>Display name (optional)</Text>
+          <Text style={styles.label}>{tr('Display name (optional)')}</Text>
           <TextInput value={name} onChangeText={setName} style={styles.input} placeholderTextColor={t.textFaint} />
         </>
       )}
 
       {reconnect && (
         <>
-          <Text style={styles.heading}>New password for {reconnect.email}</Text>
+          <Text style={styles.heading}>{tr('New password for {email}', { email: reconnect.email })}</Text>
           <Text style={styles.help}>
-            The server stopped accepting the saved password. It is checked before it replaces the old one.
+            {tr('The server stopped accepting the saved password. It is checked before it replaces the old one.')}
           </Text>
         </>
       )}
 
-      <Text style={styles.label}>{preset === 0 && !reconnect ? 'App password' : 'Password'}</Text>
+      <Text style={styles.label}>{preset === 0 && !reconnect ? tr('App password') : tr('Password')}</Text>
       <TextInput value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none"
         autoCorrect={false} style={styles.input} placeholderTextColor={t.textFaint} />
 
       {!reconnect && (
         <>
-          <Text style={styles.label}>Incoming (IMAP) server</Text>
+          <Text style={styles.label}>{tr('Incoming mail (IMAP)')}</Text>
           <View style={styles.row}>
             <TextInput value={imapHost} onChangeText={setImapHost} autoCapitalize="none" autoCorrect={false}
               style={[styles.input, { flex: 3 }]} placeholder="imap.example.com" placeholderTextColor={t.textFaint} />
             <TextInput value={imapPort} onChangeText={setImapPort} keyboardType="number-pad"
-              style={[styles.input, { flex: 1 }]} accessibilityLabel="IMAP port" />
+              style={[styles.input, { flex: 1 }]} accessibilityLabel={tr('Port')} />
           </View>
-          <Text style={styles.label}>Outgoing (SMTP) server</Text>
+          <Text style={styles.label}>{tr('Outgoing mail (SMTP)')}</Text>
           <View style={styles.row}>
             <TextInput value={smtpHost} onChangeText={setSmtpHost} autoCapitalize="none" autoCorrect={false}
               style={[styles.input, { flex: 3 }]} placeholder="smtp.example.com" placeholderTextColor={t.textFaint} />
             <TextInput value={smtpPort} onChangeText={setSmtpPort} keyboardType="number-pad"
-              style={[styles.input, { flex: 1 }]} accessibilityLabel="SMTP port" />
+              style={[styles.input, { flex: 1 }]} accessibilityLabel={tr('Port')} />
           </View>
         </>
       )}
 
       <TouchableOpacity style={[styles.primary, { marginTop: space.xl }, !canSubmit && { opacity: 0.5 }]} onPress={submit} disabled={!canSubmit || busy}>
         {busy ? <ActivityIndicator color={t.accentText} /> : (
-          <Text style={styles.primaryText}>{reconnect ? 'Reconnect' : 'Add account'}</Text>
+          <Text style={styles.primaryText}>{reconnect ? tr('Reconnect') : tr('Add account')}</Text>
         )}
       </TouchableOpacity>
-      {busy && <Text style={styles.help}>Testing the connection…</Text>}
+      {busy && <Text style={styles.help}>{tr('Testing connection…')}</Text>}
       {error && <Text style={styles.error}>{error}</Text>}
     </ScrollView>
   );

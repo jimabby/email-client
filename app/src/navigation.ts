@@ -20,4 +20,5 @@ export type RootStackParamList = {
   AddAccount: { reconnect?: Account } | undefined;
   Rules: undefined;
   Followups: undefined;
+  Screener: undefined;
 };
