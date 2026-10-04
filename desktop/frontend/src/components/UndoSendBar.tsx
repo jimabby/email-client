@@ -48,7 +48,24 @@ export function UndoSendBar() {
     try {
       await emailsApi.cancelQueuedSend(pendingSend.accountId, pendingSend.jobId)
       clearPendingSend()
-      showNotification('success', t('Send cancelled — the message is back in your drafts.'))
+      // "Send & archive" also filed the original away; undoing the send has to
+      // undo that too, or the message being replied to silently disappears.
+      const archived = pendingSend.archived ? await pendingSend.archived : null
+      if (!archived) {
+        showNotification('success', t('Send cancelled — the message is back in your drafts.'))
+        return
+      }
+      if (!archived.undoId) {
+        showNotification('success', t('Send cancelled. The original stays in {folder} — this server cannot move it back automatically.', { folder: archived.archiveFolder }))
+        return
+      }
+      try {
+        await emailsApi.move(archived.accountId, archived.undoId, archived.originFolder, archived.archiveFolder)
+        window.dispatchEvent(new CustomEvent('hermes:refresh-list'))
+        showNotification('success', t('Send cancelled — the original is back in your inbox.'))
+      } catch {
+        showNotification('error', t('Send cancelled, but the original could not be moved back from {folder}.', { folder: archived.archiveFolder }))
+      }
     } catch (err: unknown) {
       setCancelling(false)
       showNotification('error', err instanceof Error ? err.message : t('Too late to cancel — the message has gone.'))
@@ -84,8 +101,8 @@ export function UndoSendBar() {
 
       <button
         onClick={() => { clearPendingSend(); setShowOutboxModal(true) }}
-        title="Show in outbox"
-        aria-label="Show in outbox"
+        title={t('Show in outbox')}
+        aria-label={t('Show in outbox')}
         className="btn-ghost w-8 h-8 flex items-center justify-center flex-shrink-0"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none">

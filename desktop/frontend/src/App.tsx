@@ -300,23 +300,43 @@ function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
 }
 
 // ─── Keyboard Shortcuts ──────────────────────────────────────────────────────
+
+/**
+ * The key a shortcut should act on.
+ *
+ * With a Chinese (or Japanese, Korean…) input method switched on, the browser
+ * reports letter keys as `key: "Process"` (keyCode 229) because the IME owns
+ * them — so every single-letter shortcut silently did nothing for anyone with
+ * Pinyin active. The physical key is still in `code`, so fall back to that.
+ */
+export function shortcutKey(e: KeyboardEvent): string {
+  if (e.key !== 'Process' && e.keyCode !== 229) return e.key
+  const letter = /^Key([A-Z])$/.exec(e.code)
+  if (letter) return e.shiftKey ? letter[1] : letter[1].toLowerCase()
+  if (e.code === 'Slash') return e.shiftKey ? '?' : '/'
+  if (e.code === 'Escape') return 'Escape'
+  if (e.code === 'Delete') return 'Delete'
+  return e.key
+}
+
 function useKeyboardShortcuts() {
   const { openCompose, selectedEmail, isComposeOpen, showAccountModal, isChatOpen } = useEmailStore()
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const key = shortcutKey(e)
       const target = e.target as HTMLElement
       const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
 
       // Global shortcuts (work even in inputs)
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key.toLowerCase() === 'k') {
         e.preventDefault()
         const state = useEmailStore.getState()
         state.setShowCommandPalette(!state.showCommandPalette)
         return
       }
 
-      if (e.key === 'Escape') {
+      if (key === 'Escape') {
         // The palette closes itself; it owns Escape while it is open.
         if (useEmailStore.getState().showCommandPalette) return
         // The shortcuts sheet is the topmost surface when it is open, so it
@@ -336,7 +356,7 @@ function useKeyboardShortcuts() {
       if (isInput) return
 
       // Ctrl/Cmd+N — Compose
-      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+      if ((e.ctrlKey || e.metaKey) && key === 'n') {
         e.preventDefault()
         openCompose()
         return
@@ -348,56 +368,56 @@ function useKeyboardShortcuts() {
       const plain = !e.ctrlKey && !e.metaKey && !e.altKey
 
       // / — Focus search
-      if (e.key === '/') {
+      if (key === '/') {
         e.preventDefault()
         clickAction('search')
         return
       }
 
       // j / k — next / previous message, in the order the list shows them.
-      if ((e.key === 'j' || e.key === 'k') && plain) {
+      if ((key === 'j' || key === 'k') && plain) {
         e.preventDefault()
-        window.dispatchEvent(new CustomEvent('hermes:navigate', { detail: { delta: e.key === 'j' ? 1 : -1 } }))
+        window.dispatchEvent(new CustomEvent('hermes:navigate', { detail: { delta: key === 'j' ? 1 : -1 } }))
         return
       }
 
       // x — tick the current message for a bulk action
-      if (e.key === 'x' && selectedEmail && plain) {
+      if (key === 'x' && selectedEmail && plain) {
         e.preventDefault()
         useEmailStore.getState().toggleEmailSelection(selectedEmail.id)
         return
       }
 
       // r — Reply (when email selected)
-      if (e.key === 'r' && selectedEmail && plain) {
+      if (key === 'r' && selectedEmail && plain) {
         e.preventDefault()
         clickAction('reply')
         return
       }
 
       // a — Reply all
-      if (e.key === 'a' && selectedEmail && plain) {
+      if (key === 'a' && selectedEmail && plain) {
         e.preventDefault()
         clickAction('reply-all')
         return
       }
 
       // f — Forward
-      if (e.key === 'f' && selectedEmail && plain) {
+      if (key === 'f' && selectedEmail && plain) {
         e.preventDefault()
         clickAction('forward')
         return
       }
 
       // d or Delete — Delete
-      if ((e.key === 'd' || e.key === 'Delete') && selectedEmail && plain) {
+      if ((key === 'd' || key === 'Delete') && selectedEmail && plain) {
         e.preventDefault()
         clickAction('delete')
         return
       }
 
       // u — Mark unread
-      if (e.key === 'u' && selectedEmail && plain) {
+      if (key === 'u' && selectedEmail && plain) {
         e.preventDefault()
         const { accountId, id, folder } = selectedEmail
         emailsApi.markUnread(accountId, id, folder).then(() => {
@@ -409,7 +429,7 @@ function useKeyboardShortcuts() {
       }
 
       // s — Star/unstar
-      if (e.key === 's' && selectedEmail && plain) {
+      if (key === 's' && selectedEmail && plain) {
         e.preventDefault()
         useEmailStore.getState().toggleStarLocal(selectedEmail.id)
         emailsApi.star(selectedEmail.accountId, selectedEmail.id, !selectedEmail.starred, selectedEmail.folder).catch(() => {
@@ -419,7 +439,7 @@ function useKeyboardShortcuts() {
       }
 
       // e — Archive (move to the account's resolved archive folder)
-      if (e.key === 'e' && selectedEmail && plain) {
+      if (key === 'e' && selectedEmail && plain) {
         e.preventDefault()
         // The reader's own Archive button carries the Undo.
         clickAction('archive')
@@ -427,7 +447,7 @@ function useKeyboardShortcuts() {
       }
 
       // ? — Show keyboard shortcuts
-      if (e.key === '?') {
+      if (key === '?') {
         e.preventDefault()
         window.dispatchEvent(new CustomEvent('hermes:toggle-shortcuts'))
         return

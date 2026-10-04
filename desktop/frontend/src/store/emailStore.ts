@@ -5,6 +5,15 @@ import type {
 } from '../types/email'
 import { readJson, writeJson, writeListWithinQuota } from '../lib/storage'
 
+/** Where "Send & archive" moved the original, for an Undo to reverse. */
+export interface ArchivedOriginal {
+  accountId: string
+  /** The original's id in the archive folder; null if the provider can't say. */
+  undoId: string | null
+  archiveFolder: string
+  originFolder: string
+}
+
 export type ThemePreference = 'system' | 'light' | 'dark'
 export type ResolvedTheme = 'light' | 'dark'
 
@@ -219,7 +228,14 @@ interface EmailStore {
   // Undo send. Every send goes through the server queue, so a message with an
   // undo window is genuinely recallable until `canUndoUntil` passes — this is
   // what puts a visible countdown on that window.
-  pendingSend: { jobId: string; accountId: string; canUndoUntil: string; subject: string; windowSec: number } | null
+  pendingSend: {
+    jobId: string; accountId: string; canUndoUntil: string; subject: string; windowSec: number
+    /**
+     * Set by "Send & archive": resolves to where the original went, so undoing
+     * the send can put it back too. Null when the archive failed.
+     */
+    archived?: Promise<ArchivedOriginal | null>
+  } | null
   setPendingSend: (send: EmailStore['pendingSend']) => void
   clearPendingSend: () => void
 

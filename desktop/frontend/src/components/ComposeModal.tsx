@@ -5,7 +5,7 @@ import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
-import { useEmailStore } from '../store/emailStore'
+import { useEmailStore, type ArchivedOriginal } from '../store/emailStore'
 import { promptDialog, confirmDialog } from './DialogHost'
 import * as localOutbox from '../lib/localOutbox'
 import { emailsApi, streamAiSuggestion, type StreamHandle } from '../api/client'
@@ -543,6 +543,25 @@ export function ComposeModal() {
       // needs to see how much time is left, not guess at it.
       const hasUndoWindow = undoWindowSec > 0 && !!sendResult.jobId && !!sendResult.canUndoUntil
 
+      // Send & archive: the reply is safely queued, so the original can leave
+      // the inbox now. A failure here must not look like a failed send. The
+      // promise travels with the pending send so Undo can put the original back.
+      let archived: Promise<ArchivedOriginal | null> | undefined
+      if (options.archiveOriginal && originalAccount && r?.id) {
+        const originalId = r.id
+        const originFolder = r.folder || 'INBOX'
+        const archiveFolder = useEmailStore.getState().getArchiveFolder(originalAccount.id)
+        archived = emailsApi.move(originalAccount.id, originalId, archiveFolder, originFolder)
+          .then(({ undoId }) => {
+            useEmailStore.getState().removeEmail(originalId)
+            return { accountId: originalAccount.id, undoId, archiveFolder, originFolder }
+          })
+          .catch(() => {
+            useEmailStore.getState().showNotification('error', t('Sent, but the original could not be archived'))
+            return null
+          })
+      }
+
       if (hasUndoWindow) {
         useEmailStore.getState().setPendingSend({
           jobId: sendResult.jobId!,
@@ -550,6 +569,7 @@ export function ComposeModal() {
           canUndoUntil: sendResult.canUndoUntil!,
           subject,
           windowSec: undoWindowSec,
+          archived,
         })
       } else if (sendResult.queued && isDeferred) {
         const when = sendResult.sendAt ? new Date(sendResult.sendAt).toLocaleString() : t('soon')
@@ -564,15 +584,6 @@ export function ComposeModal() {
         })
       }
 
-      // Send & archive: the reply is safely queued, so the original can leave
-      // the inbox now. A failure here must not look like a failed send.
-      if (options.archiveOriginal && originalAccount && r?.id) {
-        const store = useEmailStore.getState()
-        const archiveFolder = store.getArchiveFolder(originalAccount.id)
-        emailsApi.move(originalAccount.id, r.id, archiveFolder, r.folder || 'INBOX')
-          .then(() => useEmailStore.getState().removeEmail(r.id!))
-          .catch(() => useEmailStore.getState().showNotification('error', t('Sent, but the original could not be archived')))
-      }
       // Clear any saved draft for this compose (local + server copy).
       const sentRef = useEmailStore.getState().drafts.find(d => d.id === draftIdRef.current)?.serverRef
       deleteDraft(draftIdRef.current)

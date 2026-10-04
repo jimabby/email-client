@@ -368,6 +368,10 @@ export const ZH: Record<string, string> = {
   'Undoing…': '正在撤销…',
   'Send cancelled — the message is back in your drafts.': '已取消发送 — 邮件已回到草稿。',
   'Too late to cancel — the message has gone.': '来不及取消 — 邮件已发出。',
+  'Send cancelled. The original stays in {folder} — this server cannot move it back automatically.': '已取消发送。原邮件仍在「{folder}」中 — 此服务器无法自动将其移回。',
+  'Send cancelled — the original is back in your inbox.': '已取消发送 — 原邮件已回到收件箱。',
+  'Send cancelled, but the original could not be moved back from {folder}.': '已取消发送，但无法将原邮件从「{folder}」移回。',
+  'Show in outbox': '在发件箱中查看',
   'Cancel': '取消',
   'Confirm': '确认',
 
