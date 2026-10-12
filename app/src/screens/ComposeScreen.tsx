@@ -1,7 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Crypto from 'expo-crypto';
+import { usePreventRemove } from '@react-navigation/native';
+import { saveLocalDraft, removeLocalDraft, type DraftAttachment } from '../drafts';
+import { useAppStore } from '../store';
+import { escapeHtml } from '../../../shared/emailPolicy';
+import { useEffect, useLayoutEffect, useMemo, useState, useRef } from 'react';
 import {
   View, Text, TextInput, StyleSheet, TouchableOpacity, ActivityIndicator,
-  KeyboardAvoidingView, Platform, ScrollView, Alert,
+  KeyboardAvoidingView, Platform, ScrollView, Alert, AppState,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { api, errorMessage } from '../api';
@@ -38,14 +45,49 @@ export default function ComposeScreen({ navigation, route }: Props) {
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
   const tr = useTr();
 
-  const [to, setTo] = useState(replyTo ? replyTo.from : prefill?.to ?? '');
+  const [to, setTo] = useState(prefill?.to ?? (replyTo ? replyTo.from : undefined) ?? '');
   const [cc, setCc] = useState(prefill?.cc ?? '');
   const [bcc, setBcc] = useState(prefill?.bcc ?? '');
   const [showCcBcc, setShowCcBcc] = useState(!!(prefill?.cc || prefill?.bcc));
   const [subject, setSubject] = useState(
-    replyTo ? `Re: ${replyTo.subject.replace(/^re:\s*/i, '')}` : prefill?.subject ?? ''
+    prefill?.subject ?? (replyTo ? `Re: ${replyTo.subject.replace(/^re:\s*/i, '')}` : '')
   );
   const [text, setText] = useState(prefill?.body ?? '');
+  const draftId = useRef(route.params.draft?.id || Crypto.randomUUID());
+  const requestId = useRef(route.params.draft?.requestId || Crypto.randomUUID());
+  const [attachments, setAttachments] = useState<DraftAttachment[]>(route.params.draft?.attachments || []);
+  const [canLeave, setCanLeave] = useState(false);
+  const [draftError, setDraftError] = useState('');
+  const persist = () => saveLocalDraft({ id: draftId.current, requestId: requestId.current, serverUrl: useAppStore.getState().serverUrl,
+    account, replyTo, to, cc, bcc, subject, body: text, attachments, savedAt: new Date().toISOString() });
+  const latestPersist = useRef(persist); latestPersist.current = persist;
+  useEffect(() => {
+    if (canLeave) return;
+    const timer = setTimeout(() => { latestPersist.current().then(() => setDraftError('')).catch(e => setDraftError(errorMessage(e))); }, 600);
+    return () => clearTimeout(timer);
+  }, [to, cc, bcc, subject, text, attachments, canLeave]);
+  useEffect(() => {
+    const listener = AppState.addEventListener('change', state => { if (state !== 'active' && !canLeave) latestPersist.current().catch(e => setDraftError(errorMessage(e))); });
+    return () => listener.remove();
+  }, [canLeave]);
+  usePreventRemove(!canLeave, ({ data }) => {
+    latestPersist.current().then(() => { setCanLeave(true); setTimeout(() => navigation.dispatch(data.action), 0); })
+      .catch(e => Alert.alert(tr('Could not save draft. Keep this screen open and retry.'), errorMessage(e)));
+  });
+  const attach = async () => {
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
+      if (picked.canceled) return;
+      const next = [...attachments];
+      for (const file of picked.assets) {
+        if (!file.size || file.size > 15 * 1024 * 1024) throw new Error('Choose files smaller than 15 MB');
+        const content = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
+        next.push({ filename: file.name, contentType: file.mimeType || 'application/octet-stream', content });
+        if (next.reduce((sum, a) => sum + a.content.length, 0) > 25 * 1024 * 1024) throw new Error('Attachments exceed the message size limit');
+      }
+      setAttachments(next);
+    } catch (e) { Alert.alert(tr('Could not attach file'), errorMessage(e)); }
+  };
   const [sending, setSending] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [laterOpen, setLaterOpen] = useState(false);
@@ -85,7 +127,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
     }
   };
 
-  const bodyHtml = () => `<p>${text.replace(/\n/g, '<br>')}</p>`;
+  const bodyHtml = () => `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
   const isEmpty = () => !to.trim() && !cc.trim() && !bcc.trim() && !subject.trim() && !text.trim();
 
   // The desktop holds a message briefly before it goes, so a misdirected reply
@@ -129,7 +171,10 @@ export default function ComposeScreen({ navigation, route }: Props) {
     }
     setSending(true);
     try {
+      await persist();
       const result = await api.send(account.id, {
+        requestId: requestId.current,
+        attachments,
         to: to.trim(),
         cc: cc.trim() || undefined,
         bcc: bcc.trim() || undefined,
@@ -143,6 +188,10 @@ export default function ComposeScreen({ navigation, route }: Props) {
         followUpDays: followUpDays || undefined,
       });
 
+      setCanLeave(true);
+      await removeLocalDraft(draftId.current).catch(err => {
+        Alert.alert(tr('Queued, but the local draft could not be removed'), errorMessage(err));
+      });
       const when = sendAt
         ? tr('Scheduled for {when}.', { when: sendAt.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) })
         : tr('Sending in {seconds} seconds.', { seconds: UNDO_WINDOW_SEC });
@@ -154,6 +203,9 @@ export default function ComposeScreen({ navigation, route }: Props) {
           onPress: async () => {
             try {
               await api.cancelSend(account.id, result.jobId);
+              requestId.current = Crypto.randomUUID();
+              await persist();
+              setCanLeave(false);
               Alert.alert(tr('Recalled'), tr('The message was not sent. It is still in your outbox.'));
             } catch (err) {
               Alert.alert(tr('Too late'), errorMessage(err));
@@ -175,7 +227,9 @@ export default function ComposeScreen({ navigation, route }: Props) {
     if (isEmpty()) { navigation.goBack(); return; }
     setSavingDraft(true);
     try {
+      await persist();
       await api.saveDraft(account.id, {
+        attachments,
         to: to.trim(),
         cc: cc.trim(),
         bcc: bcc.trim(),
@@ -183,6 +237,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
         text,
         html: bodyHtml(),
       });
+      setCanLeave(true);
       Alert.alert(tr('Draft saved'), tr('Saved to your Drafts folder.'), [
         { text: tr('OK'), onPress: () => navigation.goBack() },
       ]);
@@ -278,6 +333,9 @@ export default function ComposeScreen({ navigation, route }: Props) {
           />
         </View>
 
+        {draftError ? <Text style={{ color: t.danger, padding: 12 }}>{tr('Draft could not be saved')}: {draftError}</Text> : <Text style={{ color: t.textMuted, padding: 12 }}>{tr('Draft saved automatically on this device')}</Text>}
+        <TouchableOpacity onPress={attach} style={styles.tool}><Text style={styles.toolText}>{tr('Attach files')}</Text></TouchableOpacity>
+        {attachments.map((file, index) => <TouchableOpacity key={index} onPress={() => setAttachments(items => items.filter((_, i) => i !== index))}><Text style={styles.toolText}>{file.filename} ? {tr('Remove')}</Text></TouchableOpacity>)}
         <View style={styles.toolRow}>
           {aiAvailable && (
             <TouchableOpacity style={styles.tool} onPress={() => setAiOpen(true)} disabled={aiBusy}>

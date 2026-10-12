@@ -467,6 +467,12 @@ function createWindow() {
 // taskbar overlay should look like (because only the renderer can rasterise a
 // number).
 
+// Domain-separated key for renderer drafts. The master stays in the main process.
+ipcMain.handle('hermes:private-key', event => {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('Untrusted caller');
+  return crypto.createHmac('sha256', Buffer.from(loadOrCreateMasterKey(), 'hex')).update('hermes-renderer-private-v1').digest('hex');
+});
+
 ipcMain.on('hermes:chrome', (event, payload) => {
   // Only the app's own window may drive the shell.
   if (!mainWindow || event.sender !== mainWindow.webContents) return;

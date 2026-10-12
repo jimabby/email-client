@@ -30,6 +30,9 @@ works with the computer switched off.
  Phone app ───────► backend (your VPS, behind Caddy) ─────► Gmail API / Graph / IMAP+SMTP
 ```
 
+See [reliability and recovery](docs/reliability.md) for the send guarantees, encrypted
+draft migration, new controls, validation commands, and remaining audit findings.
+
 ## Features
 
 **Mail**
@@ -39,7 +42,10 @@ works with the computer switched off.
   Gmail Pub/Sub, Microsoft Graph webhooks, or polling)
 - Send-as aliases, per-account signatures, templates, and scheduled send
 - Undo send, and Undo for delete, archive, move, and spam on every provider
-- An outbox that retries sends after a network failure
+- Durable, idempotent sends with editable schedules, delivery history, and explicit
+  recovery when delivery is uncertain
+- Encrypted local drafts and offline desktop sends; mobile attachment uploads
+- Sync diagnostics, read-only rule previews, and individually revocable device tokens
 - Sent mail is saved to the Sent folder on IMAP servers that don't keep their
   own copy (configurable per account)
 - Send & archive: reply and file the original in one step

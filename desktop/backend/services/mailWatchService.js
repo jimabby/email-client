@@ -29,6 +29,7 @@ function emitNewMail(accountId, payload = {}) {
 // here so indexing, rules, notifications, and the badge behave identically no
 // matter how the arrival was detected.
 
+const syncProgress = new Map();
 const seenIds = new Map(); // accountId -> Set of message ids already handled
 const inFlight = new Map(); // accountId -> Promise, so bursts collapse
 const rerunRequested = new Set(); // accountIds that saw an arrival mid-check
@@ -78,13 +79,30 @@ function handleNewMail(accountId, meta = {}) {
     const account = store.getAccount(accountId);
     if (!account) return [];
 
+    const saved = store.getSyncState(accountId);
+    const startedAt = new Date().toISOString();
+    syncProgress.set(accountId, { ...saved, syncing: true, scanned: 0, error: null });
     let emails = [];
     try {
       const service = getService(account.type);
-      const result = await service.fetchEmails(account, 'INBOX', 25, null);
-      emails = result?.emails || [];
+      let token = null;
+      const tokens = new Set();
+      const ids = new Set();
+      do {
+        const result = await service.fetchEmails(account, 'INBOX', 100, token);
+        const page = result?.emails || [];
+        for (const email of page) if (!ids.has(email.id)) { ids.add(email.id); emails.push(email); }
+        syncProgress.set(accountId, { ...saved, syncing: true, scanned: emails.length, error: null });
+        token = result?.nextToken || null;
+        // Scan to exhaustion: message Date headers are not trustworthy cursors.
+        // Persisted provider ids keep completed arrivals from running twice.
+        if (token && tokens.has(String(token))) throw new Error('Provider repeated a page token; synchronization is incomplete');
+        tokens.add(String(token));
+        if (tokens.size > 1000) throw new Error('Synchronization exceeded 100,000 messages; narrow the mailbox and retry');
+      } while (token);
       accountHealth.noteSuccess(accountId);
     } catch (err) {
+      syncProgress.set(accountId, { ...saved, syncing: false, scanned: emails.length, error: err.message, incomplete: true });
       accountHealth.noteFailure(accountId, err);
       console.warn(`[watch] Could not fetch new mail for ${account.email}: ${err.message}`);
       emitNewMail(accountId, meta);
@@ -94,17 +112,12 @@ function handleNewMail(accountId, meta = {}) {
     // Always index — cheap, and keeps search fresh even for already-seen mail.
     searchIndex.indexSummaries(emails);
 
-    let known = seenIds.get(accountId);
+    let known = seenIds.get(accountId) || (saved ? new Set(saved.seenIds || []) : null);
     const isFirstPass = !known;
     if (!known) { known = new Set(); seenIds.set(accountId, known); }
 
     const fresh = emails.filter(e => !known.has(e.id));
-    for (const email of emails) known.add(email.id);
-    // Bound the set so a long-running process doesn't grow forever.
-    if (known.size > 2000) {
-      const trimmed = Array.from(known).slice(-1000);
-      seenIds.set(accountId, new Set(trimmed));
-    }
+    const nextKnown = new Set(emails.map(email => email.id));
 
     // On the very first pass everything looks new; that's a cold start, not an
     // arrival, so don't fire notifications or rules for the whole inbox.
@@ -157,6 +170,11 @@ function handleNewMail(accountId, meta = {}) {
       try { notifications.notifyNewMail(accountId, notable); } catch { /* best effort */ }
     }
 
+    const completed = { lastSuccessAt: new Date().toISOString(), lastStartedAt: startedAt,
+      seenIds: Array.from(nextKnown), scanned: emails.length, incomplete: false, error: null };
+    try { store.setSyncState(accountId, completed); seenIds.set(accountId, nextKnown); }
+    catch (error) { syncProgress.set(accountId, { ...saved, syncing: false, scanned: emails.length, incomplete: true, error: 'Could not save synchronization checkpoint: ' + error.message }); throw error; }
+    syncProgress.set(accountId, { ...completed, syncing: false });
     refreshBadge().catch(() => {});
     emitNewMail(accountId, { ...meta, count: fresh.length });
     return fresh;
@@ -445,6 +463,11 @@ function subscribe(listener) {
 }
 
 module.exports = {
+  syncStatus: () => store.getAccounts().map(account => {
+    const { seenIds, ...status } = syncProgress.get(account.id) || store.getSyncState(account.id) || {};
+    return { accountId: account.id, email: account.email, ...status, indexedMessages: searchIndex.allDocuments().filter(d => d.accountId === account.id).length,
+      indexScope: 'Inbox summaries and message bodies opened in Hermes' };
+  }),
   ensureWatch,
   watchAll,
   stopWatch,

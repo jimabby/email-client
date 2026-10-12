@@ -115,7 +115,7 @@ test('retrying an unknown job reports it clearly', () => {
 });
 
 test('pruning keeps failed messages but clears old sent ones', () => {
-  const old = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
   const sent = queue.createQueuedSend({ accountId: 'acct-1', email: { to: 'a@b.com', subject: 'old' }, undoWindowSec: 0 });
   const failed = queue.createQueuedSend({ accountId: 'acct-1', email: { to: 'a@b.com', subject: 'stuck' }, undoWindowSec: 0 });
   store.updateSendQueueItem(sent.id, { status: 'sent', sentAt: old });

@@ -277,7 +277,7 @@ export const emailsApi = {
   saveRules: (rules: MailRule[]) => api.put<MailRule[]>('/emails/rules', { rules }).then(r => r.data),
   getRuleSchema: () => api.get<{ fields: string[]; operators: string[]; actions: string[] }>('/emails/rules/schema').then(r => r.data),
   previewRule: (rule: Partial<MailRule>, emails: EmailSummary[]) =>
-    api.post<{ matched: string[] }>('/emails/rules/preview', { rule, emails }).then(r => r.data),
+    api.post<{ matched: string[]; messages: { id: string; subject: string; from: string; actions: { type: string; targetFolder?: string }[] }[] }>('/emails/rules/preview', { rule, emails }).then(r => r.data),
   runRules: (emails: EmailSummary[], force = false) =>
     api.post<{ applied: { emailId: string; ruleId: string; action: string }[]; processed: number }>('/emails/rules/run', { emails, force }).then(r => r.data),
 
@@ -285,12 +285,15 @@ export const emailsApi = {
   saveTemplates: (templates: MailTemplate[]) => api.put<MailTemplate[]>('/emails/templates', { templates }).then(r => r.data),
 
   // ─── Outbox ───────────────────────────────────────────────────────────────
+  outboxDetail: (id: string) => api.get<{ email?: { text?: string; html?: string } }>(`/emails/outbox/${id}`).then(r => r.data),
+  editOutbox: (id: string, data: { to: string; subject: string; sendAt?: string; text?: string }) => api.patch(`/emails/outbox/${id}`, data).then(r => r.data),
   getOutbox: () => api.get<OutboxItem[]>('/emails/outbox').then(r => r.data),
-  retryOutbox: (jobId: string) => api.post(`/emails/outbox/${jobId}/retry`).then(r => r.data),
+  retryOutbox: (jobId: string, acknowledgeUncertain = false) => api.post(`/emails/outbox/${jobId}/retry`, { acknowledgeUncertain }).then(r => r.data),
   cancelOutbox: (jobId: string) => api.post(`/emails/outbox/${jobId}/cancel`).then(r => r.data),
   discardOutbox: (jobId: string) => api.delete(`/emails/outbox/${jobId}`).then(r => r.data),
 
   send: (accountId: string, data: {
+    requestId?: string
     to: string
     cc?: string
     bcc?: string
@@ -616,4 +619,14 @@ export function streamAiSuggestion(
   onError: (err: string) => void,
 ): StreamHandle {
   return streamSse('/api/ai/suggest', params, onChunk, onDone, onError)
+}
+
+export interface SyncStatus { accountId: string; email: string; syncing?: boolean; scanned?: number; lastSuccessAt?: string; error?: string; incomplete?: boolean; indexedMessages: number; indexScope: string }
+export interface AccessDevice { id: string; name: string; createdAt: string; revokedAt?: string }
+export const recoveryApi = {
+  syncStatus: () => api.get<SyncStatus[]>('/emails/sync-status').then(r => r.data),
+  sync: (id: string) => api.post(`/emails/sync/${id}`),
+  devices: () => api.get<AccessDevice[]>('/auth/devices').then(r => r.data),
+  addDevice: (name: string) => api.post<AccessDevice & { token: string }>('/auth/devices', { name }).then(r => r.data),
+  revokeDevice: (id: string) => api.delete(`/auth/devices/${id}`),
 }

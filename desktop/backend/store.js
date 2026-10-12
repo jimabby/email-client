@@ -56,7 +56,8 @@ function readJson(file, fallback) {
 
 function writeJsonAtomic(file, data) {
   const tmpFile = `${file}.tmp`;
-  fs.writeFileSync(tmpFile, data, { mode: 0o600 });
+  const fd = fs.openSync(tmpFile, 'w', 0o600);
+  try { fs.writeFileSync(fd, data); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(tmpFile, file);
 }
 
@@ -408,13 +409,35 @@ module.exports = {
   },
 
   // ─── Send queue / outbox ──────────────────────────────────────────────────
+  getSyncState(accountId) { return state.sync?.[accountId] || null; },
+  setSyncState(accountId, value) {
+    const previous = state.sync;
+    state.sync = { ...previous, [accountId]: value };
+    try { writeJsonAtomic(STATE_FILE, secrets.sealText(JSON.stringify(state))); }
+    catch (error) { state.sync = previous; throw error; }
+  },
+  getAccessDevices() { return state.accessDevices || []; },
+  saveAccessDevices(devices) {
+    const previous = state.accessDevices;
+    state.accessDevices = devices;
+    try { writeJsonAtomic(STATE_FILE, secrets.sealText(JSON.stringify(state))); }
+    catch (error) { state.accessDevices = previous; throw error; }
+  },
+  getSendReceipt(accountId, requestId) { return outbox.receipts?.[`${accountId}:${requestId}`] || null; },
   getSendQueue() {
     return outbox.items;
   },
 
   addSendQueueItem(item) {
-    outbox.items.push(item);
-    saveOutbox();
+    const previous = outbox.items;
+    outbox.items = [...previous, item];
+    const previousReceipts = outbox.receipts;
+    if (item.requestId) {
+      const { email, ...receipt } = item;
+      outbox.receipts = { ...previousReceipts, [`${item.accountId}:${item.requestId}`]: receipt };
+    }
+    try { writeJsonAtomic(OUTBOX_FILE, secrets.sealText(JSON.stringify(outbox))); }
+    catch (error) { outbox.items = previous; outbox.receipts = previousReceipts; throw error; }
     return item;
   },
 
@@ -425,8 +448,17 @@ module.exports = {
     // Once a message is out, its body and attachments are never needed again
     // (the provider's Sent folder has them) — keep only the outbox summary.
     if (next.status === 'sent') delete next.email;
+    const previous = outbox.items[idx];
+    const at = new Date().toISOString();
+    next.history = [...(previous.history || []), { at, status: next.status, detail: updates.error || (updates.email ? 'Message edited' : '') }].slice(-100);
     outbox.items[idx] = next;
-    saveOutbox();
+    const previousReceipts = outbox.receipts;
+    if (next.requestId) {
+      const { email, ...receipt } = next;
+      outbox.receipts = { ...previousReceipts, [`${next.accountId}:${next.requestId}`]: receipt };
+    }
+    try { writeJsonAtomic(OUTBOX_FILE, secrets.sealText(JSON.stringify(outbox))); }
+    catch (error) { outbox.items[idx] = previous; outbox.receipts = previousReceipts; throw error; }
     return next;
   },
 
@@ -437,15 +469,19 @@ module.exports = {
   removeSendQueueItem(id) {
     const idx = outbox.items.findIndex(i => i.id === id);
     if (idx === -1) return false;
+    if (outbox.items[idx].status === 'sending') throw new Error('Message is being sent');
+    const previous = [...outbox.items];
     outbox.items.splice(idx, 1);
-    saveOutbox();
+    try { writeJsonAtomic(OUTBOX_FILE, secrets.sealText(JSON.stringify(outbox))); }
+    catch (error) { outbox.items = previous; throw error; }
     return true;
   },
 
-  // Remove sent/cancelled items older than 24 hours. Failed items stay until
+  // Retain delivery history for 30 days; request receipts remain for deduplication.
+  // Remove sent/cancelled items older than 30 days. Failed items stay until
   // the user deals with them — that is the whole point of an outbox.
   pruneSendQueue() {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const before = outbox.items.length;
     outbox.items = outbox.items.filter(item => {
       if (item.status !== 'sent' && item.status !== 'cancelled') return true;

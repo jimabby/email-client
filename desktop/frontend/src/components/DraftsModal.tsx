@@ -33,9 +33,9 @@ export function DraftsModal() {
 
   // Deleting a draft also removes its server copy (best-effort) so it doesn't
   // linger in the provider's Drafts folder.
-  const removeDraft = (id: string) => {
+  const removeDraft = async (id: string) => {
     const draft = drafts.find(d => d.id === id)
-    deleteDraft(id)
+    try { await deleteDraft(id) } catch { useEmailStore.getState().showNotification('error', t('Could not discard draft')); return }
     if (draft?.serverRef) emailsApi.deleteServerDraft(draft.accountId, draft.serverRef).catch(() => {})
   }
 

@@ -8,6 +8,7 @@ const CHANNELS = ['hermes:open', 'hermes:compose', 'hermes:backend-down', 'herme
 
 contextBridge.exposeInMainWorld('hermes', {
   isDesktop: true,
+  privateKey: () => ipcRenderer.invoke('hermes:private-key'),
 
   /**
    * @param {'hermes:open'|'hermes:compose'|'hermes:backend-down'|'hermes:badge'} channel

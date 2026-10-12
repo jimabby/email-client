@@ -29,6 +29,21 @@ function publicAccount(account) {
   return safe;
 }
 
+// Only the master credential may mint or revoke access to other devices.
+router.use('/devices', (req, res, next) => {
+  if (req.auth?.deviceId) return res.status(403).json({ error: 'Use the master token to manage devices' });
+  next();
+});
+router.get('/devices', (req, res) => res.json(require('../services/deviceAccessService').list()));
+router.post('/devices', (req, res) => {
+  try { res.status(201).json(require('../services/deviceAccessService').create(req.body.name)); }
+  catch (error) { res.status(400).json({ error: error.message }); }
+});
+router.delete('/devices/:id', (req, res) => {
+  try { require('../services/deviceAccessService').revoke(req.params.id); res.json({ success: true }); }
+  catch (error) { res.status(400).json({ error: error.message }); }
+});
+
 // List all accounts (strip sensitive credentials for client)
 router.get('/accounts', (req, res) => {
   res.json(store.getAccounts().map(publicAccount));

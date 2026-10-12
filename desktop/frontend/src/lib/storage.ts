@@ -37,25 +37,11 @@ export function writeJson(key: string, value: unknown): WriteResult {
   }
 }
 
-/**
- * Write a list, dropping items from the end until it fits.
- * @returns the list that was actually persisted.
- */
+/** Save a list without evicting any user content. */
 export function writeListWithinQuota<T>(key: string, items: T[]): { stored: T[]; dropped: number } {
-  let candidate = items
-  for (let attempt = 0; attempt < 12; attempt++) {
-    const result = writeJson(key, candidate)
-    if (result.ok) return { stored: candidate, dropped: items.length - candidate.length }
-    if (result.reason !== 'quota') break
-    if (candidate.length <= 1) {
-      // Even one item won't fit — give up rather than looping forever.
-      writeJson(key, [])
-      return { stored: [], dropped: items.length }
-    }
-    // Halve rather than shed one at a time: attachments are large and uneven.
-    candidate = candidate.slice(0, Math.max(1, Math.floor(candidate.length / 2)))
-  }
-  return { stored: candidate, dropped: items.length - candidate.length }
+  const result = writeJson(key, items)
+  if (!result.ok) throw new Error('Storage is full or unavailable; existing content has been kept.')
+  return { stored: items, dropped: 0 }
 }
 
 /** Approximate bytes a value will occupy once serialised. */

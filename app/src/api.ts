@@ -17,7 +17,14 @@ function client() {
   });
 }
 
+export interface SyncStatus { accountId: string; email: string; syncing?: boolean; scanned?: number; lastSuccessAt?: string; error?: string; indexedMessages: number }
+export interface AccessDevice { id: string; name: string; revokedAt?: string }
 export const api = {
+  syncStatus: () => client().get<SyncStatus[]>('/emails/sync-status').then(r => r.data),
+  sync: (id: string) => client().post(`/emails/sync/${id}`),
+  devices: () => client().get<AccessDevice[]>('/auth/devices').then(r => r.data),
+  addDevice: (name: string) => client().post<AccessDevice & { token: string }>('/auth/devices', { name }).then(r => r.data),
+  revokeDevice: (id: string) => client().delete(`/auth/devices/${id}`),
   health: () => client().get<{ status: string; authenticated: boolean }>('/auth-check').then((r) => r.data),
 
   listAccounts: () =>
@@ -144,6 +151,7 @@ export const api = {
   send: (
     accountId: string,
     data: {
+      requestId?: string; attachments?: { filename: string; contentType: string; content: string }[];
       to: string; cc?: string; bcc?: string; subject: string; text?: string; html?: string;
       // Reply threading — the backend resolves In-Reply-To/References (or the
       // Outlook reply draft) from the original email's composite id.
@@ -183,6 +191,7 @@ export const api = {
 
   // ─── Rules ────────────────────────────────────────────────────────────────
   // The whole list is saved at once; the server re-validates every rule.
+  previewRule: (rule: MailRule, emails: EmailSummary[]) => client().post<{ matched: string[]; messages: { id: string; subject: string; from: string; actions: { type: string; targetFolder?: string }[] }[] }>('/emails/rules/preview', { rule, emails }).then(r => r.data),
   rules: () => client().get<MailRule[]>('/emails/rules').then((r) => r.data),
   saveRules: (rules: MailRule[]) => client().put<MailRule[]>('/emails/rules', { rules }).then((r) => r.data),
 
@@ -192,7 +201,7 @@ export const api = {
 
   saveDraft: (
     accountId: string,
-    data: { to?: string; cc?: string; bcc?: string; subject?: string; text?: string; html?: string }
+    data: { to?: string; cc?: string; bcc?: string; subject?: string; text?: string; html?: string; attachments?: { filename: string; contentType: string; content: string }[] }
   ) => client().post(`/emails/${accountId}/drafts`, data).then((r) => r.data),
 
   // Real per-folder unread totals from the provider.
@@ -204,8 +213,10 @@ export const api = {
   // ─── Outbox ───────────────────────────────────────────────────────────────
   // Sends are queued on the server and retried after a network failure, so the
   // phone can compose on a flaky connection without losing the message.
+  outboxDetail: (id: string) => client().get<{ email?: { text?: string; html?: string } }>(`/emails/outbox/${id}`).then(r => r.data),
+  editOutbox: (id: string, data: { to: string; subject: string; sendAt?: string; text?: string }) => client().patch(`/emails/outbox/${id}`, data).then(r => r.data),
   outbox: () => client().get<OutboxItem[]>('/emails/outbox').then((r) => r.data),
-  retryOutbox: (jobId: string) => client().post(`/emails/outbox/${jobId}/retry`).then((r) => r.data),
+  retryOutbox: (jobId: string, acknowledgeUncertain = false) => client().post(`/emails/outbox/${jobId}/retry`, { acknowledgeUncertain }).then((r) => r.data),
   cancelOutbox: (jobId: string) => client().post(`/emails/outbox/${jobId}/cancel`).then((r) => r.data),
   discardOutbox: (jobId: string) => client().delete(`/emails/outbox/${jobId}`).then((r) => r.data),
 

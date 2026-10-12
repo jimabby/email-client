@@ -1,3 +1,4 @@
+import type { MobileDraft } from './drafts';
 import type { Account, EmailSummary } from './types';
 
 export type RootStackParamList = {
@@ -11,10 +12,12 @@ export type RootStackParamList = {
   Viewer: { account: Account; email: EmailSummary };
   Compose: {
     account: Account;
+    draft?: MobileDraft;
     replyTo?: EmailSummary;
     prefill?: { to?: string; cc?: string; bcc?: string; subject?: string; body?: string };
   };
   Settings: undefined;
+  Drafts: undefined;
   Outbox: undefined;
   /** With `reconnect`, fixes an account whose credentials stopped working. */
   AddAccount: { reconnect?: Account } | undefined;

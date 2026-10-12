@@ -322,7 +322,7 @@ export function ComposeModal() {
 
   const editor = useEditor({
     extensions: [
-      StarterKit,
+      StarterKit.configure({ link: false, underline: false }),
       Underline,
       Link.configure({ openOnClick: false }),
       Placeholder.configure({ placeholder: translate('Write your email…') }),
@@ -497,6 +497,7 @@ export function ComposeModal() {
       const r = composeData?.replyTo
       const ownsOriginal = !!r?.id && r.id.startsWith(accountId)
       const payload = {
+        requestId: draftIdRef.current,
         to, cc: cc || undefined, bcc: bcc || undefined, subject,
         html, text, attachments: attachmentData,
         sendAt: showSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
@@ -520,9 +521,9 @@ export function ComposeModal() {
         // failure a mail client must not have. Park it locally and close, the
         // same as a successful deferred send.
         if (!localOutbox.isUnreachable(err)) throw err
-        localOutbox.enqueue(accountId, payload, err)
+        await localOutbox.enqueue(accountId, payload, err)
         addContacts([to, cc, bcc].join(',').split(',').map(a => a.trim()).filter(Boolean))
-        deleteDraft(draftIdRef.current)
+        await deleteDraft(draftIdRef.current)
         showNotification('success', t('Hermes is offline — the message will send when it reconnects'), {
           action: { label: t('Outbox'), onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
           timeoutMs: 8000,
@@ -577,7 +578,7 @@ export function ComposeModal() {
           action: { label: t('Outbox'), onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
         })
       } else {
-        showNotification('success', options.archiveOriginal ? t('Sent — original archived') : t('Email sent!'), {
+        showNotification('success', options.archiveOriginal ? t('Reply queued; original archived') : t('Email queued'), {
           // The send happens on the server moments from now; if it fails the
           // outbox holds it, so point there rather than claiming success blindly.
           action: { label: t('Outbox'), onClick: () => useEmailStore.getState().setShowOutboxModal(true) },
@@ -586,7 +587,7 @@ export function ComposeModal() {
 
       // Clear any saved draft for this compose (local + server copy).
       const sentRef = useEmailStore.getState().drafts.find(d => d.id === draftIdRef.current)?.serverRef
-      deleteDraft(draftIdRef.current)
+      await deleteDraft(draftIdRef.current).catch(() => showNotification('error', t('Message queued, but its local draft could not be removed.')))
       if (sentRef) emailsApi.deleteServerDraft(accountId, sentRef).catch(() => {})
       closeCompose()
     } catch (err: unknown) {
@@ -630,7 +631,8 @@ export function ComposeModal() {
     try {
       attachmentData = attachments.length ? await resolveAttachments() : undefined
     } catch {
-      attachmentData = undefined
+      showNotification('error', t('Could not read attachments. Keep this window open and retry.'))
+      return
     }
     try {
       const { ref } = await emailsApi.saveServerDraft(accountId, {
@@ -639,11 +641,12 @@ export function ComposeModal() {
         attachments: attachmentData,
         replaceRef: prevRef,
       })
-      saveDraft(buildDraft(ref, attachmentData))
+      await saveDraft(buildDraft(ref, attachmentData))
       showNotification('success', t('Draft saved'))
     } catch {
       // Provider sync failed — keep a local copy so work isn't lost.
-      saveDraft(buildDraft(prevRef, attachmentData))
+      try { await saveDraft(buildDraft(prevRef, attachmentData)) }
+      catch { showNotification('error', t('Could not save draft. Keep this window open and retry.')); return }
       showNotification('error', t('Draft saved locally (sync to mail server failed)'))
     }
     closeCompose()
@@ -657,16 +660,19 @@ export function ComposeModal() {
     try {
       attachmentData = attachments.length ? await resolveAttachments() : undefined
     } catch {
-      attachmentData = undefined
+      showNotification('error', t('Could not read attachments. Keep this window open and retry.'))
+      return
     }
-    saveDraft(buildDraft(existingServerRef(), attachmentData))
-    closeCompose()
+    try {
+      await saveDraft(buildDraft(existingServerRef(), attachmentData))
+      closeCompose()
+    } catch { showNotification('error', t('Could not save draft. Keep this window open and retry.')) }
   }
 
   // Discard (trash): drop the local draft and any server copy, then close.
-  const handleDiscard = () => {
+  const handleDiscard = async () => {
     const ref = existingServerRef()
-    deleteDraft(draftIdRef.current)
+    try { await deleteDraft(draftIdRef.current) } catch { showNotification('error', t('Could not discard draft')); return }
     if (ref) emailsApi.deleteServerDraft(accountId, ref).catch(() => {})
     closeCompose()
   }

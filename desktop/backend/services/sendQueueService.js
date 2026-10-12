@@ -50,10 +50,19 @@ function backoffMs(attempts) {
   return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * Math.pow(2, Math.max(0, attempts - 1)));
 }
 
-function createQueuedSend({ accountId, email, sendAt, undoWindowSec = 0 }) {
+function createQueuedSend({ accountId, email, sendAt, undoWindowSec = 0, requestId, requestHash }) {
+  if (requestId) {
+    const existing = store.getSendQueue().find(item => item.accountId === accountId && item.requestId === requestId) || store.getSendReceipt?.(accountId, requestId);
+    if (existing) {
+      if (requestHash && existing.requestHash !== requestHash) throw Object.assign(new Error('This send request was already used for different content'), { status: 409 });
+      return existing;
+    }
+  }
   const normalizedSendAt = normalizeSendAt(sendAt, undoWindowSec);
   const job = {
     id: uuidv4(),
+    requestId, requestHash,
+    history: [{ at: new Date().toISOString(), status: 'pending', detail: 'Accepted into durable queue' }],
     createdAt: new Date().toISOString(),
     accountId,
     email,
@@ -85,9 +94,10 @@ function cancelQueuedSend(jobId) {
 }
 
 /** Move a failed job back into the queue for an immediate retry. */
-function retryQueuedSend(jobId) {
+function retryQueuedSend(jobId, { acknowledgeUncertain = false } = {}) {
   const job = store.getSendQueueItem(jobId);
   if (!job) throw new Error('Queued message not found');
+  if (job.status === 'uncertain' && !acknowledgeUncertain) throw new Error('Delivery may have succeeded. Check Sent mail and explicitly confirm before retrying.');
   if (job.status === 'sent') throw new Error('Message has already been sent');
   // Re-queueing a job mid-send would send it a second time on the next tick.
   if (job.status === 'sending' || processingIds.has(jobId)) throw new Error('Message is already being sent');
@@ -96,6 +106,7 @@ function retryQueuedSend(jobId) {
     status: 'pending',
     nextAttemptAt: new Date().toISOString(),
     error: null,
+    attempts: 0,
   });
 }
 
@@ -138,43 +149,53 @@ async function sendOne(item) {
   const fresh = store.getSendQueueItem(item.id);
   if (!fresh || (fresh.status !== 'pending' && fresh.status !== 'retrying')) return;
 
+  if (new Date(fresh.nextAttemptAt || fresh.sendAt).getTime() > Date.now()) return;
   processingIds.add(item.id);
-  const attempts = (fresh.attempts || 0) + 1;
-  store.updateSendQueueItem(item.id, {
-    status: 'sending',
-    sendingAt: new Date().toISOString(),
-    attempts,
-    error: null,
-  });
-
+  let providerAccepted = false;
   try {
-    const account = store.getAccount(item.accountId);
-    if (!account) throw new Error('Account no longer exists');
-    const service = getService(account.type);
-    await service.sendEmail(account, item.email);
+    const attempts = (fresh.attempts || 0) + 1;
     store.updateSendQueueItem(item.id, {
-      status: 'sent',
-      sentAt: new Date().toISOString(),
+      status: 'sending',
+      sendingAt: new Date().toISOString(),
+      attempts,
+      error: null,
     });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown send error';
-    const retryable = isTransient(err) && attempts < MAX_ATTEMPTS;
-    store.updateSendQueueItem(item.id, {
-      status: retryable ? 'retrying' : 'failed',
-      failedAt: new Date().toISOString(),
-      nextAttemptAt: retryable
-        ? new Date(Date.now() + backoffMs(attempts)).toISOString()
-        : undefined,
-      error: retryable
-        ? `${message} — retrying (attempt ${attempts} of ${MAX_ATTEMPTS})`
-        : message,
-    });
-    if (!retryable) {
-      console.error(`[outbox] Giving up on ${item.id}: ${message}`);
-      // A message that will never send on its own needs the user's attention.
-      try {
-        require('./notificationService').notifySendFailed({ subject: item.subject, error: message });
-      } catch { /* notifications are best-effort */ }
+
+    try {
+      const account = store.getAccount(item.accountId);
+      if (!account) throw new Error('Account no longer exists');
+      const service = getService(account.type);
+      await service.sendEmail(account, fresh.email);
+      providerAccepted = true;
+      store.updateSendQueueItem(item.id, {
+        status: 'sent',
+        sentAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown send error';
+      // A lost response after DATA / an HTTP send cannot prove non-delivery.
+      const explicitRejection = Number(err.responseCode) >= 400 || (Number(err.status || err.response?.status) >= 400 && Number(err.status || err.response?.status) < 500)
+        || /\b429\b/.test(message);
+      const preConnect = /^(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)$/.test(String(err.code || ''));
+      const uncertain = providerAccepted || (isTransient(err) && !explicitRejection && !preConnect);
+      const retryable = !uncertain && isTransient(err) && attempts < MAX_ATTEMPTS;
+      store.updateSendQueueItem(item.id, {
+        status: uncertain ? 'uncertain' : retryable ? 'retrying' : 'failed',
+        failedAt: new Date().toISOString(),
+        nextAttemptAt: retryable
+          ? new Date(Date.now() + backoffMs(attempts)).toISOString()
+          : undefined,
+        error: uncertain ? 'Delivery is uncertain. Check Sent mail before retrying. ' + message : retryable
+          ? `${message} — retrying (attempt ${attempts} of ${MAX_ATTEMPTS})`
+          : message,
+      });
+      if (!retryable) {
+        console.error(`[outbox] Giving up on ${item.id}: ${message}`);
+        // A message that will never send on its own needs the user's attention.
+        try {
+          require('./notificationService').notifySendFailed({ subject: item.subject, error: message });
+        } catch { /* notifications are best-effort */ }
+      }
     }
   } finally {
     processingIds.delete(item.id);
@@ -191,12 +212,26 @@ function listOutbox() {
   }));
 }
 
+function editQueuedSend(jobId, { to, subject, sendAt, text }) {
+  const job = store.getSendQueueItem(jobId);
+  if (!job || !job.email) throw new Error('Message is no longer editable');
+  if (!['pending', 'retrying', 'failed', 'cancelled'].includes(job.status) || processingIds.has(jobId)) throw new Error('Message cannot be edited during or after delivery');
+  if (typeof to !== 'string' || !to.trim()) throw new Error('At least one recipient is required');
+  if (sendAt && !asDate(sendAt)) throw new Error('Invalid send time');
+  const at = normalizeSendAt(sendAt);
+  return store.updateSendQueueItem(jobId, {
+    email: { ...job.email, to: to.trim(), subject: String(subject || ''), ...(typeof text === 'string' ? { text, html: '<p>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') + '</p>' } : {}) },
+    to: to.trim(), subject: String(subject || ''), sendAt: at, nextAttemptAt: at,
+    status: 'pending', attempts: 0, error: null,
+  });
+}
+
 function startScheduler() {
   if (intervalHandle) return;
-  // Any job left mid-send by a crash goes back in the queue.
+  // A crash can happen after provider acceptance. Never silently resend.
   for (const item of store.getSendQueue()) {
     if (item.status === 'sending') {
-      store.updateSendQueueItem(item.id, { status: 'pending', nextAttemptAt: new Date().toISOString() });
+      store.updateSendQueueItem(item.id, { status: 'uncertain', error: 'Hermes stopped during delivery. Check Sent mail before retrying.' });
     }
   }
   intervalHandle = setInterval(() => {
@@ -209,6 +244,7 @@ function startScheduler() {
 
 module.exports = {
   createQueuedSend,
+  editQueuedSend,
   cancelQueuedSend,
   retryQueuedSend,
   listOutbox,

@@ -56,6 +56,7 @@ export function RulesModal() {
   const [rules, setRules] = useState<MailRule[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [previewMessages, setPreviewMessages] = useState<Record<string, Awaited<ReturnType<typeof emailsApi.previewRule>>['messages']>>({})
   const [previews, setPreviews] = useState<Record<string, number | 'loading'>>({})
   const t = useT()
 
@@ -100,7 +101,8 @@ export function RulesModal() {
   const handlePreview = async (rule: MailRule) => {
     setPreviews(p => ({ ...p, [rule.id]: 'loading' }))
     try {
-      const { matched } = await emailsApi.previewRule(rule, emails)
+      const { matched, messages } = await emailsApi.previewRule(rule, emails)
+      setPreviewMessages(p => ({ ...p, [rule.id]: messages }))
       setPreviews(p => ({ ...p, [rule.id]: matched.length }))
     } catch {
       setPreviews(p => { const next = { ...p }; delete next[rule.id]; return next })
@@ -155,6 +157,7 @@ export function RulesModal() {
 
           {rules.map(rule => (
             <div key={rule.id} className="rounded-xl border border-line/50 bg-ink/4 p-3.5 space-y-3">
+              {previewMessages[rule.id] && <div className="text-xs space-y-1" aria-label="Rule preview"><p>{t('Preview only: no messages were changed. Test again after editing.')}</p>{previewMessages[rule.id].map(message => <p key={message.id}><strong>{message.subject || t('(no subject)')}</strong> ? {message.from} ? {message.actions.map(action => t(ACTION_LABELS[action.type as RuleActionType] || action.type) + (action.targetFolder ? `: ${action.targetFolder}` : '')).join(', ')}</p>)}</div>}
               {/* Rule header */}
               <div className="flex items-center gap-2">
                 <input

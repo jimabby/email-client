@@ -97,6 +97,14 @@ export default function RulesScreen(_props: Props) {
     }
   };
 
+  const preview = async (rule: MailRule) => {
+    try {
+      const accounts = await api.listAccounts();
+      const pages = await Promise.all(accounts.filter(a => !rule.accountId || a.id === rule.accountId).map(a => api.listEmails(a.id)));
+      const result = await api.previewRule(rule, pages.flatMap(p => p.emails));
+      Alert.alert(tr('Preview only: no messages were changed.'), result.messages.length ? result.messages.map(m => `${m.subject} - ${m.from} - ${m.actions.map(a => tr(ACTION_LABEL[a.type] || a.type)).join(', ')}`).join('\n') : tr('No messages matched'));
+    } catch (e) { Alert.alert(tr('Error'), errorMessage(e)); }
+  };
   const toggle = (rule: MailRule, enabled: boolean) =>
     persist(rules.map(r => (r.id === rule.id ? { ...r, enabled } : r)));
 
@@ -107,7 +115,7 @@ export default function RulesScreen(_props: Props) {
     ]);
   };
 
-  const add = () => {
+  const add = (previewOnly = false) => {
     const trimmed = value.trim();
     if (!trimmed) return;
     const fieldLabel = tr(FIELDS.find(f => f.value === field)?.label || field);
@@ -121,12 +129,14 @@ export default function RulesScreen(_props: Props) {
       conditions: [{ field, op: field === 'fromAddress' ? 'equals' : 'contains', value: trimmed.toLowerCase() }],
       actions: [{ type: action }],
     };
+    if (previewOnly) { preview(rule); return; }
     const confirm = () => { persist([...rules, rule]); setValue(''); };
     if (action === 'delete' || action === 'spam') {
       Alert.alert(tr('Create this rule?'), tr(action === 'delete'
         ? 'Every new message matching “{condition} {value}” will be deleted.'
         : 'Every new message matching “{condition} {value}” will be reported as spam.', { condition: fieldLabel, value: trimmed }), [
         { text: tr('Cancel'), style: 'cancel' },
+        { text: tr('Preview rule'), onPress: () => preview(rule) },
         { text: tr('Create'), style: 'destructive', onPress: confirm },
       ]);
     } else {
@@ -141,6 +151,7 @@ export default function RulesScreen(_props: Props) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: space.lg }} keyboardShouldPersistTaps="handled">
       <Text style={styles.heading}>{tr('New rule')}</Text>
+      <TouchableOpacity disabled={!value.trim() || saving} onPress={() => add(true)}><Text style={{ color: t.accent }}>{tr('Preview rule')}</Text></TouchableOpacity>
       <View style={styles.chips}>
         {FIELDS.map(f => (
           <TouchableOpacity key={f.value} style={[styles.chip, field === f.value && styles.chipActive]} onPress={() => setField(f.value)}>
@@ -165,7 +176,7 @@ export default function RulesScreen(_props: Props) {
           </TouchableOpacity>
         ))}
       </View>
-      <TouchableOpacity style={[styles.primary, !value.trim() && { opacity: 0.5 }]} onPress={add} disabled={!value.trim() || saving}>
+      <TouchableOpacity style={[styles.primary, !value.trim() && { opacity: 0.5 }]} onPress={() => add()} disabled={!value.trim() || saving}>
         {saving ? <ActivityIndicator color={t.accentText} /> : <Text style={styles.primaryText}>{tr('Add rule')}</Text>}
       </TouchableOpacity>
 
@@ -181,6 +192,7 @@ export default function RulesScreen(_props: Props) {
               <View style={{ flex: 1 }}>
                 <Text style={styles.ruleName} numberOfLines={1}>{rule.name}</Text>
                 <Text style={styles.ruleDetail} numberOfLines={2}>{describe(rule)}</Text>
+                <TouchableOpacity onPress={() => preview(rule)}><Text style={{ color: t.accent }}>{tr('Preview rule')}</Text></TouchableOpacity>
                 <TouchableOpacity onPress={() => remove(rule)} hitSlop={8}>
                   <Text style={styles.delete}>{tr('Delete')}</Text>
                 </TouchableOpacity>

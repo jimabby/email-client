@@ -61,10 +61,11 @@ function postJson(path, body) {
  * Devices are keyed by token, so re-registering the same install (which Expo
  * does on every launch) updates rather than duplicates.
  */
-function registerDevice({ token, platform, accountIds }) {
+function registerDevice({ token, platform, accountIds, accessDeviceId }) {
   if (!isExpoPushToken(token)) throw new Error('Not a valid Expo push token');
   return store.saveDevice({
     token: token.trim(),
+    accessDeviceId,
     platform: platform === 'ios' || platform === 'android' ? platform : 'unknown',
     // An empty list means "every account", which is what a fresh install wants.
     accountIds: Array.isArray(accountIds) ? accountIds.slice(0, 20) : [],

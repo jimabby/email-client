@@ -55,6 +55,8 @@
       "!backend/**/categories.json",
       "!backend/**/search-index.json",
       "!backend/**/outbox.json",
+      "!backend/**/state.json",
+      "!backend/**/*.log",
       "!backend/**/*.unreadable-*",
       "!backend/**/*.tmp",
       "!backend/test/**/*",

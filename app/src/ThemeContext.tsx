@@ -30,14 +30,14 @@ interface ThemeValue {
 
 const ThemeContext = createContext<ThemeValue | null>(null);
 
-function resolve(preference: ThemePreference, system: ColorSchemeName): ResolvedTheme {
+function resolve(preference: ThemePreference, system: ColorSchemeName | null | undefined): ResolvedTheme {
   if (preference !== 'system') return preference;
   return system === 'light' ? 'light' : 'dark';
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [preference, setPreferenceState] = useState<ThemePreference>('system');
-  const [system, setSystem] = useState<ColorSchemeName>(Appearance.getColorScheme());
+  const [system, setSystem] = useState<ColorSchemeName | null | undefined>(Appearance.getColorScheme());
 
   // The stored preference arrives a tick after mount. Starting from 'system'
   // means the first frame already matches the device rather than flashing.

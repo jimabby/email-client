@@ -1,3 +1,4 @@
+import DraftsScreen from './src/screens/DraftsScreen';
 import { useEffect, useMemo, useRef } from 'react';
 import { View, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -177,6 +178,7 @@ function Root() {
           <Stack.Screen name="Inbox" component={InboxScreen} />
           <Stack.Screen name="Viewer" component={ViewerScreen} options={{ title: '' }} />
           <Stack.Screen name="Compose" component={ComposeScreen} options={{ title: tr('New message') }} />
+          <Stack.Screen name="Drafts" component={DraftsScreen} options={{ title: tr('Local drafts') }} />
           <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: tr('Settings') }} />
           <Stack.Screen name="Outbox" component={OutboxScreen} options={{ title: tr('Outbox') }} />
           <Stack.Screen

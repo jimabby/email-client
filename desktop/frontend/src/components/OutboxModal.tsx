@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi } from '../api/client'
 import * as localOutbox from '../lib/localOutbox'
 import type { OutboxItem, OutboxStatus } from '../types/email'
+import { confirmDialog } from './DialogHost'
 import { useT } from '../lib/i18n'
 
 const STATUS_STYLES: Record<OutboxStatus, { label: string; className: string }> = {
+  uncertain: { label: 'Delivery uncertain', className: 'bg-danger/10 text-danger' },
   pending: { label: 'Queued', className: 'bg-info/10 text-info' },
   sending: { label: 'Sending', className: 'bg-accent/10 text-accent-ink ' },
   retrying: { label: 'Retrying', className: 'bg-accent/10 text-accent-ink ' },
@@ -22,6 +24,13 @@ function relative(iso?: string | null) {
 
 export function OutboxModal() {
   const { setShowOutboxModal, showNotification, outbox, setOutbox, accounts } = useEmailStore()
+  const editingId = useRef<string | null>(null);
+  const [editing, setEditing] = useState<OutboxItem | null>(null)
+  const [editTo, setEditTo] = useState('')
+  const [editSubject, setEditSubject] = useState('')
+  const [bodyEdited, setBodyEdited] = useState(false)
+  const [editText, setEditText] = useState<string | undefined>(undefined)
+  const [editAt, setEditAt] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
   const t = useT()
   // Messages that never reached the backend. They are not in `outbox` because
@@ -49,7 +58,10 @@ export function OutboxModal() {
   const act = async (item: OutboxItem, action: 'retry' | 'cancel' | 'discard') => {
     setBusyId(item.id)
     try {
-      if (action === 'retry') await emailsApi.retryOutbox(item.id)
+      if (action === 'retry') {
+        if (item.status === 'uncertain' && !await confirmDialog({ title: t('Check Sent mail first'), body: t('Delivery may already have succeeded. Retrying can send a duplicate. Have you checked Sent mail?'), confirmLabel: t('Retry anyway') })) return
+        await emailsApi.retryOutbox(item.id, item.status === 'uncertain')
+      }
       else if (action === 'cancel') await emailsApi.cancelOutbox(item.id)
       else await emailsApi.discardOutbox(item.id)
       await refresh()
@@ -65,10 +77,12 @@ export function OutboxModal() {
   const retryParked = async () => {
     setBusyId('local')
     try {
-      const sent = await localOutbox.flush()
+      const sent = await localOutbox.flush(true)
       if (sent) showNotification('success', t(sent === 1 ? 'Sent {count} message' : 'Sent {count} messages', { count: sent }))
       else showNotification('error', t('Still cannot reach the Hermes service'))
       await refresh()
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : String(err))
     } finally {
       setBusyId(null)
     }
@@ -78,7 +92,7 @@ export function OutboxModal() {
     <div key={item.id} className="rounded-xl border border-line/50 bg-ink/4 p-3.5">
       <div className="flex items-start gap-2">
         <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide flex-shrink-0 mt-0.5 bg-danger/10 text-danger">
-          {t('Offline')}
+          {t(item.rejected ? 'Rejected' : 'Offline')}
         </span>
         <div className="flex-1 min-w-0">
           <div className="text-xs font-semibold text-ink truncate">{item.subject}</div>
@@ -102,7 +116,7 @@ export function OutboxModal() {
             {t('Try now')}
           </button>
           <button
-            onClick={() => localOutbox.remove(item.id)}
+            onClick={() => localOutbox.remove(item.id).catch(err => showNotification('error', String(err)))}
             className="text-[11px] px-2 py-1 rounded text-danger hover:bg-danger/10"
             title={t('Discard this message without sending')}
           >
@@ -117,7 +131,7 @@ export function OutboxModal() {
 
   const renderRow = (item: OutboxItem) => {
     const style = STATUS_STYLES[item.status] ?? STATUS_STYLES.pending
-    const canRetry = item.status === 'failed'
+    const canRetry = item.status === 'failed' || item.status === 'uncertain'
     const canCancel = item.status === 'pending' || item.status === 'retrying' || item.status === 'failed'
 
     return (
@@ -148,11 +162,13 @@ export function OutboxModal() {
             {item.status === 'sent' && (
               <div className="text-[10px] text-ink-3 mt-0.5">{t('Sent {when}', { when: relative(item.sentAt) })}</div>
             )}
-            {item.error && item.status === 'failed' && (
+            {!!item.history?.length && <details className="text-xs mt-2"><summary>{t('Delivery history')}</summary>{item.history.map((event, index) => <p key={index}>{new Date(event.at).toLocaleString()} - {t(event.status)} {event.detail}</p>)}<p>{t('Sent means accepted by the mail provider; recipient delivery is not guaranteed.')}</p></details>}
+            {item.error && (item.status === 'failed' || item.status === 'uncertain') && (
               <div className="text-[10px] text-danger mt-1 break-words">{item.error}</div>
             )}
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
+            {['pending', 'retrying', 'failed', 'cancelled'].includes(item.status) && <button className="text-xs text-info" onClick={() => { editingId.current = item.id; setEditing(item); setEditTo(item.to); setEditSubject(item.subject); setEditAt(''); setEditText(undefined); setBodyEdited(false); emailsApi.outboxDetail(item.id).then(detail => { if (editingId.current === item.id) setEditText(detail.email?.text || '') }).catch(e => showNotification('error', String(e))) }}>{t('Edit / reschedule')}</button>}
             {canRetry && (
               <button
                 onClick={() => act(item, 'retry')}
@@ -222,6 +238,17 @@ export function OutboxModal() {
               )}
             </>
           )}
+          {editing && <form className="space-y-2 border border-line rounded-xl p-3" onSubmit={async e => {
+            e.preventDefault(); setBusyId(editing.id)
+            try { await emailsApi.editOutbox(editing.id, { to: editTo, subject: editSubject, text: bodyEdited ? editText : undefined, sendAt: editAt ? new Date(editAt).toISOString() : undefined }); setEditing(null); await refresh() }
+            catch (error) { showNotification('error', String(error)) } finally { setBusyId(null) }
+          }}>
+            <label className="block">{t('To')}<input required aria-label="Edit recipient" className="field w-full" value={editTo} onChange={e => setEditTo(e.target.value)} /></label>
+            <label className="block">{t('Subject')}<input aria-label="Edit subject" className="field w-full" value={editSubject} onChange={e => setEditSubject(e.target.value)} /></label>
+            <label className="block">{t('Message (plain text)')}<textarea aria-label="Edit message" className="field w-full" value={editText ?? ''} disabled={editText === undefined} onChange={e => { setBodyEdited(true); setEditText(e.target.value) }} /></label>
+            <label className="block">{t('Send at (leave empty to send now)')}<input aria-label="Reschedule" type="datetime-local" className="field" value={editAt} onChange={e => setEditAt(e.target.value)} /></label>
+            <button disabled={!!busyId} className="text-info">{t('Save and queue')}</button> <button type="button" onClick={() => setEditing(null)}>{t('Cancel')}</button>
+          </form>}
           {active.map(renderRow)}
           {finished.length > 0 && (
             <>

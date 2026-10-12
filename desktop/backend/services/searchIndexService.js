@@ -44,9 +44,12 @@ function tokenize(text) {
   if (!text) return [];
   return String(text)
     .toLowerCase()
-    .split(/[^a-z0-9@._+-]+/)
+    .normalize('NFKC')
+    .split(/[^\p{L}\p{N}@._+-]+/u)
+    .flatMap(word => /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(word)
+      ? Array.from(new Intl.Segmenter('zh', { granularity: 'word' }).segment(word), s => s.segment) : [word])
     .map(t => t.replace(/^[._-]+|[._-]+$/g, ''))
-    .filter(t => t.length >= 2 && t.length <= 40 && !STOPWORDS.has(t));
+    .filter(t => (t.length >= 2 || /\p{Script=Han}/u.test(t)) && t.length <= 40 && !STOPWORDS.has(t));
 }
 
 // An address token also indexes its local part and domain, so searching

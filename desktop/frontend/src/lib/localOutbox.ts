@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { emailsApi } from '../api/client'
-import { readJson, writeListWithinQuota } from './storage'
+import { readPrivate, updatePrivate } from './privateStorage'
 
 /**
  * A send queue that lives in the browser, in front of the server's.
@@ -31,6 +31,7 @@ export interface LocalOutboxItem {
   to: string
   queuedAt: string
   attempts: number
+  rejected?: boolean
   lastError: string | null
 }
 
@@ -38,15 +39,12 @@ type Listener = (items: LocalOutboxItem[]) => void
 const listeners = new Set<Listener>()
 
 function read(): LocalOutboxItem[] {
-  const items = readJson<LocalOutboxItem[]>(KEY, [])
+  const items = readPrivate<LocalOutboxItem[]>(KEY, [])
   return Array.isArray(items) ? items : []
 }
 
-function write(items: LocalOutboxItem[]) {
-  // Attachments are base64 in the payload, so a queue of two large messages can
-  // exceed the origin quota. Oldest-first is the wrong thing to drop, but the
-  // alternative is an exception that takes the composer down mid-send.
-  const { stored } = writeListWithinQuota(KEY, items)
+async function update(change: (items: LocalOutboxItem[]) => LocalOutboxItem[]) {
+  const stored = await updatePrivate<LocalOutboxItem[]>(KEY, change)
   for (const listener of listeners) listener(stored)
   return stored
 }
@@ -66,11 +64,11 @@ export function count(): number {
 }
 
 /**
- * Did this failure mean "the server never saw it"?
+ * Is retrying this idempotent request appropriate?
  *
  * A 4xx is the server having an opinion — a malformed address, an alias the
  * account does not own — and retrying that forever would be a spin. Only a
- * transport failure or a server-side error is worth holding onto.
+ * transport failure or a server-side error is held with the same request id.
  */
 export function isUnreachable(err: unknown): boolean {
   if (!axios.isAxiosError(err)) return false
@@ -78,23 +76,23 @@ export function isUnreachable(err: unknown): boolean {
   return err.response.status >= 500
 }
 
-export function enqueue(accountId: string, payload: SendPayload, error: unknown): LocalOutboxItem {
+export async function enqueue(accountId: string, payload: SendPayload, error: unknown): Promise<LocalOutboxItem> {
   const item: LocalOutboxItem = {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     accountId,
-    payload,
+    payload: { ...payload, requestId: payload.requestId || crypto.randomUUID() },
     subject: payload.subject || '(no subject)',
     to: payload.to || '',
     queuedAt: new Date().toISOString(),
     attempts: 1,
     lastError: error instanceof Error ? error.message : 'Could not reach the Hermes service',
   }
-  write([...read(), item])
+  await update(items => [...items.filter(existing => existing.accountId !== accountId || existing.payload.requestId !== item.payload.requestId), item])
   return item
 }
 
-export function remove(id: string) {
-  write(read().filter(item => item.id !== id))
+export async function remove(id: string) {
+  await update(items => items.filter(item => item.id !== id))
 }
 
 let flushing = false
@@ -102,29 +100,29 @@ let flushing = false
 /**
  * Try to hand every parked message to the server.
  *
- * Runs one at a time and in order, so a queue of replies arrives in the order
- * it was written. An item that the server *rejects* is dropped from the queue
- * with its reason recorded — it will never succeed, and leaving it in place
+ * Runs one at a time and in order. Permanently rejected items stay visible
+ * with their reason and wait for an explicit retry — it will never succeed, and leaving it in place
  * would block everything behind it.
  *
  * @returns the number of messages that made it through.
  */
-export async function flush(): Promise<number> {
+export async function flush(includeRejected = false): Promise<number> {
   if (flushing) return 0
   flushing = true
   let sent = 0
 
   try {
+    // Persist IDs for migrated messages before making a request.
+    await update(items => items.map(item => item.payload.requestId ? item : { ...item, payload: { ...item.payload, requestId: crypto.randomUUID() } }))
     for (const item of read()) {
+      if (item.rejected && !includeRejected) continue
       try {
         await emailsApi.send(item.accountId, item.payload)
-        remove(item.id)
         sent++
       } catch (err) {
         if (isUnreachable(err)) break // still down; leave the rest for later
-        // A permanent rejection. Drop it rather than retrying forever, but keep
-        // the reason visible so the user is not left wondering.
-        write(read().map(existing => existing.id === item.id
+        // Preserve the message, but pause automatic retries after a rejection.
+        await update(items => items.map(existing => existing.id === item.id
           ? {
               ...existing,
               attempts: existing.attempts + 1,
@@ -132,7 +130,11 @@ export async function flush(): Promise<number> {
               rejected: true,
             } as LocalOutboxItem
           : existing))
+        continue
       }
+      // A storage error after acceptance must not be reported as a server rejection.
+      // Keeping the same request ID makes a later cleanup retry safe.
+      await remove(item.id)
     }
   } finally {
     flushing = false

@@ -1,9 +1,10 @@
+import { updatePrivate } from '../lib/privateStorage'
 import { create } from 'zustand'
 import type {
   Account, EmailSummary, EmailBody, Folder, ComposeData, EmailCategory, SnoozeItem,
   Draft, UnreadCounts, OutboxItem, Alias, Followup, MutedThread,
 } from '../types/email'
-import { readJson, writeJson, writeListWithinQuota } from '../lib/storage'
+import { readJson, writeJson } from '../lib/storage'
 
 /** Where "Send & archive" moved the original, for an Undo to reverse. */
 export interface ArchivedOriginal {
@@ -190,8 +191,8 @@ interface EmailStore {
 
   // Drafts (localStorage-persisted)
   drafts: Draft[]
-  saveDraft: (draft: Draft) => void
-  deleteDraft: (id: string) => void
+  saveDraft: (draft: Draft) => Promise<void>
+  deleteDraft: (id: string) => Promise<void>
   showDraftsModal: boolean
   setShowDraftsModal: (show: boolean) => void
 
@@ -534,21 +535,15 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   // Drafts — persisted in localStorage. Drafts carry base64 attachments, so a
   // save can exceed the origin quota; the oldest drafts are shed rather than
   // letting the write throw out of the setter and take the UI with it.
-  drafts: readJson<Draft[]>('hermes-drafts', []),
-  saveDraft: (draft) => set((s) => {
-    const next = [draft, ...s.drafts.filter(d => d.id !== draft.id)]
-    const { stored, dropped } = writeListWithinQuota('hermes-drafts', next)
-    if (dropped > 0) {
-      // The draft being saved is first in the list, so it is never the one shed.
-      console.warn(`[drafts] Local storage full — dropped ${dropped} older draft(s).`)
-    }
-    return { drafts: stored }
-  }),
-  deleteDraft: (id) => set((s) => {
-    const next = s.drafts.filter(d => d.id !== id)
-    writeJson('hermes-drafts', next)
-    return { drafts: next }
-  }),
+  drafts: [],
+  saveDraft: async (draft) => {
+    const stored = await updatePrivate<Draft[]>('hermes-drafts', drafts => [draft, ...drafts.filter(d => d.id !== draft.id)])
+    set({ drafts: stored })
+  },
+  deleteDraft: async (id) => {
+    const stored = await updatePrivate<Draft[]>('hermes-drafts', drafts => drafts.filter(d => d.id !== id))
+    set({ drafts: stored })
+  },
   showDraftsModal: false,
   setShowDraftsModal: (show) => set({ showDraftsModal: show }),
 

@@ -217,9 +217,10 @@ export interface MailTemplate { id: string; name: string; subject: string; body:
 
 // ─── Outbox ──────────────────────────────────────────────────────────────────
 
-export type OutboxStatus = 'pending' | 'sending' | 'retrying' | 'sent' | 'failed' | 'cancelled';
+export type OutboxStatus = 'pending' | 'sending' | 'retrying' | 'sent' | 'failed' | 'cancelled' | 'uncertain';
 
 export interface OutboxItem {
+  history?: { at: string; status: string; detail?: string }[];
   id: string;
   accountId: string;
   to: string;

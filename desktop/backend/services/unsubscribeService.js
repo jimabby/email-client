@@ -1,5 +1,6 @@
 const dns = require('dns').promises;
 const net = require('net');
+const https = require('https');
 
 // One-click unsubscribe (RFC 2369 List-Unsubscribe + RFC 8058).
 //
@@ -37,8 +38,22 @@ function isPrivateAddress(address) {
   if (net.isIPv6(ip)) {
     const lower = ip.toLowerCase();
     if (lower === '::' || lower === '::1') return true;
+    // WHATWG URL canonicalizes mapped IPv4 into hexadecimal IPv6 groups.
+    const groups = lower.split('::');
+    let parts = lower.split(':');
+    if (groups.length === 2) {
+      const left = groups[0] ? groups[0].split(':') : [];
+      const right = groups[1] ? groups[1].split(':') : [];
+      parts = [...left, ...Array(8 - left.length - right.length).fill('0'), ...right];
+    }
+    const canonical = parts.map(p => parseInt(p || '0', 16));
     const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
     if (mapped) return isPrivateAddress(mapped[1]);
+    if (canonical.length === 8 && canonical.slice(0, 5).every(n => n === 0) && canonical[5] === 65535) {
+      return isPrivateAddress([canonical[6] >> 8, canonical[6] & 255, canonical[7] >> 8, canonical[7] & 255].join('.'));
+    }
+    // Reject transition/compatible ranges; only global unicast is useful here.
+    if (!/^[23]/.test(lower) || /^(2001:0:|2002:)/.test(lower)) return true;
     return /^(fc|fd|fe[89ab]|ff)/.test(lower);
   }
   return true;
@@ -60,6 +75,7 @@ async function assertPublicHttps(url, { lookup = dns.lookup } = {}) {
   if (!addresses.length || addresses.some(a => isPrivateAddress(a.address))) {
     throw new Error('Unsubscribe URL points at a private address');
   }
+  parsed.validatedAddresses = addresses.map(a => ({ address: a.address.replace(/^\[|\]$/g, ''), family: net.isIP(a.address.replace(/^\[|\]$/g, '')) }));
   return parsed;
 }
 
@@ -84,22 +100,43 @@ function parseMailto(uri) {
  * @param {{ sendMail: (mail: {to,subject,text}) => any, fetchImpl?: typeof fetch, lookup?: Function }} deps
  * @returns {Promise<{ method: 'one-click'|'mailto'|'browser'|'none', url?: string, to?: string }>}
  */
-async function unsubscribe(headers, { sendMail, fetchImpl = fetch, lookup } = {}) {
+
+// Resolve once, then pin the socket lookup to the checked address. TLS still
+// verifies the original hostname; redirects are returned without following.
+function pinnedPost(target) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(target, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      lookup: (_host, options, callback) => {
+        const address = target.validatedAddresses[0];
+        if (options.all) callback(null, [address]);
+        else callback(null, address.address, address.family);
+      },
+      timeout: 15000,
+    }, res => { res.resume(); resolve({ status: res.statusCode }); });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('Unsubscribe request timed out')));
+    req.end('List-Unsubscribe=One-Click');
+  });
+}
+
+async function unsubscribe(headers, { sendMail, fetchImpl, lookup } = {}) {
   const uris = parseListUnsubscribe(headers.listUnsubscribe);
   const https = uris.find(u => /^https:/i.test(u));
   const mailto = uris.find(u => /^mailto:/i.test(u));
 
   if (https && isOneClick(headers.listUnsubscribePost)) {
     const target = await assertPublicHttps(https, { lookup });
-    const res = await fetchImpl(target.toString(), {
+    const res = fetchImpl ? await fetchImpl(target.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'List-Unsubscribe=One-Click',
       // A redirect could land on a private address the check above never saw.
       redirect: 'manual',
       signal: AbortSignal.timeout(15000),
-    });
-    if (res.status >= 200 && res.status < 400) return { method: 'one-click', url: target.toString() };
+    }) : await pinnedPost(target);
+    if (res.status >= 200 && res.status < 300) return { method: 'one-click', url: target.toString() };
     // A refused POST still leaves the page route available.
     return { method: 'browser', url: target.toString() };
   }

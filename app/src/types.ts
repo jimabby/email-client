@@ -57,9 +57,10 @@ export interface Folder {
 /** unreadCounts response: accountId -> folderPath -> counts */
 export type UnreadCounts = Record<string, Record<string, { unread: number; total: number }>>;
 
-export type OutboxStatus = 'pending' | 'sending' | 'retrying' | 'sent' | 'failed' | 'cancelled';
+export type OutboxStatus = 'pending' | 'sending' | 'retrying' | 'sent' | 'failed' | 'cancelled' | 'uncertain';
 
 export interface OutboxItem {
+  history?: { at: string; status: string; detail?: string }[];
   id: string;
   accountId: string;
   to: string;

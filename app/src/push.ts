@@ -24,7 +24,8 @@ const TOKEN_KEY = 'hermes-push-token';
 // for — and without this the notification is silently swallowed.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),

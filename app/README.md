@@ -5,6 +5,11 @@ always-on cloud backend; the desktop computer does not need to be running.
 
 ## Setup
 
+Use Node 24 and an Expo 57 compatible development client. Rebuild native apps
+after this upgrade. See [recovery notes](../docs/reliability.md) for validation
+commands and dependency limitations.
+
+
 ```bash
 cd app
 npm install
@@ -18,7 +23,8 @@ an emulator.
 
 1. Deploy the backend using [`../deploy/README.md`](../deploy/README.md).
 2. In **Settings**, enter its public URL, such as `https://mail.example.com`.
-3. Paste the same random `API_TOKEN` configured on the server.
+3. Paste a per-device token created in the recovery settings using the server
+   master token, or use the server `API_TOKEN` for initial administration.
 4. Tap **Test connection**, then open Accounts.
 
 The token is stored through Expo SecureStore (iOS Keychain / Android Keystore)
@@ -42,7 +48,9 @@ so the phone cannot use it.
 - **Viewer** - full email with the earlier messages in its conversation, star,
   delete, archive, snooze, reply, attachments, and the AI summary / smart
   replies when a key is configured on the server
-- **Compose** - new message, reply, drafts, send later, and undo send
+- **Compose** - new message, reply, encrypted local draft recovery, attachments,
+  send later, and undo send
+- **Local drafts** - resume or discard drafts from Settings
 - **Screener** - first-time senders waiting for approval; allow or block each
   one (or a whole domain). Turn it on here or in the desktop app
 - **Outbox**, **Rules**, **Follow-ups** - the same lists the desktop shows

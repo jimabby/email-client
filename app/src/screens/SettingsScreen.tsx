@@ -1,3 +1,4 @@
+import { RecoverySettings } from '../components/RecoverySettings';
 import { useEffect, useMemo, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Switch,
@@ -92,6 +93,7 @@ export default function SettingsScreen({ navigation }: Props) {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20 }}>
+      <TouchableOpacity onPress={() => navigation.navigate('Drafts')}><Text style={styles.label}>{tr('Local drafts')}</Text></TouchableOpacity>
       <Text style={styles.label}>{tr('Backend server URL')}</Text>
       <Text style={styles.help}>
         {tr('Enter the public HTTPS address of your Hermes backend.')}
@@ -109,7 +111,7 @@ export default function SettingsScreen({ navigation }: Props) {
 
       <Text style={[styles.label, { marginTop: 20 }]}>{tr('API token')}</Text>
       <Text style={styles.help}>
-        {tr("Use the same API_TOKEN configured on the cloud server. It is kept in the phone's encrypted credential storage.")}
+        {tr("Use a device token created in desktop Settings ? Privacy ? Device access. It is kept in the phone's encrypted credential storage.")}
       </Text>
       <TextInput
         value={token}
@@ -228,6 +230,7 @@ export default function SettingsScreen({ navigation }: Props) {
       <Text style={styles.note}>
         {tr('The cloud backend stays online independently of your PC. For internet use, always use HTTPS and a long random API token.')}
       </Text>
+      <RecoverySettings />
     </ScrollView>
   );
 }

@@ -52,7 +52,7 @@ export function UndoSendBar() {
       // undo that too, or the message being replied to silently disappears.
       const archived = pendingSend.archived ? await pendingSend.archived : null
       if (!archived) {
-        showNotification('success', t('Send cancelled — the message is back in your drafts.'))
+        showNotification('success', t('Send cancelled; edit or reschedule the message in Outbox.'))
         return
       }
       if (!archived.undoId) {

@@ -187,11 +187,15 @@ function openStream(req, res, accountId) {
     res.write(`data: ${JSON.stringify({ type: 'new-mail', ...evt })}\n\n`);
   });
 
+  const accessEvents = require('../services/deviceAccessService').events;
+  const onRevoke = id => { if (id === req.auth?.deviceId) res.end(); };
+  accessEvents.on('revoke', onRevoke);
   const heartbeat = setInterval(() => {
     res.write(`data: ${JSON.stringify({ type: 'ping', at: new Date().toISOString() })}\n\n`);
   }, 25000);
 
   req.on('close', () => {
+    accessEvents.off('revoke', onRevoke);
     clearInterval(heartbeat);
     unsubscribe();
   });
@@ -324,11 +328,28 @@ router.get('/daily-report', (req, res) => {
 // ─── Outbox ─────────────────────────────────────────────────────────────────
 
 // Every queued, retrying, failed, and recently sent message.
+router.get('/outbox/:jobId', (req, res) => {
+  const item = store.getSendQueueItem(req.params.jobId);
+  if (!item) return res.status(404).json({ error: 'Message not found' });
+  res.json(item);
+});
+router.patch('/outbox/:jobId', (req, res) => {
+  try { res.json(require('../services/sendQueueService').editQueuedSend(req.params.jobId, req.body)); }
+  catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+router.get('/sync-status', (req, res) => res.json(require('../services/mailWatchService').syncStatus()));
+router.post('/sync/:accountId', (req, res) => {
+  if (!store.getAccount(req.params.accountId)) return res.status(404).json({ error: 'Account not found' });
+  require('../services/mailWatchService').handleNewMail(req.params.accountId, { source: 'manual-recovery' }).catch(console.error);
+  res.status(202).json({ accepted: true });
+});
+
 router.get('/outbox', (req, res) => res.json(listOutbox()));
 
 router.post('/outbox/:jobId/retry', (req, res) => {
   try {
-    res.json({ success: true, job: retryQueuedSend(req.params.jobId) });
+    res.json({ success: true, job: retryQueuedSend(req.params.jobId, { acknowledgeUncertain: req.body.acknowledgeUncertain === true }) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -343,7 +364,8 @@ router.post('/outbox/:jobId/cancel', (req, res) => {
 });
 
 router.delete('/outbox/:jobId', (req, res) => {
-  res.json({ success: store.removeSendQueueItem(req.params.jobId) });
+  try { res.json({ success: store.removeSendQueueItem(req.params.jobId) }); }
+  catch (error) { res.status(400).json({ error: error.message }); }
 });
 
 // ─── Rules & templates ──────────────────────────────────────────────────────
@@ -360,7 +382,9 @@ router.put('/rules', (req, res) => {
 // action is taken, so the user can check a rule before enabling it.
 router.post('/rules/preview', (req, res) => {
   const emails = Array.isArray(req.body.emails) ? req.body.emails.slice(0, 500) : [];
-  res.json({ matched: rulesService.previewRule(req.body.rule || {}, emails) });
+  const rule = rulesService.sanitizeRule({ ...req.body.rule, enabled: true });
+  const matched = rulesService.previewRule(rule, emails);
+  res.json({ matched, messages: emails.filter(e => matched.includes(e.id)).map(e => ({ id: e.id, subject: e.subject, from: e.from, actions: rule.actions })) });
 });
 
 // Run the stored rules over a batch of messages. Rules also run automatically
@@ -441,7 +465,7 @@ router.post('/trigger-report', async (req, res) => {
 // Body: { token, platform, accountIds? }
 router.post('/devices', (req, res) => {
   try {
-    const device = pushService.registerDevice(req.body || {});
+    const device = pushService.registerDevice({ ...req.body, accessDeviceId: req.auth?.deviceId });
     res.json({ success: true, device: { platform: device.platform, accountIds: device.accountIds } });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -1223,9 +1247,10 @@ router.post('/:accountId/send', async (req, res) => {
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   const {
-    to, cc, bcc, subject, text, html, attachments, sendAt, undoWindowSec,
+    to, cc, bcc, subject, text, html, attachments, sendAt, undoWindowSec, requestId,
     inReplyTo, references, threadId, replyToEmailId, replyToFolder, sendAs, followUpDays,
   } = req.body;
+  if (requestId !== undefined && (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))) return res.status(400).json({ error: 'Invalid requestId' });
   // An empty subject is legal mail; the composer asks before sending one.
   if (!String(to || '').trim()) return res.status(400).json({ error: 'At least one recipient is required' });
   if (followUpDays !== undefined && followUpDays !== null) {
@@ -1270,6 +1295,8 @@ router.post('/:accountId/send', async (req, res) => {
     // dropped connection, and it is what "Undo send" cancels.
     const queued = createQueuedSend({
       accountId: account.id,
+      requestId,
+      requestHash: require('crypto').createHash('sha256').update(JSON.stringify(req.body)).digest('hex'),
       email,
       sendAt,
       undoWindowSec: Number(undoWindowSec) || 0,
@@ -1278,7 +1305,7 @@ router.post('/:accountId/send', async (req, res) => {
     // "Remind me if no reply": the clock starts when the message actually
     // goes, and an undone send drops the reminder with it.
     let followup = null;
-    if (followUpDays) {
+    if (followUpDays && !store.getFollowups().some(f => f.jobId === queued.id)) {
       try {
         followup = followupService.createFollowup({
           accountId: account.id,
@@ -1303,7 +1330,7 @@ router.post('/:accountId/send', async (req, res) => {
     });
   } catch (err) {
     console.error('Send email error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

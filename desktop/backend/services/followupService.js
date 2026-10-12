@@ -54,6 +54,8 @@ function createFollowup({ accountId, jobId, to, cc, subject, threadId, sentAt, d
     id: uuidv4(),
     accountId,
     jobId: jobId || null,
+    days: span,
+    deliveryStarted: !jobId,
     to: Array.isArray(to) ? to.join(', ') : String(to || ''),
     recipients,
     subject: String(subject || '(no subject)').slice(0, 300),
@@ -94,6 +96,12 @@ function processFollowups(now = Date.now(), { notify = defaultNotify } = {}) {
     if (followup.jobId) {
       const job = store.getSendQueueItem(followup.jobId);
       if (job && job.status === 'cancelled') { store.removeFollowup(followup.id); continue; }
+      if (job && job.status !== 'sent') continue;
+      if (!followup.deliveryStarted && job?.sentAt) {
+        const days = followup.days || Math.max(1 / 24, (Date.parse(followup.dueAt) - Date.parse(followup.sentAt)) / 86400000);
+        Object.assign(followup, store.updateFollowup(followup.id, { deliveryStarted: true, sentAt: job.sentAt, dueAt: new Date(Date.parse(job.sentAt) + days * 86400000).toISOString() }));
+      }
+      if (!job && !followup.deliveryStarted) continue;
     }
 
     const reply = findReply(followup);

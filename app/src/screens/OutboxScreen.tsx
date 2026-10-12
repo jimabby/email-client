@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Alert,
+  View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Alert, TextInput,
 } from 'react-native';
 import { api, errorMessage } from '../api';
 import { useTheme } from '../ThemeContext';
@@ -13,6 +13,7 @@ import { useTr, tr as translate } from '../i18n';
 // is retried rather than lost. This screen is where a stuck one surfaces.
 
 const STATUS_LABEL: Record<OutboxStatus, string> = {
+  uncertain: 'Delivery uncertain',
   pending: 'Queued',
   sending: 'Sending',
   retrying: 'Retrying',
@@ -23,6 +24,7 @@ const STATUS_LABEL: Record<OutboxStatus, string> = {
 
 function statusColor(t: Palette): Record<OutboxStatus, string> {
   return {
+    uncertain: t.danger,
     pending: t.accent,
     sending: t.accent,
     retrying: t.accent,
@@ -38,6 +40,13 @@ export default function OutboxScreen() {
   const colors = useMemo(() => statusColor(t), [t]);
   const tr = useTr();
 
+  const editingId = useRef<string | null>(null);
+  const [editing, setEditing] = useState<OutboxItem | null>(null);
+  const [editTo, setEditTo] = useState('');
+  const [editSubject, setEditSubject] = useState('');
+  const [bodyEdited, setBodyEdited] = useState(false);
+  const [editText, setEditText] = useState<string | undefined>();
+  const [editAt, setEditAt] = useState('');
   const [items, setItems] = useState<OutboxItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -63,6 +72,10 @@ export default function OutboxScreen() {
   }, [load]);
 
   const act = async (item: OutboxItem, action: 'retry' | 'cancel' | 'discard') => {
+    if (action === 'retry' && item.status === 'uncertain') {
+      Alert.alert(tr('Check Sent mail first'), tr('Retrying may send a duplicate. Only continue if you have checked Sent mail.'), [{ text: tr('Cancel') }, { text: tr('Retry anyway'), onPress: () => { api.retryOutbox(item.id, true).then(load).catch(e => Alert.alert(tr('Error'), errorMessage(e))); } }]);
+      return;
+    }
     try {
       if (action === 'retry') await api.retryOutbox(item.id);
       else if (action === 'cancel') await api.cancelOutbox(item.id);
@@ -89,6 +102,15 @@ export default function OutboxScreen() {
           tintColor={t.accent}
         />
       }
+      ListHeaderComponent={editing ? <View style={{ padding: 20, gap: 12 }}>
+        <Text style={{ color: t.text }}>{tr('Edit / reschedule')}</Text>
+        <TextInput accessibilityLabel="Recipient" style={{ color: t.text }} value={editTo} onChangeText={setEditTo} placeholder="Recipient" />
+        <TextInput accessibilityLabel="Subject" style={{ color: t.text }} value={editSubject} onChangeText={setEditSubject} placeholder="Subject" />
+        <TextInput accessibilityLabel="Message" multiline editable={editText !== undefined} style={{ color: t.text }} value={editText || ''} onChangeText={value => { setBodyEdited(true); setEditText(value); }} placeholder="Message (plain text)" />
+        <TextInput accessibilityLabel="Send at" style={{ color: t.text }} value={editAt} onChangeText={setEditAt} placeholder="YYYY-MM-DD HH:mm (local time; empty = now)" />
+        <TouchableOpacity onPress={async () => { try { await api.editOutbox(editing.id, { to: editTo, subject: editSubject, text: bodyEdited ? editText : undefined, sendAt: editAt ? new Date(editAt).toISOString() : undefined }); setEditing(null); await load(); } catch (e) { Alert.alert(tr('Error'), errorMessage(e)); } }}><Text style={{ color: t.accent }}>{tr('Save and queue')}</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => setEditing(null)}><Text style={{ color: t.text }}>{tr('Cancel')}</Text></TouchableOpacity>
+      </View> : null}
       ListEmptyComponent={
         <Text style={styles.empty}>{error || tr('Nothing waiting to send.')}</Text>
       }
@@ -107,12 +129,14 @@ export default function OutboxScreen() {
               {tr('Attempt {count} failed — will try again automatically', { count: item.attempts ?? 0 })}
             </Text>
           )}
-          {item.status === 'failed' && !!item.error && (
+          {(item.status === 'failed' || item.status === 'uncertain') && !!item.error && (
             <Text style={styles.errorText}>{item.error}</Text>
           )}
 
+          {!!item.history?.length && <View><Text style={styles.detail}>{tr('Delivery history')}</Text>{item.history.map((event, index) => <Text key={index} style={styles.detail}>{new Date(event.at).toLocaleString()} - {event.status} {event.detail}</Text>)}</View>}
           <View style={styles.actions}>
-            {item.status === 'failed' && (
+            {['pending', 'retrying', 'failed', 'cancelled'].includes(item.status) && <TouchableOpacity onPress={() => { editingId.current = item.id; setEditing(item); setEditTo(item.to); setEditSubject(item.subject); setEditAt(''); setEditText(undefined); setBodyEdited(false); api.outboxDetail(item.id).then(d => { if (editingId.current === item.id) setEditText(d.email?.text || '') }).catch(e => Alert.alert(tr('Error'), errorMessage(e))); }}><Text style={styles.action}>{tr('Edit / reschedule')}</Text></TouchableOpacity>}
+            {(item.status === 'failed' || item.status === 'uncertain') && (
               <TouchableOpacity onPress={() => act(item, 'retry')}>
                 <Text style={styles.action}>{tr('Retry now')}</Text>
               </TouchableOpacity>

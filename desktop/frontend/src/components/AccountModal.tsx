@@ -1,3 +1,4 @@
+import { RecoverySettings } from './RecoverySettings'
 import { useState, useEffect } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { AwaySettings } from './AwaySettings'
@@ -556,6 +557,7 @@ export function AccountModal() {
           )}
           {tab === 'privacy' && (
             <div className="space-y-6">
+              <RecoverySettings />
               <section>
                 <h3 className="text-[15px] font-semibold text-ink mb-1 tracking-[-0.01em]">{t('Contact pictures')}</h3>
                 <p className="text-[12.5px] text-ink-3 mb-4 leading-relaxed">

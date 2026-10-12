@@ -29,6 +29,7 @@ declare global {
   interface Window {
     hermes?: {
       isDesktop: boolean
+      privateKey?: () => Promise<string>
       on: (channel: string, handler: (payload: unknown) => void) => () => void
       setChrome: (state: { theme?: 'light' | 'dark'; badgeDataUrl?: string }) => void
     }
