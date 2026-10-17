@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { emailsApi } from '../api/client'
 import { useT, t as translate } from '../lib/i18n'
@@ -22,6 +22,18 @@ function formatSaved(iso: string): string {
 export function DraftsModal() {
   const { drafts, accounts, deleteDraft, setShowDraftsModal, openCompose } = useEmailStore()
   const t = useT()
+  const [syncError, setSyncError] = useState('')
+  const loadShared = async () => {
+    try {
+      for (const draft of await emailsApi.sharedDrafts()) {
+        const local = useEmailStore.getState().drafts.find(d => d.id === draft.id)
+        if (local?.serverRef?.revision === draft.serverRef?.revision) continue
+        if (local) await useEmailStore.getState().saveDraft({ ...local, id: crypto.randomUUID(), serverRef: null })
+        await useEmailStore.getState().saveDraft({ ...draft, body: draft.html || '', to: draft.to || '', cc: draft.cc || '', bcc: draft.bcc || '', subject: draft.subject || '', attachments: (draft.attachments || []).map(a => ({ ...a, size: Math.ceil(a.content.length * 3 / 4) })) })
+      }
+      setSyncError('Shared drafts loaded. Conflicting local edits were kept as separate drafts.')
+    } catch (e) { setSyncError(String(e)) }
+  }
 
   const accountLabel = useMemo(() => {
     const map = new Map<string, string>()
@@ -52,7 +64,8 @@ export function DraftsModal() {
       body: draft.body,
       draftId: draft.id,
       // Restore the files that were attached when the draft was saved.
-      attachments: draft.attachments,
+      inReplyTo: draft.inReplyTo, references: draft.references, replyToEmailId: draft.replyToEmailId, replyToFolder: draft.replyToFolder,
+      attachments: draft.attachments, replyTo: draft.replyTo, sendAs: draft.sendAs,
     })
   }
 
@@ -67,6 +80,7 @@ export function DraftsModal() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
+          <button className="p-3 text-info" onClick={loadShared}>{t('Load shared drafts')}</button><p role="status" className="px-3 text-xs">{syncError}</p>
           {drafts.length === 0 ? (
             <div className="px-5 py-10 text-center text-xs text-ink-3 ">
               {t('No saved drafts. Start a message and click Save draft to keep it here.')}

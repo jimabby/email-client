@@ -1,3 +1,4 @@
+import { localSends, removeLocalSend, flushLocalSends, type LocalSend } from '../offline';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Alert, TextInput,
@@ -47,6 +48,7 @@ export default function OutboxScreen() {
   const [bodyEdited, setBodyEdited] = useState(false);
   const [editText, setEditText] = useState<string | undefined>();
   const [editAt, setEditAt] = useState('');
+  const [local, setLocal] = useState<LocalSend[]>([]);
   const [items, setItems] = useState<OutboxItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -54,6 +56,7 @@ export default function OutboxScreen() {
 
   const load = useCallback(async () => {
     try {
+      setLocal(await localSends());
       setItems(await api.outbox());
       setError(null);
     } catch (err) {
@@ -102,7 +105,14 @@ export default function OutboxScreen() {
           tintColor={t.accent}
         />
       }
-      ListHeaderComponent={editing ? <View style={{ padding: 20, gap: 12 }}>
+      ListHeaderComponent={<View>
+        {local.map(item => <View key={item.id} style={{ padding: 16 }}>
+          <Text style={{ color: t.text }}>{item.payload.subject || tr('(no subject)')}</Text>
+          <Text style={{ color: t.textMuted }}>{tr('Saved on this phone - not yet accepted by server')}{item.rejected ? ': ' + item.error : ''}</Text>
+          <TouchableOpacity onPress={() => flushLocalSends(api.send, true).then(load).catch(e => Alert.alert(tr('Error'), String(e)))}><Text style={{ color: t.accent }}>{tr('Retry')}</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => Alert.alert(tr('Remove queued message?'), tr('A lost server response may mean it was already accepted. Check the server outbox when connected.'), [{ text: tr('Cancel') }, { text: tr('Remove'), onPress: () => { removeLocalSend(item.id).then(load).catch(e => Alert.alert(tr('Error'), String(e))); } }])}><Text style={{ color: t.danger }}>{tr('Remove')}</Text></TouchableOpacity>
+        </View>)}
+        {editing ? <View style={{ padding: 20, gap: 12 }}>
         <Text style={{ color: t.text }}>{tr('Edit / reschedule')}</Text>
         <TextInput accessibilityLabel="Recipient" style={{ color: t.text }} value={editTo} onChangeText={setEditTo} placeholder="Recipient" />
         <TextInput accessibilityLabel="Subject" style={{ color: t.text }} value={editSubject} onChangeText={setEditSubject} placeholder="Subject" />
@@ -110,7 +120,7 @@ export default function OutboxScreen() {
         <TextInput accessibilityLabel="Send at" style={{ color: t.text }} value={editAt} onChangeText={setEditAt} placeholder="YYYY-MM-DD HH:mm (local time; empty = now)" />
         <TouchableOpacity onPress={async () => { try { await api.editOutbox(editing.id, { to: editTo, subject: editSubject, text: bodyEdited ? editText : undefined, sendAt: editAt ? new Date(editAt).toISOString() : undefined }); setEditing(null); await load(); } catch (e) { Alert.alert(tr('Error'), errorMessage(e)); } }}><Text style={{ color: t.accent }}>{tr('Save and queue')}</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => setEditing(null)}><Text style={{ color: t.text }}>{tr('Cancel')}</Text></TouchableOpacity>
-      </View> : null}
+      </View> : null}</View>}
       ListEmptyComponent={
         <Text style={styles.empty}>{error || tr('Nothing waiting to send.')}</Text>
       }

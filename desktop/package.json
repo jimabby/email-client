@@ -10,7 +10,10 @@
     "build:frontend": "cd frontend && npm run build",
     "pack": "npm run build:frontend && electron-builder --dir",
     "dist": "npm run build:frontend && electron-builder",
-    "test": "cd backend && npm test"
+    "test": "cd backend && npm test",
+    "postinstall": "node ../scripts/patch-tooling.cjs",
+    "test:security": "node ../scripts/patch-tooling.cjs",
+    "test:package": "node scripts/check-package.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
@@ -26,7 +29,8 @@
     "mailparser": "^3.9.30",
     "node-cron": "^4.2.1",
     "nodemailer": "^10.0.12",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "re2js": "^2.8.6"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -61,7 +65,11 @@
       "!backend/**/*.tmp",
       "!backend/test/**/*",
       "frontend/dist/**/*",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!backend/**/email-cache/**/*",
+      "!backend/**/shared-drafts.json",
+      "!backend/**/search-coverage.json",
+      "build/icons/**/*"
     ],
     "win": {
       "target": "nsis",

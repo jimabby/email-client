@@ -9,6 +9,11 @@ The interface is available in English and Simplified Chinese (简体中文).
 
 ## What's in this repository
 
+The October review adds encrypted draft autosave, mobile offline reading and an
+outbox, shared draft conflict handling, send checks, search backfill controls, and
+AI privacy settings. See the [implementation report](docs/review-implementation-2026-10-17.md)
+for usage, validation, dependency mitigations, and limits.
+
 ```
 email-client/
 ├── desktop/            Desktop app: Electron shell + Node backend + React UI

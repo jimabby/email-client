@@ -136,7 +136,7 @@ export function DialogHost() {
               />
             </>
           ) : (
-            request.body && <p className="text-[13px] text-ink-2 mt-2 leading-relaxed">{request.body}</p>
+            request.body && <p className="text-[13px] text-ink-2 mt-2 leading-relaxed max-h-[50vh] overflow-y-auto whitespace-pre-wrap break-words">{request.body}</p>
           )}
         </div>
 

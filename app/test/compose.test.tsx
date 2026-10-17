@@ -1,4 +1,5 @@
 /// <reference types="jest" />
+jest.mock('../src/offline', () => ({ queueOffline: jest.fn(), offlineUnavailable: () => false }));
 import React from 'react';
 import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';

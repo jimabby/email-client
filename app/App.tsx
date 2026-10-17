@@ -1,6 +1,7 @@
+import { flushLocalSends } from './src/offline';
 import DraftsScreen from './src/screens/DraftsScreen';
 import { useEffect, useMemo, useRef } from 'react';
-import { View, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
+import { View, ActivityIndicator, TouchableOpacity, Text, AppState } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Notifications from 'expo-notifications';
@@ -32,9 +33,16 @@ import ScreenerScreen from './src/screens/ScreenerScreen';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function Root() {
-  const { serverReady, serverUrl, loadServerUrl } = useAppStore();
+  const { serverReady, serverUrl, apiToken, offline, loadServerUrl } = useAppStore();
   const { t, ui, mode } = useTheme();
   const tr = useTr();
+  useEffect(() => {
+    if (!serverReady || !serverUrl) return;
+    const flush = () => { flushLocalSends(api.send).catch(() => {}); };
+    flush(); const timer = setInterval(flush, 30000);
+    const listener = AppState.addEventListener('change', state => { if (state === 'active') flush(); });
+    return () => { clearInterval(timer); listener.remove(); };
+  }, [serverReady, serverUrl, apiToken]);
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
   // A notification can arrive before the navigator is mounted (a cold start
   // from a tapped banner), so the target is held until navigation is ready.
@@ -138,6 +146,7 @@ function Root() {
   return (
     <>
       <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+      {offline && <Text accessibilityRole="alert" style={{ padding: 10, backgroundColor: '#fff4ce', color: '#332800' }}>Offline: showing encrypted saved mail. Changes require a connection.</Text>}
       <NavigationContainer
         ref={navigationRef}
         theme={navTheme}

@@ -7,7 +7,8 @@ import type { Account, EmailSummary } from './types';
 import { useAppStore } from './store';
 export interface DraftAttachment { filename: string; contentType: string; content: string }
 export interface MobileDraft {
-  id: string; serverUrl: string; account: Account; replyTo?: EmailSummary;
+  inReplyTo?: string; references?: string; replyToEmailId?: string; replyToFolder?: string;
+  id: string; serverRef?: any; serverUrl: string; account: Account; replyTo?: EmailSummary;
   to: string; cc: string; bcc: string; subject: string; body: string;
   attachments: DraftAttachment[]; savedAt: string; requestId: string;
 }

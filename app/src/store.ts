@@ -6,6 +6,7 @@ const SERVER_KEY = 'hermes-server-url';
 const TOKEN_KEY = 'hermes-api-token';
 
 interface AppState {
+  offline: boolean;
   serverUrl: string;
   apiToken: string;
   serverReady: boolean; // hydrated from storage yet?
@@ -23,6 +24,7 @@ function normalizeUrl(url: string): string {
 }
 
 export const useAppStore = create<AppState>((set) => ({
+  offline: false,
   serverUrl: '',
   apiToken: '',
   serverReady: false,

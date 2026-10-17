@@ -308,6 +308,7 @@ export interface DraftAttachment {
 }
 
 export interface ComposeData {
+  inReplyTo?: string; references?: string; replyToEmailId?: string; replyToFolder?: string;
   to: string;
   cc: string;
   bcc: string;
@@ -333,6 +334,7 @@ export interface SnoozeItem {
 // Opaque reference to a draft saved in the provider's Drafts folder, so a later
 // save can replace it and sending can remove it.
 export interface ServerDraftRef {
+  sharedId?: string; revision?: number;
   type: 'gmail' | 'outlook' | 'imap';
   id?: string | null;
   uid?: number | null;
@@ -340,6 +342,8 @@ export interface ServerDraftRef {
 }
 
 export interface Draft {
+  inReplyTo?: string; references?: string; replyToEmailId?: string; replyToFolder?: string;
+  replyTo?: ComposeData['replyTo']; sendAs?: string;
   id: string;
   accountId: string;
   to: string;

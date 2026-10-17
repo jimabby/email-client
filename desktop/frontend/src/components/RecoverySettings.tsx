@@ -1,3 +1,4 @@
+import { MailControls } from './MailControls';
 import { useEffect, useState } from 'react'
 import { recoveryApi, type SyncStatus, type AccessDevice } from '../api/client'
 import { useT } from '../lib/i18n'
@@ -25,6 +26,7 @@ export function RecoverySettings() {
       {account.error && <p className="text-danger">{account.error}</p>}
       <button disabled={account.syncing} className="text-info" onClick={async () => { try { await recoveryApi.sync(account.accountId); await refresh() } catch (e) { setError(String(e)) } }}>{t('Retry sync')}</button>
     </div>)}
+    <MailControls />
     <h3>{t('Device access')}</h3>
     {!admin ? <p>{t('Use the master token to manage devices.')}</p> : <>
       <p>{t('Create a separate token for each phone. Copy it into the connection settings on that device. It grants mailbox access but cannot manage other device tokens.')}</p>

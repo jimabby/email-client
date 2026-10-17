@@ -7,6 +7,7 @@ async function setup(page: Page) {
     let body: unknown = []
     if (path.endsWith('/auth-check')) body = { authenticated: true }
     else if (path.endsWith('/auth/accounts')) body = accounts
+    else if (path.endsWith('/ai/privacy')) body = { localOnly: false, automaticAccounts: [] }
     else if (path.endsWith('/ai/settings')) body = { configured: false }
     else if (path.endsWith('/screener')) body = { enabled: false, pending: [], allowed: [], blocked: [] }
     else if (path.endsWith('/unread-counts')) body = {}
@@ -71,4 +72,24 @@ test('permanently rejected offline messages remain visible without background re
   await page.evaluate(async () => { const q = await import('/src/lib/localOutbox.ts'); await q.flush(); await q.flush() })
   expect(calls).toBe(1)
   expect(await page.evaluate(async () => (await import('/src/lib/localOutbox.ts')).list()[0].rejected)).toBe(true)
+})
+
+
+test('writing autosaves encrypted draft before closing or sending', async ({ page }) => {
+  await setup(page); await compose(page)
+  await expect(page.getByRole('status').filter({ hasText: 'Draft saved locally' })).toBeVisible()
+  await page.reload(); await page.getByLabel('Storage passphrase').fill('test-only-storage-passphrase'); await page.getByRole('button', { name: 'Unlock', exact: true }).click()
+  await expect.poll(() => page.evaluate(async () => (await import('/src/store/emailStore.ts')).useEmailStore.getState().drafts.some(d => d.subject === 'Important draft' && d.body.includes('Keep this message')))).toBe(true)
+  expect(await page.evaluate(() => localStorage.getItem('hermes-drafts'))).toBeNull()
+})
+
+test('missing attachment warning can cancel delivery', async ({ page }) => {
+  await setup(page); await compose(page)
+  await page.locator('[contenteditable=true]').first().fill('Please see the attached file')
+  let calls = 0; await page.route('**/api/emails/one/send', route => { calls++; return route.fulfill({ json: { queued: true, jobId: 'job' } }) })
+  await page.getByLabel('Send email', { exact: true }).click()
+  await expect(page.getByText('Your message mentions an attachment, but no files are attached.')).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(calls).toBe(0)
+  await expect(page.getByPlaceholder('Email subject')).toHaveValue('Important draft')
 })

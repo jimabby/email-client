@@ -1,3 +1,4 @@
+import { MailControls } from './MailControls';
 import { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity } from 'react-native';
 import { api, errorMessage, type SyncStatus, type AccessDevice } from '../api';
@@ -23,6 +24,7 @@ export function RecoverySettings() {
       {!!account.error && <Text style={{ color: t.danger }}>{account.error}</Text>}
       <TouchableOpacity disabled={account.syncing} onPress={() => api.sync(account.accountId).then(refresh).catch(e => setError(errorMessage(e)))}><Text style={{ color: t.accent }}>{tr('Retry sync')}</Text></TouchableOpacity>
     </View>)}
+    <MailControls />
     <Text style={{ color: t.text, fontWeight: 'bold' }}>{tr('Device access')}</Text>
     {!admin ? <Text style={{ color: t.textMuted }}>{tr('Use the master token to manage devices.')}</Text> : <>
       <TextInput accessibilityLabel="Device name" value={name} onChangeText={setName} placeholder={tr('Device name')} style={{ color: t.text }} />

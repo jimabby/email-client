@@ -1,3 +1,4 @@
+import { sendChecks } from '../../../../shared/sendChecks'
 import { useState, useRef, useCallback, useEffect, type ChangeEvent } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { createPortal } from 'react-dom'
@@ -8,7 +9,7 @@ import Placeholder from '@tiptap/extension-placeholder'
 import { useEmailStore, type ArchivedOriginal } from '../store/emailStore'
 import { promptDialog, confirmDialog } from './DialogHost'
 import * as localOutbox from '../lib/localOutbox'
-import { emailsApi, streamAiSuggestion, type StreamHandle } from '../api/client'
+import { emailsApi, aiApi, streamAiSuggestion, type StreamHandle } from '../api/client'
 import type { AiMode, Alias, DraftAttachment, MailTemplate } from '../types/email'
 import { useT, t as translate } from '../lib/i18n'
 
@@ -248,6 +249,17 @@ export function ComposeModal() {
   const [accountId, setAccountId] = useState(composeData?.accountId || accounts[0]?.id || '')
   const [showCcBcc, setShowCcBcc] = useState(!!(composeData?.cc || composeData?.bcc))
   const [isSending, setIsSending] = useState(false)
+  const [bodyVersion, setBodyVersion] = useState(0)
+  const [draftStatus, setDraftStatus] = useState('')
+  const [checkRecipients, setCheckRecipients] = useState(false)
+  const autosaveStopped = useRef(false)
+  const autosaveTail = useRef<Promise<unknown>>(Promise.resolve())
+  const [aiPrivacy, setAiPrivacy] = useState<{ localOnly: boolean; automaticAccounts: string[] }>({ localOnly: true, automaticAccounts: [] })
+  const completionAccount = useRef(accountId)
+  completionAccount.current = accountId
+  const completionAllowed = useRef(false)
+  completionAllowed.current = !aiPrivacy.localOnly && (aiPrivacy.automaticAccounts || []).includes(accountId)
+  useEffect(() => { aiApi.privacy().then(setAiPrivacy).catch(() => {}) }, [accountId])
   // Restored drafts and forwards arrive with their attachment bytes already
   // in hand; newly picked files are read lazily at send time.
   const [attachments, setAttachments] = useState<PendingAttachment[]>(
@@ -307,7 +319,7 @@ export function ComposeModal() {
   const initialHtml = (() => {
     const base = composeData?.body || ''
     const sig = getSignatureFor(accountId, sendAs || null)
-    if (!isReply && sig) {
+    if (!isReply && !composeData?.draftId && sig) {
       return base + `<p></p><p>--<br>${sig.replace(/\n/g, '<br>')}</p>`
     }
     return base
@@ -347,19 +359,21 @@ export function ComposeModal() {
       },
     },
     onUpdate: ({ editor: current }) => {
+      setBodyVersion(v => v + 1)
       setSmartCompletion('')
-      if (!aiConfigured) return
+      if (!aiConfigured || !completionAllowed.current) return
       if (smartTimerRef.current) window.clearTimeout(smartTimerRef.current)
       const text = current.getText().trim()
       if (text.length < 20) return
       smartTimerRef.current = window.setTimeout(() => {
+        if (!completionAllowed.current) return
         // streamAiSuggestion now hands back the handle synchronously, so the
         // previous suggestion is genuinely aborted instead of being left to
         // run to completion in the background on every keystroke pause.
         smartAbortRef.current?.abort()
         let completion = ''
         smartAbortRef.current = streamAiSuggestion(
-          { subject: subjectRef.current, body: text, mode: 'complete' },
+          { subject: subjectRef.current, body: text, mode: 'complete', accountId: completionAccount.current, automatic: true },
           chunk => { completion += chunk; setSmartCompletion(completion) },
           () => {}, () => setSmartCompletion('')
         )
@@ -485,8 +499,15 @@ export function ComposeModal() {
       })
       if (!ok) return
     }
+    const warnings = sendChecks({ to, cc, bcc, text: editor?.getText() || '', attachmentCount: attachments.length,
+      sender: sendAs || accounts.find(a => a.id === accountId)?.email || '', knownRecipients: contacts,
+      originalRecipient: composeData?.replyTo?.to, checkRecipients })
+    if (warnings.length && !await confirmDialog({ title: t('Check before sending'), body: warnings.join('\n\n'), confirmLabel: t('Send anyway') })) return
+    autosaveStopped.current = true
     setIsSending(true)
     try {
+      await autosaveTail.current
+      await saveDraft(buildDraft(existingServerRef(), await resolveAttachments()))
       const html = editor?.getHTML() || ''
       const text = editor?.getText() || ''
       const attachmentData = attachments.length ? await resolveAttachments() : undefined
@@ -503,11 +524,11 @@ export function ComposeModal() {
         sendAt: showSchedule && scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
         undoWindowSec: undoWindowSec > 0 ? undoWindowSec : undefined,
         sendAs: sendAs ? { email: sendAs, name: aliases.find(a => a.email === sendAs)?.name } : undefined,
-        inReplyTo: r?.messageId || undefined,
-        references: r?.references || undefined,
+        inReplyTo: r?.messageId || composeData?.inReplyTo || undefined,
+        references: r?.references || composeData?.references || undefined,
         threadId: ownsOriginal ? r?.threadId || undefined : undefined,
-        replyToEmailId: ownsOriginal ? r?.id : undefined,
-        replyToFolder: ownsOriginal ? r?.folder : undefined,
+        replyToEmailId: ownsOriginal ? r?.id : composeData?.replyToEmailId,
+        replyToFolder: ownsOriginal ? r?.folder : composeData?.replyToFolder,
         followUpDays: followUpDays > 0 ? followUpDays : undefined,
       }
 
@@ -592,7 +613,7 @@ export function ComposeModal() {
       closeCompose()
     } catch (err: unknown) {
       showNotification('error', err instanceof Error ? err.message : t('Failed to send email'))
-    } finally { setIsSending(false) }
+    } finally { autosaveStopped.current = false; setIsSending(false) }
   }
   sendRef.current = () => { handleSend() }
 
@@ -619,35 +640,62 @@ export function ComposeModal() {
     savedAt: new Date().toISOString(),
     serverRef,
     // Without this a saved draft came back with its attachments silently gone.
-    attachments: attachmentData,
+    inReplyTo: composeData?.inReplyTo, references: composeData?.references, replyToEmailId: composeData?.replyToEmailId, replyToFolder: composeData?.replyToFolder,
+    attachments: attachmentData, replyTo: composeData?.replyTo, sendAs,
   })
+
+  useEffect(() => {
+    if (!editor || autosaveStopped.current || isSending) return
+    const timer = window.setTimeout(() => {
+      if (autosaveStopped.current || !hasDraftContent()) return
+      setDraftStatus('Saving draft...')
+      const snapshot = buildDraft()
+      const files = resolveAttachments()
+      const task = autosaveTail.current.catch(() => {}).then(async () => {
+        const data = await files
+        if (autosaveStopped.current) return
+        await saveDraft({ ...snapshot, attachments: data })
+        setDraftStatus('Draft saved locally')
+      }).catch(e => setDraftStatus('Draft not saved: ' + String(e)))
+      autosaveTail.current = task
+    }, 600)
+    return () => window.clearTimeout(timer)
+  }, [to, cc, bcc, subject, accountId, attachments, sendAs, bodyVersion, editor, isSending])
 
   // Explicit "Save draft": persist locally AND sync to the provider's Drafts
   // folder so it shows up in Gmail/Outlook and on other devices.
   const handleSaveDraft = async () => {
     if (!hasDraftContent()) { closeCompose(); return }
+    autosaveStopped.current = true
+    await autosaveTail.current
     const prevRef = existingServerRef()
     let attachmentData: DraftAttachment[] | undefined
     try {
       attachmentData = attachments.length ? await resolveAttachments() : undefined
     } catch {
+      autosaveStopped.current = false
       showNotification('error', t('Could not read attachments. Keep this window open and retry.'))
       return
     }
     try {
+      await saveDraft(buildDraft(prevRef, attachmentData))
       const { ref } = await emailsApi.saveServerDraft(accountId, {
         to, cc, bcc, subject,
         html: editor?.getHTML() || '', text: editor?.getText() || '',
         attachments: attachmentData,
-        replaceRef: prevRef,
+        replaceRef: prevRef, draftId: draftIdRef.current,
+        inReplyTo: composeData?.replyTo?.messageId || composeData?.inReplyTo, references: composeData?.replyTo?.references || composeData?.references,
+        replyToEmailId: composeData?.replyTo?.id || composeData?.replyToEmailId, replyToFolder: composeData?.replyTo?.folder || composeData?.replyToFolder,
       })
       await saveDraft(buildDraft(ref, attachmentData))
       showNotification('success', t('Draft saved'))
-    } catch {
+    } catch (error) {
+      autosaveStopped.current = false
       // Provider sync failed — keep a local copy so work isn't lost.
       try { await saveDraft(buildDraft(prevRef, attachmentData)) }
       catch { showNotification('error', t('Could not save draft. Keep this window open and retry.')); return }
-      showNotification('error', t('Draft saved locally (sync to mail server failed)'))
+      showNotification('error', String(error))
+      return
     }
     closeCompose()
   }
@@ -660,25 +708,32 @@ export function ComposeModal() {
     try {
       attachmentData = attachments.length ? await resolveAttachments() : undefined
     } catch {
+      autosaveStopped.current = false
       showNotification('error', t('Could not read attachments. Keep this window open and retry.'))
       return
     }
     try {
+      autosaveStopped.current = true
+      await autosaveTail.current
       await saveDraft(buildDraft(existingServerRef(), attachmentData))
       closeCompose()
-    } catch { showNotification('error', t('Could not save draft. Keep this window open and retry.')) }
+    } catch { autosaveStopped.current = false; showNotification('error', t('Could not save draft. Keep this window open and retry.')) }
   }
 
   // Discard (trash): drop the local draft and any server copy, then close.
   const handleDiscard = async () => {
     const ref = existingServerRef()
-    try { await deleteDraft(draftIdRef.current) } catch { showNotification('error', t('Could not discard draft')); return }
+    autosaveStopped.current = true
+    await autosaveTail.current
+    try { await deleteDraft(draftIdRef.current) } catch { autosaveStopped.current = false; showNotification('error', t('Could not discard draft')); return }
     if (ref) emailsApi.deleteServerDraft(accountId, ref).catch(() => {})
     closeCompose()
   }
 
-  const handleAiSuggest = useCallback(() => {
+  const handleAiSuggest = useCallback(async () => {
     if (isAiLoading) { abortRef.current?.abort(); setIsAiLoading(false); return }
+    if (aiPrivacy.localOnly) { setAiError('Local-only mode is enabled. Change AI privacy settings to use a provider.'); return }
+    if (!await confirmDialog({ title: t('Text sent to AI'), body: JSON.stringify({ subject, body: editor?.getText() || '', customPrompt, replyTo: composeData?.replyTo ? { from: composeData.replyTo.from, subject: composeData.replyTo.subject, body: composeData.replyTo.text || composeData.replyTo.html?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || '' } : undefined }, null, 2), confirmLabel: t('Continue') })) return
     setIsAiLoading(true); setAiDone(false); setAiSuggestion(''); setAiError('')
     const bodyText = editor?.getText() || ''
     const replyTo = composeData?.replyTo
@@ -698,7 +753,7 @@ export function ComposeModal() {
       () => { setIsAiLoading(false); setAiDone(true) },
       (err) => { setIsAiLoading(false); setAiError(err) }
     )
-  }, [subject, editor, aiMode, customPrompt, composeData, isAiLoading])
+  }, [subject, editor, aiMode, customPrompt, composeData, isAiLoading, aiPrivacy])
 
   const applyAiSuggestion = () => {
     if (aiMode === 'subject') {
@@ -1041,7 +1096,10 @@ export function ComposeModal() {
       >
         {t('AI Assist')}
       </button>
-      <button onClick={handleSaveDraft} title={t('Save draft')}
+      <span role="status" className="text-xs text-ink-3">{draftStatus}</span>
+        <label className="text-xs"><input type="checkbox" checked={checkRecipients} onChange={e => setCheckRecipients(e.target.checked)} /> {t('Check recipients')}</label>
+        <button className="text-xs text-info" onClick={() => { draftIdRef.current = crypto.randomUUID(); handleSaveDraft() }}>{t('Save as new shared draft')}</button>
+        <button onClick={handleSaveDraft} title={t('Save draft')}
         className="px-2.5 py-2 rounded-md text-[11px] font-semibold text-ink-2 border border-line hover:text-ink transition-colors">
         {t('Save draft')}
       </button>

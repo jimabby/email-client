@@ -1,3 +1,4 @@
+const { RE2JS } = require('re2js');
 const { randomUUID: uuidv4 } = require('crypto');
 const store = require('../store');
 
@@ -103,9 +104,8 @@ function conditionMatches(email, condition) {
     case 'isTrue': return !!rawHaystack;
     case 'matches':
       try {
-        // User-supplied patterns are capped in length and run against short
-        // header strings, which keeps catastrophic backtracking bounded.
-        return new RegExp(condition.value.slice(0, 200), condition.caseSensitive ? '' : 'i').test(rawHaystack);
+        // RE2 uses bounded matching; unsupported backreferences/lookarounds fail closed.
+        return RE2JS.compile(condition.value.slice(0, 200), condition.caseSensitive ? 0 : RE2JS.CASE_INSENSITIVE).matcher(rawHaystack).find();
       } catch {
         return false;
       }

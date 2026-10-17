@@ -338,6 +338,9 @@ router.patch('/outbox/:jobId', (req, res) => {
   catch (error) { res.status(400).json({ error: error.message }); }
 });
 
+router.get('/search-coverage', (req, res) => res.json(require('../services/searchCoverageService').coverage()));
+router.post('/search-backfill', (req, res) => { try { res.status(202).json(require('../services/searchCoverageService').start(req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); } });
+router.get('/shared-drafts', (req, res) => { try { res.json(require('../services/sharedDraftService').list()); } catch (e) { res.status(500).json({ error: e.message }); } });
 router.get('/sync-status', (req, res) => res.json(require('../services/mailWatchService').syncStatus()));
 router.post('/sync/:accountId', (req, res) => {
   if (!store.getAccount(req.params.accountId)) return res.status(404).json({ error: 'Account not found' });
@@ -1342,25 +1345,20 @@ router.post('/:accountId/drafts', async (req, res) => {
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   const {
-    to, cc, bcc, subject, text, html, attachments, replaceRef,
-    inReplyTo, references, sendAs,
+    to, cc, bcc, subject, text, html, attachments, replaceRef, draftId,
+    inReplyTo, references, sendAs, replyToEmailId, replyToFolder,
   } = req.body;
   try {
     const service = getService(account.type);
     if (!service.saveDraft) return res.status(400).json({ error: 'Drafts are not supported for this account' });
 
-    // Remove the previous server copy (best-effort) so re-saving doesn't pile up.
-    if (replaceRef && service.deleteDraft) {
-      try { await service.deleteDraft(account, replaceRef); } catch { /* ignore */ }
-    }
-
-    const ref = await service.saveDraft(account, {
-      to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs,
-    });
+    const ref = await require('../services/sharedDraftService').save(account, {
+      to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs, replyToEmailId, replyToFolder, replaceRef, draftId,
+    }, service);
     res.json({ success: true, ref });
   } catch (err) {
     console.error('Save draft error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -1373,10 +1371,10 @@ router.delete('/:accountId/drafts', async (req, res) => {
   const { ref } = req.body || {};
   try {
     const service = getService(account.type);
-    if (ref && service.deleteDraft) await service.deleteDraft(account, ref);
+    if (ref) await require('../services/sharedDraftService').remove(account, ref, service);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

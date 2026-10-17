@@ -6,7 +6,7 @@ import {
 import RenderHtml from 'react-native-render-html';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { api, errorMessage, openAttachment, resolveArchiveFolder } from '../api';
-import { sanitizeEmailHtml, totalBlocked } from '../emailHtml';
+import { sanitizeEmailHtml, totalBlocked, isAllowedImageSource } from '../emailHtml';
 import { useTheme } from '../ThemeContext';
 import { avatarColor, radius, space, type Palette } from '../theme';
 import type { Ui } from '../ui';
@@ -398,6 +398,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
                 <RenderHtml
                   contentWidth={width - 32}
                   source={{ html: sanitized.html }}
+                  ignoreDomNode={node => 'name' in node && node.name === 'img' && 'attribs' in node && !isAllowedImageSource((node.attribs as Record<string, string>).src || '', showRemoteImages)}
                   baseStyle={{ color: t.text, fontSize: 15, lineHeight: 22 }}
                   tagsStyles={{
                     a: { color: t.accent },

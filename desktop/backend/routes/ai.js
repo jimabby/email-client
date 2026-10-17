@@ -11,6 +11,22 @@ const MODEL_ID = /^[A-Za-z0-9._:\-/]{1,100}$/;
 const store = require('../store');
 const searchIndex = require('../services/searchIndexService');
 
+router.get('/privacy', (req, res) => res.json(store.getAiPrivacy()));
+router.put('/privacy', (req, res) => {
+  const { localOnly, automaticAccounts } = req.body || {};
+  if (typeof localOnly !== 'boolean' || !Array.isArray(automaticAccounts) || automaticAccounts.some(id => typeof id !== 'string' || !store.getAccount(id))) return res.status(400).json({ error: 'Invalid AI privacy settings' });
+  store.saveAiPrivacy({ localOnly, automaticAccounts: [...new Set(automaticAccounts)] });
+  res.json(store.getAiPrivacy());
+});
+router.use((req, res, next) => {
+  const networkPaths = ['/suggest', '/suggest-text', '/chat', '/smart-replies', '/extract-actions', '/summarize-attachment', '/thread-summary', '/rank', '/priority', '/gemini-models'];
+  if (!networkPaths.includes(req.path)) return next();
+  const privacy = store.getAiPrivacy();
+  if (privacy.localOnly) return res.status(403).json({ error: 'Local-only mode blocks external AI requests.' });
+  if (req.body?.automatic === true && (req.body.mode !== 'complete' || !privacy.automaticAccounts.includes(req.body.accountId))) return res.status(403).json({ error: 'Enable automatic completion for this account in AI privacy settings.' });
+  next();
+});
+
 // An AI key is available if the user saved one, OR no explicit provider is set
 // (or it's Claude) and the ANTHROPIC_API_KEY env fallback exists. The env key
 // only works for Claude, so it must NOT satisfy an OpenAI/Gemini selection.

@@ -353,18 +353,12 @@ function startApiPollWatcher(account) {
       const result = await service.fetchEmails(fresh, 'INBOX', 1, null);
       accountHealth.noteSuccess(fresh.id);
       const first = result?.emails?.[0];
-      if (!first) return;
-      if (!watcher.lastSeenMessageId) {
-        watcher.lastSeenMessageId = first.id;
-        // Seed the pipeline's seen-set without notifying.
-        await handleNewMail(account.id, { source: `${account.type}-poll-init` });
-        return;
-      }
-      // Message ids are stable and unique — a different id at the top of the
-      // inbox means new mail (dates can collide, so don't require both).
-      if (first.id !== watcher.lastSeenMessageId) {
-        watcher.lastSeenMessageId = first.id;
+      const newestId = first?.id || '__empty__';
+      const status = syncProgress.get(account.id);
+      if (newestId !== watcher.lastSeenMessageId || status?.incomplete) {
         await handleNewMail(account.id, { source: `${account.type}-poll` });
+        const completed = syncProgress.get(account.id);
+        if (completed && !completed.incomplete && !completed.error) watcher.lastSeenMessageId = newestId;
       }
     } catch (err) {
       // Transient polling failures are ignored; a revoked grant is recorded
@@ -377,6 +371,7 @@ function startApiPollWatcher(account) {
     if (watcher.timer) clearInterval(watcher.timer);
   };
 
+  watcher.tick = tick;
   tick().catch(() => {});
   watcher.timer = setInterval(() => tick().catch(() => {}), 30000);
   watcher.timer.unref?.();
@@ -463,9 +458,10 @@ function subscribe(listener) {
 }
 
 module.exports = {
+  _internals: { startApiPollWatcher },
   syncStatus: () => store.getAccounts().map(account => {
     const { seenIds, ...status } = syncProgress.get(account.id) || store.getSyncState(account.id) || {};
-    return { accountId: account.id, email: account.email, ...status, indexedMessages: searchIndex.allDocuments().filter(d => d.accountId === account.id).length,
+    return { accountId: account.id, email: account.email, ...status, indexedMessages: Array.from(searchIndex.allDocuments()).filter(d => d.accountId === account.id).length,
       indexScope: 'Inbox summaries and message bodies opened in Hermes' };
   }),
   ensureWatch,

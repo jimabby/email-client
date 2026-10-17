@@ -1,3 +1,5 @@
+import { sendChecks } from '../../../shared/sendChecks';
+import { queueOffline, offlineUnavailable } from '../offline';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
@@ -41,6 +43,7 @@ const FOLLOW_UP_CHOICES = [
 
 export default function ComposeScreen({ navigation, route }: Props) {
   const { account, replyTo, prefill } = route.params;
+  const threadHeaders = { inReplyTo: route.params.draft?.inReplyTo, references: route.params.draft?.references, replyToEmailId: replyTo?.id || route.params.draft?.replyToEmailId, replyToFolder: replyTo?.folder || route.params.draft?.replyToFolder };
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
   const tr = useTr();
@@ -54,12 +57,16 @@ export default function ComposeScreen({ navigation, route }: Props) {
   );
   const [text, setText] = useState(prefill?.body ?? '');
   const draftId = useRef(route.params.draft?.id || Crypto.randomUUID());
+  const serverRef = useRef(route.params.draft?.serverRef);
+  const [checkRecipients, setCheckRecipients] = useState(false);
+  const [knownRecipients, setKnownRecipients] = useState<string[]>([]);
+  useEffect(() => { if (checkRecipients) api.contacts().then(list => setKnownRecipients(list.map(c => c.email))).catch(() => {}); }, [checkRecipients]);
   const requestId = useRef(route.params.draft?.requestId || Crypto.randomUUID());
   const [attachments, setAttachments] = useState<DraftAttachment[]>(route.params.draft?.attachments || []);
   const [canLeave, setCanLeave] = useState(false);
   const [draftError, setDraftError] = useState('');
-  const persist = () => saveLocalDraft({ id: draftId.current, requestId: requestId.current, serverUrl: useAppStore.getState().serverUrl,
-    account, replyTo, to, cc, bcc, subject, body: text, attachments, savedAt: new Date().toISOString() });
+  const persist = () => saveLocalDraft({ id: draftId.current, serverRef: serverRef.current, requestId: requestId.current, serverUrl: useAppStore.getState().serverUrl,
+    ...threadHeaders, account, replyTo, to, cc, bcc, subject, body: text, attachments, savedAt: new Date().toISOString() });
   const latestPersist = useRef(persist); latestPersist.current = persist;
   useEffect(() => {
     if (canLeave) return;
@@ -106,6 +113,8 @@ export default function ComposeScreen({ navigation, route }: Props) {
   }, []);
 
   const runAi = async (mode: AiMode) => {
+    const allowed = await new Promise<boolean>(resolve => Alert.alert(tr('Text sent to AI'), JSON.stringify({ subject, body: text, replyTo: replyTo ? { from: replyTo.from, subject: replyTo.subject, body: replyTo.snippet || '' } : undefined }, null, 2), [{ text: tr('Cancel'), onPress: () => resolve(false) }, { text: tr('Continue'), onPress: () => resolve(true) }], { cancelable: true, onDismiss: () => resolve(false) }));
+    if (!allowed) return;
     setAiBusy(true);
     try {
       const suggestion = await api.suggest({
@@ -156,7 +165,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
     ];
   };
 
-  const dispatch = async (sendAt?: Date, confirmedNoSubject = false) => {
+  const dispatch = async (sendAt?: Date, confirmedNoSubject = false, checksConfirmed = false) => {
     if (!to.trim()) {
       Alert.alert(tr('Missing recipient'), tr('Add at least one recipient'));
       return;
@@ -169,10 +178,14 @@ export default function ComposeScreen({ navigation, route }: Props) {
       ]);
       return;
     }
+    if (!checksConfirmed) {
+      const warnings = sendChecks({ to, cc, bcc, text, attachmentCount: attachments.length, sender: account.email, checkRecipients, knownRecipients, originalRecipient: replyTo?.to?.join(', ') });
+      if (warnings.length) { Alert.alert(tr('Check before sending'), warnings.join('\n\n'), [{ text: tr('Cancel') }, { text: tr('Send anyway'), onPress: () => { dispatch(sendAt, true, true); } }]); return; }
+    }
     setSending(true);
     try {
       await persist();
-      const result = await api.send(account.id, {
+      const payload = {
         requestId: requestId.current,
         attachments,
         to: to.trim(),
@@ -181,12 +194,22 @@ export default function ComposeScreen({ navigation, route }: Props) {
         subject: subject.trim(),
         text,
         html: bodyHtml(),
-        replyToEmailId: replyTo?.id,
-        replyToFolder: replyTo?.folder,
+        ...threadHeaders,
         sendAt: sendAt?.toISOString(),
         undoWindowSec: sendAt ? 0 : UNDO_WINDOW_SEC,
         followUpDays: followUpDays || undefined,
-      });
+      };
+      let result;
+      try { result = await api.send(account.id, payload); }
+      catch (error) {
+        if (!offlineUnavailable(error)) throw error;
+        await queueOffline(account.id, payload);
+        setCanLeave(true);
+        await removeLocalDraft(draftId.current);
+        Alert.alert(tr('Saved on this phone'), tr('Waiting for a connection. The server has not accepted this message yet. Open Outbox to inspect or remove it.'), [{ text: tr('OK'), onPress: () => navigation.goBack() }]);
+        return;
+      }
+      if (serverRef.current) api.deleteDraft(account.id, serverRef.current).catch(() => {});
 
       setCanLeave(true);
       await removeLocalDraft(draftId.current).catch(err => {
@@ -228,7 +251,8 @@ export default function ComposeScreen({ navigation, route }: Props) {
     setSavingDraft(true);
     try {
       await persist();
-      await api.saveDraft(account.id, {
+      const saved = await api.saveDraft(account.id, {
+        ...threadHeaders, draftId: draftId.current, replaceRef: serverRef.current,
         attachments,
         to: to.trim(),
         cc: cc.trim(),
@@ -237,6 +261,8 @@ export default function ComposeScreen({ navigation, route }: Props) {
         text,
         html: bodyHtml(),
       });
+      serverRef.current = saved.ref;
+      await persist();
       setCanLeave(true);
       Alert.alert(tr('Draft saved'), tr('Saved to your Drafts folder.'), [
         { text: tr('OK'), onPress: () => navigation.goBack() },
@@ -377,7 +403,9 @@ export default function ComposeScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        <TouchableOpacity style={styles.draftBtn} onPress={saveDraft} disabled={savingDraft}>
+        <TouchableOpacity onPress={() => setCheckRecipients(v => !v)}><Text style={{ color: t.text }}>{tr('Check recipients')}: {checkRecipients ? tr('On') : tr('Off')}</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => { draftId.current = Crypto.randomUUID(); requestId.current = Crypto.randomUUID(); serverRef.current = undefined; saveDraft(); }}><Text style={{ color: t.accent }}>{tr('Save as new shared draft')}</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.draftBtn} onPress={saveDraft} disabled={savingDraft}>
           {savingDraft
             ? <ActivityIndicator color={t.text} />
             : <Text style={styles.draftText}>{tr('Save draft')}</Text>}

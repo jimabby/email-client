@@ -405,6 +405,7 @@ const VALID_AI_CATEGORIES = new Set(['Primary', 'Social', 'Jobs', 'Promotions', 
 // Resolve effective AI credentials: a saved key, or the ANTHROPIC_API_KEY env
 // fallback when the provider is Claude (or unset) — same rule as routes/ai.js.
 function getEffectiveAiSettings() {
+  if (store.getAiPrivacy().localOnly) return null;
   const { provider, apiKey } = store.getAiSettings();
   if (apiKey) return { provider: provider || 'claude', apiKey };
   if ((!provider || provider === 'claude') && process.env.ANTHROPIC_API_KEY) {

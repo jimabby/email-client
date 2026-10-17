@@ -52,3 +52,21 @@ jobs:
       - run: npm test
       - run: npx expo install --check
       - run: npx expo export --platform android --platform ios --output-dir dist
+
+  packaging:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run test:security
+      - run: npm run test:package
+      - run: npm ci --prefix frontend
+      - run: npm run pack -- --publish never

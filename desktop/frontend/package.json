@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:ui": "playwright test"
+    "test:ui": "playwright test",
+    "postinstall": "node ../../scripts/patch-tooling.cjs",
+    "test:security": "node ../../scripts/patch-tooling.cjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.10",

@@ -452,6 +452,7 @@ export const emailsApi = {
     api.get<SnoozeItem[]>('/emails/snoozed').then(r => r.data),
 
   // ─── Server-synced drafts ────────────────────────────────────────────────
+  sharedDrafts: () => api.get<(import('../types/email').Draft & { html?: string })[]>('/emails/shared-drafts').then(r => r.data),
   saveServerDraft: (accountId: string, data: {
     to?: string
     cc?: string
@@ -460,6 +461,8 @@ export const emailsApi = {
     text?: string
     html?: string
     attachments?: { filename: string; contentType: string; content: string }[]
+    draftId?: string
+    inReplyTo?: string; references?: string; replyToEmailId?: string; replyToFolder?: string
     replaceRef?: ServerDraftRef | null
   }) => api.post<{ success: boolean; ref: ServerDraftRef }>(`/emails/${accountId}/drafts`, data).then(r => r.data),
 
@@ -470,6 +473,8 @@ export const emailsApi = {
 // ─── AI Settings ──────────────────────────────────────────────────────────────
 
 export const aiApi = {
+  privacy: () => api.get<{ localOnly: boolean; automaticAccounts: string[] }>('/ai/privacy').then(r => r.data),
+  savePrivacy: (value: { localOnly: boolean; automaticAccounts: string[] }) => api.put('/ai/privacy', value),
   getSettings: () =>
     api.get<{ provider: 'claude' | 'openai' | 'gemini' | null; configured: boolean; model: string | null }>('/ai/settings').then(r => r.data),
 
@@ -608,6 +613,8 @@ export function streamAiChat(
 
 export function streamAiSuggestion(
   params: {
+    automatic?: boolean
+    accountId?: string
     subject: string
     body: string
     mode: string
@@ -624,6 +631,8 @@ export function streamAiSuggestion(
 export interface SyncStatus { accountId: string; email: string; syncing?: boolean; scanned?: number; lastSuccessAt?: string; error?: string; incomplete?: boolean; indexedMessages: number; indexScope: string }
 export interface AccessDevice { id: string; name: string; createdAt: string; revokedAt?: string }
 export const recoveryApi = {
+  coverage: () => api.get('/emails/search-coverage').then(r => r.data),
+  backfill: (data: { accountId: string; folder: string; since?: string; until?: string }) => api.post('/emails/search-backfill', data),
   syncStatus: () => api.get<SyncStatus[]>('/emails/sync-status').then(r => r.data),
   sync: (id: string) => api.post(`/emails/sync/${id}`),
   devices: () => api.get<AccessDevice[]>('/auth/devices').then(r => r.data),

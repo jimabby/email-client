@@ -17,3 +17,7 @@ search-index.json
 categories.json
 *.key
 *.unreadable-*
+
+dist-review/
+shared-drafts.json
+search-coverage.json

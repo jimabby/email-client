@@ -1,3 +1,4 @@
+import { cachedRead } from './offline';
 import axios from 'axios';
 import { Linking } from 'react-native';
 import { useAppStore } from './store';
@@ -10,16 +11,31 @@ import type {
 // production this should be the HTTPS URL of the always-on cloud backend.
 function client() {
   const { serverUrl: baseURL, apiToken } = useAppStore.getState();
-  return axios.create({
+  const instance = axios.create({
     baseURL: `${baseURL}/api`,
     timeout: 20000,
     headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : undefined,
   });
+  const originalGet = instance.get.bind(instance);
+  instance.get = ((url: string, config?: any) => {
+    const cacheable = url === '/auth/accounts' || url === '/emails/unified' || /^\/emails\/[^/]+(?:\/folders|\/message\/[^/]+)?$/.test(url);
+    if (!cacheable || /outbox|sync-status|devices|shared-drafts|snoozed|followups|rules|screener/.test(url)) return originalGet(url, config);
+    return cachedRead(JSON.stringify([url, config?.params || {}]), () => originalGet(url, config).then(r => r.data))
+      .then(data => ({ data, status: 200, statusText: 'OK', headers: {}, config: config || {} }));
+  }) as typeof instance.get;
+  return instance;
 }
 
 export interface SyncStatus { accountId: string; email: string; syncing?: boolean; scanned?: number; lastSuccessAt?: string; error?: string; indexedMessages: number }
 export interface AccessDevice { id: string; name: string; revokedAt?: string }
 export const api = {
+  contacts: () => client().get<{ email: string }[]>('/emails/contacts', { params: { limit: 100 } }).then(r => r.data),
+  aiPrivacy: () => client().get<{ localOnly: boolean; automaticAccounts: string[] }>('/ai/privacy').then(r => r.data),
+  saveAiPrivacy: (value: { localOnly: boolean; automaticAccounts: string[] }) => client().put('/ai/privacy', value),
+  coverage: () => client().get('/emails/search-coverage').then(r => r.data),
+  backfill: (data: { accountId: string; folder: string; since?: string; until?: string }) => client().post('/emails/search-backfill', data),
+  sharedDrafts: () => client().get<any[]>('/emails/shared-drafts').then(r => r.data),
+  deleteDraft: (accountId: string, ref: any) => client().delete(`/emails/${accountId}/drafts`, { data: { ref } }),
   syncStatus: () => client().get<SyncStatus[]>('/emails/sync-status').then(r => r.data),
   sync: (id: string) => client().post(`/emails/sync/${id}`),
   devices: () => client().get<AccessDevice[]>('/auth/devices').then(r => r.data),
@@ -201,8 +217,8 @@ export const api = {
 
   saveDraft: (
     accountId: string,
-    data: { to?: string; cc?: string; bcc?: string; subject?: string; text?: string; html?: string; attachments?: { filename: string; contentType: string; content: string }[] }
-  ) => client().post(`/emails/${accountId}/drafts`, data).then((r) => r.data),
+    data: { inReplyTo?: string; references?: string; replyToEmailId?: string; replyToFolder?: string; draftId?: string; replaceRef?: any; to?: string; cc?: string; bcc?: string; subject?: string; text?: string; html?: string; attachments?: { filename: string; contentType: string; content: string }[] }
+  ) => client().post<{ ref: any }>(`/emails/${accountId}/drafts`, data).then((r) => r.data),
 
   // Real per-folder unread totals from the provider.
   unreadCounts: (folders: string[] = ['INBOX']) =>

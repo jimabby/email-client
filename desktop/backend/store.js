@@ -324,6 +324,8 @@ module.exports = {
     return store.aiSettings || {};
   },
 
+  getAiPrivacy() { return store.aiPrivacy || { localOnly: false, automaticAccounts: [] }; },
+  saveAiPrivacy(value) { store.aiPrivacy = value; saveStore(); storeWriter.flush(); },
   saveAiSettings({ provider, apiKey, model }) {
     store.aiSettings = { provider, apiKey, model: model || null };
     saveStore();

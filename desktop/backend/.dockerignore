@@ -19,3 +19,8 @@ node_modules
 test
 *.log
 npm-debug.log*
+
+**/email-cache
+**/state.json
+**/shared-drafts.json
+**/search-coverage.json

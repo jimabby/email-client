@@ -21,6 +21,7 @@
     "mailparser": "^3.9.30",
     "node-cron": "^4.2.1",
     "nodemailer": "^10.0.12",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "re2js": "^2.8.6"
   }
 }
