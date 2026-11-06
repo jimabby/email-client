@@ -110,15 +110,20 @@ its passphrase, then delete the key from the cloud backend. From then on:
   relays the finished bytes (the outbox shows its subject as `[...]`);
 - a draft saved with Encrypt on stays in the phone's encrypted local storage;
 - decrypted attachments open through the share sheet from a temporary file that
-  is deleted afterwards.
+  is deleted afterwards;
+- an encrypted reply carries the original's `In-Reply-To` and `References`
+  (the phone asks the backend for them), so it threads like any other reply;
+- every message the phone decrypts goes into a private search index in its
+  encrypted local storage (at most 1,000 messages, 8,000 characters each), and
+  searches merge its hits into the server's. Only mail opened on this phone is
+  covered. Settings → Encryption key on this phone turns it off or clears it,
+  and removing the last key clears it too.
 
 The key is stored passphrase-protected in the iOS Keychain / Android Keystore
 and unlocked in memory until the app closes. The phone uses OpenPGP.js 5 (it
 runs without WebCrypto, which React Native lacks); the backend uses 6. Tests on
 both sides open a message the other side made. The backend still sees sender,
-recipients, and dates, which delivery requires. Server-side search cannot
-search inside such mail, and a reply encrypted on the phone threads by subject
-only when the original's Message-ID was not known. If your key requires a
+recipients, and dates, which delivery requires. If your key requires a
 passphrase and is locked, the message offers a passphrase field; the composer
 asks for it when you turn Encrypt on.
 

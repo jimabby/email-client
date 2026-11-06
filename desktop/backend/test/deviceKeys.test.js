@@ -15,6 +15,7 @@ require.cache[require.resolve('../services/imapService')] = { exports: {
     { filename: 'encrypted.asc', contentType: 'application/octet-stream', size: 999, content: null },
   ] }),
   markAsRead: async () => {},
+  getThreadingInfo: async (account, uid, folder) => ({ inReplyTo: `<orig-${uid}@example.org>`, references: `<root@example.org> <${folder}@example.org>` }),
 } };
 
 const express = require('express');
@@ -39,6 +40,13 @@ test.before(async () => {
   phoneKey = await openpgp.generateKey({ userIDs: [{ email: 'me@example.com' }], format: 'armored' });
   await pgp.importContactKeys((await openpgp.generateKey({ userIDs: [{ email: 'friend@example.org' }], format: 'armored' })).publicKey);
 });
+test('a reply built on the phone can learn the Message-ID and References of the original', async () => {
+  const id = encodeURIComponent(`${account.id}::Archive::42`);
+  const res = await fetch(`${base}/api/emails/${account.id}/message/${id}/threading?folder=Archive`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { inReplyTo: '<orig-42@example.org>', references: '<root@example.org> <Archive@example.org>' });
+});
+
 test.after(async () => { await new Promise(resolve => server.close(resolve)); store.flush(); });
 
 const post = (url, body) => fetch(base + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

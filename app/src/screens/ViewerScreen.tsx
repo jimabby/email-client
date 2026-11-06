@@ -8,6 +8,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { api, errorMessage, openAttachment, resolveArchiveFolder } from '../api';
 import UnlockKey from '../components/UnlockKey';
 import { openWithDeviceKey, shareDecryptedAttachment } from '../deviceOpen';
+import { indexDecrypted, forgetIndexed } from '../privateIndex';
 import type { DecryptedAttachment } from '../devicePgp';
 import { sanitizeEmailHtml, totalBlocked, isAllowedImageSource } from '../emailHtml';
 import { useTheme } from '../ThemeContext';
@@ -108,6 +109,8 @@ export default function ViewerScreen({ navigation, route }: Props) {
             } else if (local) {
               b = local.body;
               decrypted = local.attachments;
+              // So a later search on this phone can find what the server cannot.
+              indexDecrypted({ ...email, accountId: email.accountId || account.id }, local.body).catch(() => {});
             }
           } catch (err) {
             b = { ...b, pgp: { ...b.pgp, encrypted: true, error: errorMessage(err) } };
@@ -194,6 +197,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
         onPress: async () => {
           try {
             await api.delete(account.id, email.id, email.folder);
+            forgetIndexed(email.accountId || account.id, email.id);
             navigation.goBack();
           } catch (err) {
             Alert.alert(tr('Error'), errorMessage(err));

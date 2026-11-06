@@ -1623,15 +1623,40 @@ router.get('/:accountId/message/:emailId/pgp-payload', async (req, res) => {
   }
 });
 
+/** The original's Message-ID, References and (Gmail) thread, for a reply. */
+async function threadingInfo(account, emailId, folder) {
+  const service = getService(account.type);
+  if (!service.getThreadingInfo) return null;
+  return account.type === 'imap'
+    ? service.getThreadingInfo(account, imapUid(emailId), imapFolder(emailId, folder))
+    : service.getThreadingInfo(account, gmailOrOutlookId(emailId));
+}
+
+// GET /api/emails/:accountId/message/:emailId/threading?folder=
+// What a client that builds its own reply (an encrypted one, on the phone)
+// needs to put in In-Reply-To and References so the reply threads.
+router.get('/:accountId/message/:emailId/threading', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  try {
+    const meta = await threadingInfo(account, req.params.emailId, req.query.folder);
+    res.json({ inReplyTo: meta?.inReplyTo || null, references: meta?.references || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/emails/:accountId/send-prebuilt
-// Body: { raw: base64 RFC 822 message, requestId?, sendAt?, undoWindowSec? }
+// Body: { raw: base64 RFC 822 message, requestId?, sendAt?, undoWindowSec?,
+//         replyToEmailId?, replyToFolder? }. The reply fields only let Gmail
+// file the sent copy in the original's thread; the headers are the client's.
 // A message the client built and (usually) encrypted itself. The backend
 // reads only the envelope headers and delivers the bytes unchanged, through
 // the same durable queue as every other send.
 router.post('/:accountId/send-prebuilt', async (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
-  const { raw, requestId, sendAt, undoWindowSec } = req.body || {};
+  const { raw, requestId, sendAt, undoWindowSec, replyToEmailId, replyToFolder } = req.body || {};
   if (requestId !== undefined && (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))) return res.status(400).json({ error: 'Invalid requestId' });
   if (typeof raw !== 'string' || !raw) return res.status(400).json({ error: 'raw (base64 message) is required' });
   const bytes = Buffer.from(raw, 'base64');
@@ -1643,13 +1668,19 @@ router.post('/:accountId/send-prebuilt', async (req, res) => {
   if (!message.envelope.to.length) return res.status(400).json({ error: 'At least one recipient is required' });
   if (!getService(account.type).sendRaw) return res.status(400).json({ error: `Prebuilt messages are not supported for ${account.type} accounts` });
 
+  let threadId;
+  if (account.type === 'gmail' && typeof replyToEmailId === 'string' && replyToEmailId) {
+    try { threadId = (await threadingInfo(account, replyToEmailId, replyToFolder))?.threadId || undefined; }
+    catch { /* deliver unthreaded rather than not at all */ }
+  }
+
   try {
     const queued = createQueuedSend({
       accountId: account.id,
       requestId,
       requestHash: require('crypto').createHash('sha256').update(raw).digest('hex'),
       // The real subject is inside the encryption; the outbox shows "[...]".
-      email: { prebuilt: raw, to: message.to, cc: message.cc, bcc: message.bcc, subject: message.encrypted ? '[...]' : '(prebuilt message)' },
+      email: { prebuilt: raw, to: message.to, cc: message.cc, bcc: message.bcc, subject: message.encrypted ? '[...]' : '(prebuilt message)', ...(threadId ? { threadId } : {}) },
       sendAt,
       undoWindowSec: Number(undoWindowSec) || 0,
     });

@@ -14,6 +14,7 @@ import { clearBadge } from '../push';
 import type { EmailSummary } from '../types';
 import type { RootStackParamList } from '../navigation';
 import { useTr } from '../i18n';
+import { searchIndexed, mergeResults } from '../privateIndex';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Inbox'>;
 
@@ -199,13 +200,19 @@ export default function InboxScreen({ navigation, route }: Props) {
     const q = query.trim();
     if (!q) { setSearchResults(null); return; }
     setSearching(true);
+    // Encrypted mail the server cannot read is searched here, on the phone,
+    // and folded into whatever the server finds.
+    const local = searchIndexed(q, unified ? { limit: PAGE } : { accountId: account.id, folder, limit: PAGE });
     try {
-      // The local index answers across every account and without a provider
-      // round-trip, which is what a unified search needs.
-      setSearchResults(unified
+      // The server's index answers across every account and without a
+      // provider round-trip, which is what a unified search needs.
+      const server = unified
         ? await api.searchIndex(q, { limit: PAGE })
-        : await api.search(account.id, q, folder, PAGE));
+        : await api.search(account.id, q, folder, PAGE);
+      setSearchResults(mergeResults(server, await local));
     } catch (err) {
+      const mine = await local;
+      if (mine.length) setSearchResults(mine);
       setError(errorMessage(err));
     } finally {
       setSearching(false);
@@ -452,7 +459,10 @@ export default function InboxScreen({ navigation, route }: Props) {
                     {item.subject || tr('(no subject)')}
                   </Text>
                   {!!item.snippet && (
-                    <Text style={styles.snippet} numberOfLines={1}>{item.snippet}</Text>
+                    <Text style={styles.snippet} numberOfLines={1}>
+                      {item.matchedOnDevice ? <Text accessibilityLabel={tr('Found in mail decrypted on this phone')}>🔒 </Text> : null}
+                      {item.snippet}
+                    </Text>
                   )}
                 </View>
               </TouchableOpacity>

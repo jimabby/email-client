@@ -17,7 +17,7 @@ import { api } from '../src/api';
 import { buildEncryptedMessage } from '../src/devicePgp';
 jest.mock('../src/api', () => ({ api: {
   aiSettings: jest.fn(async () => ({ configured: false })), send: jest.fn(), saveDraft: jest.fn(),
-  pgpReadiness: jest.fn(), publicKeys: jest.fn(async () => ({ keys: [{ email: 'friend@example.org', publicKey: 'PUB' }] })),
+  pgpReadiness: jest.fn(), threading: jest.fn(async () => ({ inReplyTo: '<orig@example.org>', references: '<root@example.org>' })), publicKeys: jest.fn(async () => ({ keys: [{ email: 'friend@example.org', publicKey: 'PUB' }] })),
 }, errorMessage: (e: Error) => e.message }));
 jest.mock('../src/drafts', () => ({ saveLocalDraft: jest.fn(async () => {}), removeLocalDraft: jest.fn(async () => {}) }));
 jest.mock('expo-document-picker', () => ({ getDocumentAsync: jest.fn() }));
@@ -61,5 +61,21 @@ test('an encrypted draft stays on the phone instead of the provider', async () =
   await fireEvent.press(ui.getByText('Save draft'));
   await waitFor(() => expect(Alert.alert).toHaveBeenCalledWith('Draft saved', expect.stringMatching(/on this phone/), expect.anything()));
   expect(api.saveDraft).not.toHaveBeenCalled();
+  await ui.unmount();
+});
+
+test('an encrypted reply carries the original Message-ID, so it threads', async () => {
+  (api.send as jest.Mock).mockResolvedValue({ jobId: 'job' });
+  const replyTo = { id: 'INBOX:42', folder: 'INBOX', from: 'friend@example.org', subject: 'Plans', date: '', read: true };
+  const ui = await screen({ replyTo, prefill: { body: 'Sounds good' } });
+  await waitFor(() => expect(api.threading).toHaveBeenCalledWith('one', 'INBOX:42', 'INBOX'));
+  await waitFor(() => expect(ui.getByText(/Encrypt/)).toBeTruthy(), { timeout: 2000 });
+  await fireEvent.press(ui.getByText(/Encrypt/));
+  const header = await render(options.headerRight()); await fireEvent.press(header.getByText('Send'));
+  await waitFor(() => expect(api.send).toHaveBeenCalled());
+
+  expect(buildEncryptedMessage).toHaveBeenCalledWith(expect.objectContaining({ inReplyTo: '<orig@example.org>', references: '<root@example.org>' }), expect.anything());
+  const payload = (api.send as jest.Mock).mock.calls[0][1];
+  expect(payload).toMatchObject({ replyToEmailId: 'INBOX:42', replyToFolder: 'INBOX' });
   await ui.unmount();
 });

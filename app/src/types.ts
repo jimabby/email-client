@@ -30,6 +30,8 @@ export interface EmailSummary {
   uid?: number;
   /** Undefined when the provider could not say. */
   hasAttachments?: boolean;
+  /** Found by this phone's private index (encrypted mail the server cannot search). */
+  matchedOnDevice?: boolean;
 }
 
 export interface EmailBody {

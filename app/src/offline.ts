@@ -24,12 +24,12 @@ async function secret() {
   }
   return hexToBytes(saved);
 }
-async function transaction<T>(fn: (state: State) => T, mutate: boolean, namespace: string): Promise<T> {
+async function transaction<T, S = State>(fn: (state: S) => T, mutate: boolean, namespace: string, empty: () => S = () => ({ cache: {}, queue: [] }) as S): Promise<T> {
   const task = tail.then(async () => {
     await FileSystem.makeDirectoryAsync(directory(), { intermediates: true });
     const key = await secret();
     const names = (await FileSystem.readDirectoryAsync(directory())).filter(n => n.startsWith(namespace + '.') && n.endsWith('.json')).sort().reverse();
-    let state: State = { cache: {}, queue: [] };
+    let state: S = empty();
     if (names.length) {
       const sealed = JSON.parse(await FileSystem.readAsStringAsync(directory() + names[0]));
       state = JSON.parse(bytesToUtf8(gcm(key, hexToBytes(sealed.nonce)).decrypt(hexToBytes(sealed.data))));
@@ -50,6 +50,14 @@ async function transaction<T>(fn: (state: State) => T, mutate: boolean, namespac
     return result;
   });
   tail = task.then(() => {}, () => {}); return task;
+}
+/**
+ * Another sealed file beside the cache and outbox, with its own shape: same
+ * key, same AES-GCM, same per-server namespace, so it is just as unreadable
+ * off the phone and just as separate between servers.
+ */
+export async function sealedStore<T, S>(name: string, empty: () => S, fn: (state: S) => T, mutate: boolean): Promise<T> {
+  return transaction(fn, mutate, (await scope()) + '-' + name, empty);
 }
 export async function cachedRead<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
   const namespace = await scope();

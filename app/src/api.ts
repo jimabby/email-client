@@ -191,6 +191,7 @@ export const api = {
     // Routed here so the offline outbox replays it like any other send.
     ? client().post<{ jobId: string; sendAt: string; canUndoUntil: string | null }>(`/emails/${accountId}/send-prebuilt`, {
         raw: data.prebuiltRaw, requestId: data.requestId, sendAt: data.sendAt, undoWindowSec: data.undoWindowSec,
+        replyToEmailId: data.replyToEmailId, replyToFolder: data.replyToFolder,
       })
     : client().post<{ jobId: string; sendAt: string; canUndoUntil: string | null }>(`/emails/${accountId}/send`, data)
   ).then((r) => r.data),
@@ -216,6 +217,11 @@ export const api = {
   pgpPayload: (accountId: string, emailId: string, folder?: string) =>
     client().get<{ kind: 'pgp-mime' | 'inline'; armored: string; from: string; text?: string }>(
       `/emails/${accountId}/message/${encodeURIComponent(emailId)}/pgp-payload`, { params: folder ? { folder } : {} },
+    ).then((r) => r.data),
+  /** The original's Message-ID and References, for a reply built on the phone. */
+  threading: (accountId: string, emailId: string, folder?: string) =>
+    client().get<{ inReplyTo: string | null; references: string | null }>(
+      `/emails/${accountId}/message/${encodeURIComponent(emailId)}/threading`, { params: folder ? { folder } : {} },
     ).then((r) => r.data),
   /** Public keys the backend knows, for encrypting and verifying on the phone. */
   publicKeys: () => client().get<{ keys: { email: string; publicKey: string }[] }>('/pgp/public-keys').then((r) => r.data),

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Alert, StyleSheet, Switch } from 'react-native';
 import { errorMessage } from '../api';
 import { importDeviceKey, listDeviceKeys, removeDeviceKey, lockDeviceKeys, type DeviceKeyInfo } from '../devicePgp';
 import { useTheme } from '../ThemeContext';
 import { radius, space } from '../theme';
 import { useTr } from '../i18n';
 import UnlockKey from './UnlockKey';
+import { isIndexEnabled, setIndexEnabled, indexedCount, clearIndex } from '../privateIndex';
 
 const grouped = (fp: string) => fp.replace(/(.{4})/g, '$1 ').trim();
 
@@ -23,7 +24,14 @@ export function DeviceKeySettings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(() => { listDeviceKeys().then(setKeys).catch(e => setError(errorMessage(e))); }, []);
+  const [indexOn, setIndexOn] = useState(true);
+  const [indexed, setIndexed] = useState(0);
+
+  const refresh = useCallback(() => {
+    listDeviceKeys().then(setKeys).catch(e => setError(errorMessage(e)));
+    isIndexEnabled().then(setIndexOn);
+    indexedCount().then(setIndexed);
+  }, []);
   useEffect(() => { refresh(); }, [refresh]);
 
   const add = async () => {
@@ -41,7 +49,12 @@ export function DeviceKeySettings() {
   const remove = (email: string) => Alert.alert(
     tr('Remove the key for {email}?', { email }),
     tr('Encrypted mail to this address can no longer be opened on this phone. The copy on your desktop is not affected.'),
-    [{ text: tr('Cancel'), style: 'cancel' }, { text: tr('Remove'), style: 'destructive', onPress: () => removeDeviceKey(email).then(refresh) }],
+    [{ text: tr('Cancel'), style: 'cancel' }, { text: tr('Remove'), style: 'destructive', onPress: async () => {
+      await removeDeviceKey(email);
+      // With no key left, nothing it decrypted should stay readable here.
+      if (!(await listDeviceKeys()).length) await clearIndex().catch(() => {});
+      refresh();
+    } }],
   );
 
   const fieldStyle = [styles.field, { color: t.text, backgroundColor: t.bgInput, borderColor: t.border }];
@@ -66,6 +79,30 @@ export function DeviceKeySettings() {
       {keys.length > 0 && (anyLocked
         ? <UnlockKey device onUnlocked={refresh} />
         : <TouchableOpacity onPress={() => { lockDeviceKeys(); refresh(); }}><Text style={{ color: t.accent }}>{tr('Lock now')}</Text></TouchableOpacity>)}
+
+      {keys.length > 0 && (
+        <View style={[styles.card, { borderColor: t.border }]}>
+          <View style={styles.row}>
+            <Text style={{ color: t.text, flex: 1, fontWeight: '600' }}>{tr('Search encrypted mail on this phone')}</Text>
+            <Switch
+              value={indexOn}
+              accessibilityLabel={tr('Search encrypted mail on this phone')}
+              onValueChange={async on => { await setIndexEnabled(on).catch(e => setError(errorMessage(e))); refresh(); }}
+            />
+          </View>
+          <Text style={{ color: t.textMuted, lineHeight: 19 }}>
+            {tr('The server cannot search mail it cannot read. With this on, each encrypted message you open here is added to a search index kept encrypted on this phone. Only messages opened on this phone are covered.')}
+          </Text>
+          {indexOn && (
+            <View style={styles.row}>
+              <Text style={{ color: t.textMuted, flex: 1 }}>{tr('{count} messages indexed', { count: indexed })}</Text>
+              {indexed > 0 && (
+                <TouchableOpacity onPress={() => clearIndex().then(refresh)} hitSlop={8}><Text style={{ color: t.danger }}>{tr('Clear')}</Text></TouchableOpacity>
+              )}
+            </View>
+          )}
+        </View>
+      )}
 
       <TextInput
         value={armored}

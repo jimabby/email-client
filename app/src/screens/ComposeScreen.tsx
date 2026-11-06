@@ -46,7 +46,23 @@ const FOLLOW_UP_CHOICES = [
 
 export default function ComposeScreen({ navigation, route }: Props) {
   const { account, replyTo, prefill } = route.params;
-  const threadHeaders = { inReplyTo: route.params.draft?.inReplyTo, references: route.params.draft?.references, replyToEmailId: replyTo?.id || route.params.draft?.replyToEmailId, replyToFolder: replyTo?.folder || route.params.draft?.replyToFolder };
+  // A reply encrypted here is built here, so it needs the original's
+  // Message-ID and References itself; the server fills them in for the rest.
+  const [resolvedThread, setResolvedThread] = useState<{ inReplyTo?: string; references?: string }>({});
+  const threadHeaders = {
+    inReplyTo: route.params.draft?.inReplyTo || resolvedThread.inReplyTo,
+    references: route.params.draft?.references || resolvedThread.references,
+    replyToEmailId: replyTo?.id || route.params.draft?.replyToEmailId,
+    replyToFolder: replyTo?.folder || route.params.draft?.replyToFolder,
+  };
+  useEffect(() => {
+    if (!threadHeaders.replyToEmailId || route.params.draft?.inReplyTo) return;
+    let live = true;
+    api.threading(account.id, threadHeaders.replyToEmailId, threadHeaders.replyToFolder)
+      .then(meta => { if (live) setResolvedThread({ inReplyTo: meta.inReplyTo || undefined, references: meta.references || undefined }); })
+      .catch(() => { /* sends unthreaded rather than not at all */ });
+    return () => { live = false; };
+  }, [account.id, threadHeaders.replyToEmailId, threadHeaders.replyToFolder, route.params.draft?.inReplyTo]);
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
   const tr = useTr();
@@ -229,6 +245,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
           subject: subject.trim(), text, html: bodyHtml(), attachments,
           inReplyTo: threadHeaders.inReplyTo, references: threadHeaders.references,
         }, publicKeys),
+        replyToEmailId: threadHeaders.replyToEmailId, replyToFolder: threadHeaders.replyToFolder,
         sendAt: sendAt?.toISOString(),
         undoWindowSec: sendAt ? 0 : UNDO_WINDOW_SEC,
       } : {
