@@ -1,15 +1,17 @@
 import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { api, errorMessage } from '../api';
+import { unlockDeviceKeys } from '../devicePgp';
 import { useTheme } from '../ThemeContext';
 import { space, radius } from '../theme';
 import { useTr } from '../i18n';
 
 /**
- * Passphrase field for a locked OpenPGP key. The backend keeps the key
- * unlocked in memory for a while; nothing stored changes.
+ * Passphrase field for a locked OpenPGP key: the key stored on this phone
+ * (`device`), or the backend's. Either way the unlocked key lives only in
+ * memory for a while; nothing stored changes.
  */
-export default function UnlockKey({ onUnlocked, email }: { onUnlocked: () => void; email?: string }) {
+export default function UnlockKey({ onUnlocked, email, device = false }: { onUnlocked: () => void; email?: string; device?: boolean }) {
   const { t } = useTheme();
   const tr = useTr();
   const [passphrase, setPassphrase] = useState('');
@@ -20,7 +22,8 @@ export default function UnlockKey({ onUnlocked, email }: { onUnlocked: () => voi
     if (!passphrase) return;
     setBusy(true);
     try {
-      await api.pgpUnlock(passphrase, email);
+      if (device) await unlockDeviceKeys(passphrase);
+      else await api.pgpUnlock(passphrase, email);
       setPassphrase('');
       setError(null);
       onUnlocked();

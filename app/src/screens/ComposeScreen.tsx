@@ -2,6 +2,7 @@ import { sendChecks } from '../../../shared/sendChecks';
 import { queueOffline, offlineUnavailable } from '../offline';
 import { ensureBackgroundDelivery } from '../backgroundOutbox';
 import UnlockKey from '../components/UnlockKey';
+import { hasDeviceKey, isUnlocked, deviceReadiness, buildEncryptedMessage, type PublicKeyEntry } from '../devicePgp';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
@@ -107,14 +108,30 @@ export default function ComposeScreen({ navigation, route }: Props) {
   const [pgpReady, setPgpReady] = useState<{ canSign: boolean; canEncrypt: boolean; missing: string[]; locked?: boolean } | null>(null);
   const [pgpCheck, setPgpCheck] = useState(0);
   const [showUnlock, setShowUnlock] = useState(false);
+  // With a key on this phone, the message is encrypted here and the backend
+  // never sees it; otherwise the backend's key (if any) does the work.
+  const [deviceMode, setDeviceMode] = useState(false);
+  const [publicKeys, setPublicKeys] = useState<PublicKeyEntry[]>([]);
+  useEffect(() => {
+    hasDeviceKey(account.email).then(has => {
+      setDeviceMode(has);
+      if (has) api.publicKeys().then(r => setPublicKeys(r.keys)).catch(() => setPublicKeys([]));
+    }).catch(() => setDeviceMode(false));
+  }, [account.email]);
   useEffect(() => {
     const timer = setTimeout(() => {
+      if (deviceMode) {
+        const ready = deviceReadiness(account.email, { to, cc, bcc }, publicKeys);
+        setPgpReady({ canSign: true, canEncrypt: ready.canEncrypt, missing: ready.missing, locked: !isUnlocked(account.email) });
+        if (!ready.canEncrypt) setPgpEncrypt(false);
+        return;
+      }
       api.pgpReadiness({ from: account.email, to, cc, bcc })
         .then(ready => { setPgpReady(ready); if (!ready.canEncrypt) setPgpEncrypt(false); })
         .catch(() => setPgpReady(null));
     }, 500);
     return () => clearTimeout(timer);
-  }, [account.email, to, cc, bcc, pgpCheck]);
+  }, [account.email, to, cc, bcc, pgpCheck, deviceMode, publicKeys]);
   const [followUpOpen, setFollowUpOpen] = useState(false);
 
   // Draft help. The previous text is kept so one tap puts it back.
@@ -200,7 +217,21 @@ export default function ComposeScreen({ navigation, route }: Props) {
     setSending(true);
     try {
       await persist();
-      const payload = {
+      const deviceEncrypt = pgpEncrypt && deviceMode;
+      const payload: Parameters<typeof api.send>[1] = deviceEncrypt ? {
+        // Built and encrypted here. Only these bytes leave the phone; even the
+        // offline outbox keeps nothing else.
+        requestId: requestId.current,
+        to: to.trim(), subject: '[...]',
+        prebuiltRaw: await buildEncryptedMessage({
+          from: { name: account.name, address: account.email },
+          to: to.trim(), cc: cc.trim() || undefined, bcc: bcc.trim() || undefined,
+          subject: subject.trim(), text, html: bodyHtml(), attachments,
+          inReplyTo: threadHeaders.inReplyTo, references: threadHeaders.references,
+        }, publicKeys),
+        sendAt: sendAt?.toISOString(),
+        undoWindowSec: sendAt ? 0 : UNDO_WINDOW_SEC,
+      } : {
         requestId: requestId.current,
         attachments,
         to: to.trim(),
@@ -269,6 +300,16 @@ export default function ComposeScreen({ navigation, route }: Props) {
     setSavingDraft(true);
     try {
       await persist();
+      if (pgpEncrypt && deviceMode) {
+        // The provider must not get a readable copy, and the backend cannot
+        // encrypt to a key it does not have: the draft stays on this phone,
+        // in its encrypted local storage.
+        setCanLeave(true);
+        Alert.alert(tr('Draft saved'), tr('Kept on this phone only, so the provider never sees it unencrypted.'), [
+          { text: tr('OK'), onPress: () => navigation.goBack() },
+        ]);
+        return;
+      }
       const saved = await api.saveDraft(account.id, {
         ...threadHeaders, draftId: draftId.current, replaceRef: serverRef.current,
         attachments,
@@ -311,7 +352,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
           </View>
         ),
     });
-  }, [navigation, to, cc, bcc, subject, text, sending, followUpDays, pgpEncrypt, styles, t, tr]);
+  }, [navigation, to, cc, bcc, subject, text, sending, followUpDays, pgpEncrypt, deviceMode, publicKeys, styles, t, tr]);
 
   return (
     <KeyboardAvoidingView
@@ -422,7 +463,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
         {showUnlock && pgpReady?.locked && (
           <View style={{ paddingHorizontal: 12 }}>
             <Text style={{ color: t.textMuted }}>{tr('Your encryption key is locked. Enter its passphrase to encrypt this message.')}</Text>
-            <UnlockKey email={account.email} onUnlocked={() => { setShowUnlock(false); setPgpEncrypt(true); setPgpCheck(n => n + 1); }} />
+            <UnlockKey device={deviceMode} email={account.email} onUnlocked={() => { setShowUnlock(false); setPgpEncrypt(true); setPgpCheck(n => n + 1); }} />
           </View>
         )}
 

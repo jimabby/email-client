@@ -39,7 +39,9 @@ export const api = {
   syncStatus: () => client().get<SyncStatus[]>('/emails/sync-status').then(r => r.data),
   sync: (id: string) => client().post(`/emails/sync/${id}`),
   devices: () => client().get<AccessDevice[]>('/auth/devices').then(r => r.data),
-  addDevice: (name: string) => client().post<AccessDevice & { token: string }>('/auth/devices', { name }).then(r => r.data),
+  // Mail-only by default, matching the desktop: a lost phone token should not
+  // be able to change accounts or keys.
+  addDevice: (name: string, scope: 'full' | 'mail' | 'read' = 'mail') => client().post<AccessDevice & { token: string }>('/auth/devices', { name, scope }).then(r => r.data),
   revokeDevice: (id: string) => client().delete(`/auth/devices/${id}`),
   /** `scope` is what this token may do: admin (the master token), full, mail, or read. */
   health: () => client().get<{ status: string; authenticated: boolean; scope?: 'admin' | 'full' | 'mail' | 'read' }>('/auth-check').then((r) => r.data),
@@ -181,10 +183,17 @@ export const api = {
       followUpDays?: number;
       /** OpenPGP: sent as PGP/MIME; the server refuses rather than send in the clear. */
       pgp?: { encrypt: boolean; sign: boolean };
+      /** A whole message already built and encrypted on this phone (base64). */
+      prebuiltRaw?: string;
     }
-  ) => client()
-    .post<{ jobId: string; sendAt: string; canUndoUntil: string | null }>(`/emails/${accountId}/send`, data)
-    .then((r) => r.data),
+  ) => (data.prebuiltRaw
+    // Encrypted on the device: the backend only relays the finished bytes.
+    // Routed here so the offline outbox replays it like any other send.
+    ? client().post<{ jobId: string; sendAt: string; canUndoUntil: string | null }>(`/emails/${accountId}/send-prebuilt`, {
+        raw: data.prebuiltRaw, requestId: data.requestId, sendAt: data.sendAt, undoWindowSec: data.undoWindowSec,
+      })
+    : client().post<{ jobId: string; sendAt: string; canUndoUntil: string | null }>(`/emails/${accountId}/send`, data)
+  ).then((r) => r.data),
 
   // ─── Follow-ups ───────────────────────────────────────────────────────────
   followups: () => client().get<Followup[]>('/emails/followups').then((r) => r.data),
@@ -203,6 +212,13 @@ export const api = {
   // ─── OpenPGP ──────────────────────────────────────────────────────────────
   pgpReadiness: (draft: { from: string; to?: string; cc?: string; bcc?: string }) =>
     client().post<{ canSign: boolean; canEncrypt: boolean; missing: string[]; locked?: boolean }>('/pgp/readiness', draft).then((r) => r.data),
+  /** The still-encrypted part of a message, for a key held on this phone. */
+  pgpPayload: (accountId: string, emailId: string, folder?: string) =>
+    client().get<{ kind: 'pgp-mime' | 'inline'; armored: string; from: string; text?: string }>(
+      `/emails/${accountId}/message/${encodeURIComponent(emailId)}/pgp-payload`, { params: folder ? { folder } : {} },
+    ).then((r) => r.data),
+  /** Public keys the backend knows, for encrypting and verifying on the phone. */
+  publicKeys: () => client().get<{ keys: { email: string; publicKey: string }[] }>('/pgp/public-keys').then((r) => r.data),
   /** Unlock a passphrase-protected key on the backend for a while. */
   pgpUnlock: (passphrase: string, email?: string) =>
     client().post<{ unlocked: { email: string; unlockedUntil: string }[] }>('/pgp/unlock', { passphrase, email }).then((r) => r.data),

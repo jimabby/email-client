@@ -7,6 +7,8 @@ import RenderHtml from 'react-native-render-html';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { api, errorMessage, openAttachment, resolveArchiveFolder } from '../api';
 import UnlockKey from '../components/UnlockKey';
+import { openWithDeviceKey, shareDecryptedAttachment } from '../deviceOpen';
+import type { DecryptedAttachment } from '../devicePgp';
 import { sanitizeEmailHtml, totalBlocked, isAllowedImageSource } from '../emailHtml';
 import { useTheme } from '../ThemeContext';
 import { avatarColor, radius, space, type Palette } from '../theme';
@@ -54,6 +56,8 @@ export default function ViewerScreen({ navigation, route }: Props) {
   const [body, setBody] = useState<EmailBody | null>(null);
   // Bumped after unlocking an OpenPGP key, to open the message again.
   const [reloadKey, setReloadKey] = useState(0);
+  // Attachments decrypted on this phone, held in memory only.
+  const [deviceAttachments, setDeviceAttachments] = useState<DecryptedAttachment[] | null>(null);
   // An encrypted message's real subject is inside the encrypted part; the
   // list only ever saw "[...]". Everything below (header, reply, forward)
   // reads the subject from here.
@@ -93,8 +97,23 @@ export default function ViewerScreen({ navigation, route }: Props) {
     let active = true;
     (async () => {
       try {
-        const b = await api.getBody(account.id, email.id, email.folder);
-        if (active) setBody(b);
+        let b = await api.getBody(account.id, email.id, email.folder);
+        let decrypted: DecryptedAttachment[] | null = null;
+        // The backend could not open it: maybe the key is on this phone.
+        if (b.pgp?.encrypted && !b.pgp.decrypted) {
+          try {
+            const local = await openWithDeviceKey(account.id, email.id, email.folder, b);
+            if (local && 'locked' in local) {
+              b = { ...b, pgp: { ...b.pgp, encrypted: true, locked: true, onDevice: true, error: tr('Your encryption key on this phone is locked. Enter its passphrase to read this message.') } };
+            } else if (local) {
+              b = local.body;
+              decrypted = local.attachments;
+            }
+          } catch (err) {
+            b = { ...b, pgp: { ...b.pgp, encrypted: true, error: errorMessage(err) } };
+          }
+        }
+        if (active) { setBody(b); setDeviceAttachments(decrypted); }
         // Mark read on the server (best-effort; the list already shows it read).
         api.markRead(account.id, email.id, email.folder).catch(() => {});
       } catch (err) {
@@ -392,7 +411,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
                 >
                   {pgpLine(body.pgp, tr)}
                 </Text>
-                {body.pgp.locked && <UnlockKey onUnlocked={() => setReloadKey(n => n + 1)} />}
+                {body.pgp.locked && <UnlockKey device={!!body.pgp.onDevice} onUnlocked={() => setReloadKey(n => n + 1)} />}
               </View>
             )}
 
@@ -450,7 +469,9 @@ export default function ViewerScreen({ navigation, route }: Props) {
                 onPress={async () => {
                   setOpeningAttachment(i);
                   try {
-                    await openAttachment(email.accountId, email.id, i, a.filename, email.folder, !!body?.pgp);
+                    // Decrypted on this phone: the bytes are here, never on the server.
+                    if (deviceAttachments?.[i]) await shareDecryptedAttachment(deviceAttachments[i]);
+                    else await openAttachment(email.accountId, email.id, i, a.filename, email.folder, !!body?.pgp);
                   } catch (err) {
                     Alert.alert(tr('Could not open attachment'), errorMessage(err));
                   } finally {

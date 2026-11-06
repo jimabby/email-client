@@ -17,6 +17,7 @@ const pgp = require('../services/pgpService');
 // POST   /api/pgp/identities/:email/passphrase  { passphrase, enabled } require a passphrase (or stop)
 // POST   /api/pgp/unlock                        { email?, passphrase, hours? } unlock for a while
 // POST   /api/pgp/lock                          { email? } forget unlocked keys now
+// GET    /api/pgp/public-keys                   every public key known here (for on-device crypto)
 // POST   /api/pgp/readiness                     { from, to, cc, bcc } can this message be signed/encrypted?
 //
 // Private-key routes are master-token only (middleware/deviceScope.js).
@@ -101,6 +102,9 @@ router.post('/unlock', async (req, res) => {
 });
 
 router.post('/lock', (req, res) => res.json(pgp.lockNow(req.body?.email)));
+
+// Public keys only, for a client that encrypts and verifies on its own.
+router.get('/public-keys', (req, res) => res.json({ keys: pgp.publicKeys() }));
 
 router.post('/readiness', (req, res) => {
   const { from, to, cc, bcc } = req.body || {};

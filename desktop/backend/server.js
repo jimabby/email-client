@@ -115,6 +115,7 @@ app.use('/api/ai', aiLimiter);
 // Categorisation calls the AI provider for every uncached message.
 app.use('/api/emails/categorize', aiLimiter);
 app.use('/api/emails/:accountId/send', sendLimiter);
+app.use('/api/emails/:accountId/send-prebuilt', sendLimiter);
 app.use('/api/pgp/unlock', pgpUnlockLimiter);
 app.use('/api/pgp/identities/:email/passphrase', pgpUnlockLimiter);
 

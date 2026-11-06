@@ -1,4 +1,5 @@
 import { RecoverySettings } from '../components/RecoverySettings';
+import { DeviceKeySettings } from '../components/DeviceKeySettings';
 import { useEffect, useMemo, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Switch,
@@ -233,6 +234,7 @@ export default function SettingsScreen({ navigation }: Props) {
       <Text style={styles.note}>
         {tr('The cloud backend stays online independently of your PC. For internet use, always use HTTPS and a long random API token.')}
       </Text>
+      <DeviceKeySettings />
       <RecoverySettings />
     </ScrollView>
   );

@@ -62,6 +62,8 @@ export interface PgpStatus {
   error?: string;
   /** Encrypted to a key that needs its passphrase first. */
   locked?: boolean;
+  /** Opened with the key on this phone; the backend never saw the plaintext. */
+  onDevice?: boolean;
 }
 
 export interface DigestGroup {

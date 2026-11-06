@@ -95,6 +95,10 @@ draft migration, new controls, validation commands, and remaining audit findings
   data folder or backup cannot read your mail. Unlock it from any client;
   it stays unlocked in memory for 8 hours or until a restart. While unlocked,
   the backend (a cloud server, for the phone) can read your encrypted mail.
+- To keep the cloud server out of it entirely, put the key on the phone
+  instead (phone Settings → Encryption key on this phone). The phone then
+  decrypts, verifies, and encrypts on its own, and the server only relays
+  ciphertext. See [`app/README.md`](app/README.md).
 - Credentials, cached mail, the outbox, and the search index are encrypted at
   rest (AES-256-GCM; the desktop app keeps the key in the OS keychain)
 - Messages render in a sandboxed frame where scripts can never run; remote

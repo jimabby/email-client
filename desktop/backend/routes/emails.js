@@ -1605,6 +1605,60 @@ router.get('/:accountId/search-attachments', async (req, res) => {
 });
 
 // POST /api/emails/:accountId/send-queue/:jobId/cancel
+// GET /api/emails/:accountId/message/:emailId/pgp-payload?folder=
+// The still-encrypted part of a message, for a client that holds its own
+// key. The backend needs no key for this and learns nothing new.
+router.get('/:accountId/message/:emailId/pgp-payload', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  try {
+    const raw = await rawSource(account, req.params.emailId, req.query.folder || 'INBOX');
+    if (!raw) return res.status(404).json({ error: 'Message not found' });
+    const payload = await pgpService.encryptedPayload(raw);
+    if (!payload) return res.status(404).json({ error: 'This message is not OpenPGP-encrypted' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/emails/:accountId/send-prebuilt
+// Body: { raw: base64 RFC 822 message, requestId?, sendAt?, undoWindowSec? }
+// A message the client built and (usually) encrypted itself. The backend
+// reads only the envelope headers and delivers the bytes unchanged, through
+// the same durable queue as every other send.
+router.post('/:accountId/send-prebuilt', async (req, res) => {
+  const account = store.getAccount(req.params.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  const { raw, requestId, sendAt, undoWindowSec } = req.body || {};
+  if (requestId !== undefined && (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))) return res.status(400).json({ error: 'Invalid requestId' });
+  if (typeof raw !== 'string' || !raw) return res.status(400).json({ error: 'raw (base64 message) is required' });
+  const bytes = Buffer.from(raw, 'base64');
+  if (!bytes.length || bytes.length > 30 * 1024 * 1024) return res.status(400).json({ error: 'Message is empty or too large' });
+
+  const message = pgpService.readPrebuilt(bytes);
+  const own = [account.email, ...store.getAliases(account.id).map(a => a.email)].map(e => String(e || '').toLowerCase());
+  if (!own.includes(message.from)) return res.status(400).json({ error: `From must be ${account.email} or one of its aliases` });
+  if (!message.envelope.to.length) return res.status(400).json({ error: 'At least one recipient is required' });
+  if (!getService(account.type).sendRaw) return res.status(400).json({ error: `Prebuilt messages are not supported for ${account.type} accounts` });
+
+  try {
+    const queued = createQueuedSend({
+      accountId: account.id,
+      requestId,
+      requestHash: require('crypto').createHash('sha256').update(raw).digest('hex'),
+      // The real subject is inside the encryption; the outbox shows "[...]".
+      email: { prebuilt: raw, to: message.to, cc: message.cc, bcc: message.bcc, subject: message.encrypted ? '[...]' : '(prebuilt message)' },
+      sendAt,
+      undoWindowSec: Number(undoWindowSec) || 0,
+    });
+    res.json({ success: true, queued: true, jobId: queued.id, sendAt: queued.sendAt, canUndoUntil: queued.canUndoUntil });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 router.post('/:accountId/send-queue/:jobId/cancel', (req, res) => {
   const account = store.getAccount(req.params.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });

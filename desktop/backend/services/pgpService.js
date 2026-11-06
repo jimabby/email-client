@@ -732,7 +732,75 @@ async function decryptArmored(armored, sender, keys, { inline = false } = {}) {
   }
 }
 
+// ─── Keys held on a device ──────────────────────────────────────────────────
+//
+// A client may keep its private key to itself (the phone, talking to a cloud
+// backend it does not want reading its mail). The backend then never decrypts:
+// it hands over the still-encrypted part of a message, the public keys it
+// knows, and relays messages the client encrypted itself.
+
+/**
+ * The encrypted part of a raw message, untouched, for a client to open.
+ * @returns {Promise<null | { kind: 'pgp-mime' | 'inline', armored: string, from: string, text?: string }>}
+ */
+async function encryptedPayload(raw) {
+  const { headers, body } = splitHeaderBody(raw);
+  const from = headerValue(headers, 'from');
+  const contentType = headerValue(headers, 'content-type');
+  const base = lower(contentType.split(';')[0]);
+  const boundary = paramOf(contentType, 'boundary');
+  if (base === 'multipart/encrypted' && /pgp-encrypted/i.test(paramOf(contentType, 'protocol')) && boundary) {
+    const parts = partsOf(body, boundary);
+    const armored = parts[1] ? decodePart(parts[1]) : '';
+    return ARMORED_MESSAGE.test(armored) ? { kind: 'pgp-mime', armored: armored.match(ARMORED_MESSAGE)[0], from } : null;
+  }
+  const parsed = await simpleParser(Buffer.isBuffer(raw) ? raw : Buffer.from(raw, 'binary'));
+  const text = parsed.text || '';
+  const inline = text.match(ARMORED_MESSAGE);
+  return inline ? { kind: 'inline', armored: inline[0], from, text } : null;
+}
+
+/** Every public key this backend knows: correspondents' and your own. */
+function publicKeys() {
+  const { identities, contacts } = store.getPgpKeys();
+  return [
+    ...Object.entries(contacts).map(([email, entry]) => ({ email, publicKey: entry.publicKey, source: entry.source || 'manual' })),
+    ...Object.entries(identities).map(([email, entry]) => ({ email, publicKey: entry.publicKey, source: 'identity' })),
+  ];
+}
+
+/**
+ * Read the envelope of a message a client built and encrypted itself.
+ * The body is opaque to the backend; only these headers matter for delivery.
+ * @returns {{ raw: Buffer, rawForSmtp: Buffer, envelope: { from: string, to: string[] }, to: string, cc: string, bcc: string, from: string, encrypted: boolean }}
+ */
+function readPrebuilt(raw) {
+  const { headers } = splitHeaderBody(raw);
+  const from = addressparser(headerValue(headers, 'from'))[0]?.address || '';
+  const to = headerValue(headers, 'to');
+  const cc = headerValue(headers, 'cc');
+  const bcc = headerValue(headers, 'bcc');
+  const recipients = recipientsOf({ to, cc, bcc });
+  // SMTP takes recipients from the envelope; the Bcc header must not travel.
+  const text = raw.toString('binary');
+  const split = /\r?\n\r?\n/.exec(text);
+  const head = split ? text.slice(0, split.index) : text;
+  const rest = split ? text.slice(split.index) : '';
+  const withoutBcc = head.split(/\r?\n(?![ \t])/).filter(line => !/^bcc:/i.test(line)).join('\r\n');
+  const contentType = headerValue(headers, 'content-type');
+  return {
+    raw,
+    rawForSmtp: Buffer.from(withoutBcc + rest, 'binary'),
+    envelope: { from: lower(from), to: recipients },
+    from: lower(from), to, cc, bcc,
+    encrypted: /^multipart\/encrypted/i.test(contentType),
+  };
+}
+
 module.exports = {
+  encryptedPayload,
+  publicKeys,
+  readPrebuilt,
   listKeys,
   generateIdentity,
   importIdentity,

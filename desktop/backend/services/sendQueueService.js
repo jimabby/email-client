@@ -165,7 +165,12 @@ async function sendOne(item) {
       const account = store.getAccount(item.accountId);
       if (!account) throw new Error('Account no longer exists');
       const service = getService(account.type);
-      if (fresh.email?.pgp && (fresh.email.pgp.encrypt || fresh.email.pgp.sign)) {
+      if (fresh.email?.prebuilt) {
+        // Built and encrypted on the client; delivered byte for byte.
+        if (!service.sendRaw) throw new Error(`Prebuilt messages are not supported for ${account.type} accounts`);
+        const message = require('./pgpService').readPrebuilt(Buffer.from(fresh.email.prebuilt, 'base64'));
+        await service.sendRaw(account, message, fresh.email);
+      } else if (fresh.email?.pgp && (fresh.email.pgp.encrypt || fresh.email.pgp.sign)) {
         // Built here, at send time, from the keys as they are now. Any failure
         // fails the send: an encrypted message is never sent in the clear.
         const message = await require('./pgpService').protect(account, fresh.email, fresh.email.pgp);
@@ -225,6 +230,13 @@ function listOutbox() {
 function editQueuedSend(jobId, { to, subject, sendAt, text }) {
   const job = store.getSendQueueItem(jobId);
   if (!job || !job.email) throw new Error('Message is no longer editable');
+  if (job.email.prebuilt) {
+    // Its content is sealed; only when it goes can change.
+    if (to !== undefined && to !== job.to) throw new Error('This message was encrypted on your device; its recipients and content cannot be edited here');
+    if (sendAt && !asDate(sendAt)) throw new Error('Invalid send time');
+    const at = normalizeSendAt(sendAt);
+    return store.updateSendQueueItem(jobId, { sendAt: at, nextAttemptAt: at, status: 'pending', attempts: 0, error: null });
+  }
   if (!['pending', 'retrying', 'failed', 'cancelled'].includes(job.status) || processingIds.has(jobId)) throw new Error('Message cannot be edited during or after delivery');
   if (typeof to !== 'string' || !to.trim()) throw new Error('At least one recipient is required');
   if (sendAt && !asDate(sendAt)) throw new Error('Invalid send time');

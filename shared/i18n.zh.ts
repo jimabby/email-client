@@ -1108,4 +1108,13 @@ export const ZH: Record<string, string> = {
   "Off": "关闭",
   "Use a device token created in desktop Settings → Privacy & Appearance → Device access. It is kept in the phone's encrypted credential storage.": "请使用在桌面端“设置 → 隐私与外观 → 设备访问”中创建的设备令牌。它保存在手机的加密凭据存储中。",
   "Encrypt: only the recipients can read the subject, body, and attachments. Sender and recipients stay visible.": "加密：只有收件人能读取主题、正文和附件。发件人和收件人仍然可见。",
+  "Remove the key for {email}?": "移除 {email} 的密钥？",
+  "Encrypted mail to this address can no longer be opened on this phone. The copy on your desktop is not affected.": "发往此地址的加密邮件将无法在此手机上打开。桌面端的密钥副本不受影响。",
+  "Encryption key on this phone": "此手机上的加密密钥",
+  "Keep your OpenPGP key here instead of on the server. Encrypted mail is then opened and encrypted on this phone, and the server never sees it. On the desktop, use Settings → Encryption → Back up, paste the backup below with its passphrase, then delete the key from the cloud server.": "把 OpenPGP 密钥保存在这里，而不是服务器上。这样加密邮件会在此手机上解密和加密，服务器永远看不到内容。在桌面端使用“设置 → 加密 → 备份”，把备份连同口令粘贴到下方，然后从云服务器删除该密钥。",
+  "Unlocked until the app closes": "已解锁，直到关闭应用",
+  "Locked": "已锁定",
+  "Add key to this phone": "将密钥添加到此手机",
+  "Your encryption key on this phone is locked. Enter its passphrase to read this message.": "此手机上的加密密钥已锁定。请输入口令以阅读此邮件。",
+  "Kept on this phone only, so the provider never sees it unencrypted.": "仅保存在此手机上，邮件服务商永远看不到未加密的内容。",
 }
