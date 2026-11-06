@@ -1,99 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { format, parseISO } from 'date-fns'
+import { useEffect, useMemo, useState } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { confirmDialog, choiceDialog } from './DialogHost'
-import { aiApi, digestApi, emailsApi, pgpApi } from '../api/client'
+import { aiApi, digestApi, emailsApi } from '../api/client'
 import { PgpBadge } from './PgpBadge'
-import { promptUnlockPgp } from '../lib/pgpUnlock'
+import { AttachmentList } from './viewer/AttachmentList'
+import { PgpNotices } from './viewer/PgpNotices'
+import { MoreMenu } from './viewer/MoreMenu'
 import { Avatar, bareAddress } from './Avatar'
-import { readJson, writeJson } from '../lib/storage'
-import {
-  sanitizeEmailHtml, findUnsubscribeUrl, htmlToText, escapeHtml, totalBlocked,
-} from '../lib/emailHtml'
+import { sanitizeEmailHtml, findUnsubscribeUrl, escapeHtml, totalBlocked } from '../lib/emailHtml'
 import { ReaderFrame } from './ReaderFrame'
 import { InviteCard } from './InviteCard'
 import { SenderBadge } from './SenderBadge'
-import type { Attachment, DraftAttachment, EmailCategory } from '../types/email'
+import type { DraftAttachment, EmailCategory } from '../types/email'
 import { EMAIL_CATEGORIES } from '../types/email'
 import { useT } from '../lib/i18n'
-
-function formatFullDate(dateStr: string): string {
-  try { return format(parseISO(dateStr), 'EEEE, MMMM d, yyyy h:mm a') }
-  catch { return dateStr }
-}
-
-function normalizeSubject(subject: string): string {
-  const raw = (subject || '').trim().toLowerCase()
-  if (!raw) return '(no subject)'
-  return raw.replace(/^(re|fw|fwd)\s*:\s*/gi, '').trim() || '(no subject)'
-}
-
-const stripHtml = htmlToText
-
-/**
- * The id the server can fetch a whole conversation by, or null to fall back
- * to matching subjects in the loaded list. Gmail and Outlook have real
- * conversation ids; an IMAP thread is named by its root Message-ID, which the
- * server searches for across the folder and Sent.
- */
-function serverThreadId(email: { gmailId?: string; outlookId?: string; uid?: number; threadId?: string | null }): string | null {
-  if (!email.threadId) return null
-  if (email.gmailId || email.outlookId) return email.threadId
-  if (email.uid && /^<[^<>\s]+>$/.test(email.threadId)) return email.threadId
-  return null
-}
-
-// Smart replies were cached one localStorage key per message, which grew
-// without bound and could never be pruned. One bounded LRU map instead.
-const SMART_REPLY_KEY = 'hermes-smart-replies'
-const SMART_REPLY_LIMIT = 200
-
-function readSmartReplyCache(): Record<string, string[]> {
-  return readJson<Record<string, string[]>>(SMART_REPLY_KEY, {})
-}
-
-function readSmartReplies(emailId: string): string[] | null {
-  const cached = readSmartReplyCache()[emailId]
-  return Array.isArray(cached) ? cached : null
-}
-
-function writeSmartReplies(emailId: string, replies: string[]) {
-  const cache = readSmartReplyCache()
-  cache[emailId] = replies
-  const keys = Object.keys(cache)
-  for (const stale of keys.slice(0, Math.max(0, keys.length - SMART_REPLY_LIMIT))) delete cache[stale]
-  writeJson(SMART_REPLY_KEY, cache)
-}
-
-const StarIcon = ({ filled }: { filled?: boolean }) => (
-  <svg width="15" height="15" viewBox="0 0 16 16" fill={filled ? 'currentColor' : 'none'} className="text-accent">
-    <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
-      stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-  </svg>
-)
-
-/** One row of the reader's overflow menu. */
-function MenuItem({ onClick, label, icon, danger, disabled }: {
-  onClick: () => void
-  label: string
-  icon: React.ReactNode
-  danger?: boolean
-  disabled?: boolean
-}) {
-  return (
-    <button
-      role="menuitem"
-      onClick={onClick}
-      disabled={disabled}
-      className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-left transition-colors
-                  disabled:opacity-50 disabled:cursor-default
-        ${danger ? 'text-danger hover:bg-danger/10' : 'text-ink hover:bg-ink/6'}`}
-    >
-      <span className={`flex-shrink-0 ${danger ? '' : 'text-ink-3'}`}>{icon}</span>
-      <span className="flex-1 truncate">{label}</span>
-    </button>
-  )
-}
+import { formatFullDate, normalizeSubject, stripHtml, serverThreadId, readSmartReplies, writeSmartReplies, StarIcon } from './viewer/readerParts'
 
 export function EmailViewer() {
   const {
@@ -109,10 +30,6 @@ export function EmailViewer() {
   const [showMoveMenu, setShowMoveMenu] = useState(false)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showSnoozeMenu, setShowSnoozeMenu] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState<Record<number, boolean>>({})
-  // Object URLs for previews, fetched with the auth header (see attachmentBlob).
-  const [previewUrls, setPreviewUrls] = useState<Record<number, string | 'loading' | 'error'>>({})
-  const previewUrlRef = useRef<Record<number, string>>({})
   const [threadSummary, setThreadSummary] = useState<{ summary: string; keyPoints: string[]; actionItems: string[] } | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
@@ -121,27 +38,6 @@ export function EmailViewer() {
   const [smartReplies, setSmartReplies] = useState<string[]>([])
   const [actions, setActions] = useState<{ title: string; kind: 'task' | 'calendar'; date?: string; details?: string }[]>([])
   const [actionsLoading, setActionsLoading] = useState(false)
-  const [attachmentSummaries, setAttachmentSummaries] = useState<Record<number, string>>({})
-
-  useEffect(() => {
-    return () => {
-      const urls = previewUrlRef.current
-      for (const key of Object.keys(urls)) {
-        try { URL.revokeObjectURL(urls[Number(key)]) } catch {}
-      }
-      previewUrlRef.current = {}
-    }
-  }, [])
-
-  useEffect(() => {
-    setPreviewOpen({})
-    setPreviewUrls({})
-    const urls = previewUrlRef.current
-    for (const key of Object.keys(urls)) {
-      try { URL.revokeObjectURL(urls[Number(key)]) } catch {}
-    }
-    previewUrlRef.current = {}
-  }, [selectedEmail?.id])
 
   useEffect(() => {
     setShowMoreMenu(false)
@@ -152,7 +48,6 @@ export function EmailViewer() {
     setSummaryLoading(false)
     setShowRemoteImages(false)
     setActions([])
-    setAttachmentSummaries({})
   }, [selectedEmail?.id])
 
   // Keyed on the message id only. Depending on `emails` re-ran this on every
@@ -444,18 +339,6 @@ export function EmailViewer() {
       window.dispatchEvent(new CustomEvent('hermes:digest-changed'))
     } catch {
       showNotification('error', t('Could not save that sender'))
-    }
-  }
-
-  const isKeyAttachment = (att: Attachment) =>
-    /application\/pgp-keys/i.test(att.contentType || '') || (/\.(asc|pub|key)$/i.test(att.filename || '') && !/^(encrypted|signature)\.asc$/i.test(att.filename || ''))
-
-  const importKeyAttachment = async (index: number) => {
-    try {
-      const imported = await pgpApi.importFromAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder, !!body?.pgp)
-      showNotification('success', t('Imported a key for {emails}', { emails: imported.map(i => i.email).join(', ') }))
-    } catch (err) {
-      showNotification('error', (err as { response?: { data?: { error?: string } } })?.response?.data?.error || t('That attachment is not a public key'))
     }
   }
 
@@ -852,80 +735,6 @@ export function EmailViewer() {
     return t('{details} for privacy.', { details: parts.join(' · ') })
   })()
 
-  // The server will only ever serve these types inline; everything else comes
-  // back as a download, so offering a preview for it would just be a broken
-  // button. Note this keys on the declared type and never on the filename —
-  // an attachment called "invoice.pdf" that declares text/html is not a PDF.
-  const PREVIEWABLE_TYPES = new Set([
-    'application/pdf', 'text/plain',
-    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/avif',
-  ])
-  const attachmentType = (att: Attachment) =>
-    (att.contentType || '').toLowerCase().split(';')[0].trim()
-  const isPreviewable = (att: Attachment) => PREVIEWABLE_TYPES.has(attachmentType(att))
-  const isImage = (att: Attachment) => attachmentType(att).startsWith('image/')
-
-  // A plain attachment URL in <img src> cannot carry the Authorization header,
-  // so previews are fetched with it and shown from an object URL. The blob's
-  // type is pinned to the allowlisted declared type, never the server's echo.
-  const togglePreview = async (att: Attachment, index: number) => {
-    const opening = !previewOpen[index]
-    setPreviewOpen(s => ({ ...s, [index]: opening }))
-    if (!opening || previewUrlRef.current[index]) return
-    setPreviewUrls(s => ({ ...s, [index]: 'loading' }))
-    try {
-      const blob = await emailsApi.attachmentBlob(selectedEmail.accountId, selectedEmail.id, index, {
-        folder: selectedEmail.folder,
-        type: attachmentType(att),
-        pgp: !!body?.pgp,
-      })
-      const url = URL.createObjectURL(blob)
-      previewUrlRef.current[index] = url
-      setPreviewUrls(s => ({ ...s, [index]: url }))
-    } catch {
-      setPreviewUrls(s => ({ ...s, [index]: 'error' }))
-    }
-  }
-
-  // Downloads go through a single-use ticket URL: the browser streams the file
-  // to disk itself (the server sets Content-Disposition: attachment), so a
-  // large file is never held in JS memory, and the URL carries no credential.
-  const downloadAttachment = async (att: Attachment, index: number) => {
-    try {
-      const url = await emailsApi.attachmentDownloadUrl(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder, !!body?.pgp)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = att.filename || `attachment-${index}`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-    } catch {
-      showNotification('error', t('Could not download {name}', { name: att.filename || t('the attachment') }))
-    }
-  }
-
-  // "Summarize" still needs the bytes in hand — fetch just that one file.
-  const summarizeAttachment = async (att: Attachment, index: number) => {
-    setAttachmentSummaries(s => ({ ...s, [index]: t('Summarizing…') }))
-    try {
-      const buffer = await emailsApi.fetchAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder, !!body?.pgp)
-      let binary = ''
-      const bytes = new Uint8Array(buffer)
-      // Chunked to stay under the argument limit of String.fromCharCode.
-      for (let i = 0; i < bytes.length; i += 0x8000) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-      }
-      const { summary } = await aiApi.summarizeAttachment({
-        filename: att.filename,
-        contentType: att.contentType,
-        content: btoa(binary),
-      })
-      setAttachmentSummaries(s => ({ ...s, [index]: summary }))
-    } catch {
-      setAttachmentSummaries(s => ({ ...s, [index]: t('Unable to summarize this attachment.') }))
-    }
-  }
-
   // Forwarding has to carry the files with it, so they are pulled down once and
   // handed to the compose window as inline data.
   const collectAttachmentsForForward = async (): Promise<DraftAttachment[]> => {
@@ -1074,76 +883,15 @@ export function EmailViewer() {
             </svg>
           </button>
           {showMoreMenu && (
-            <div role="menu" className="absolute right-0 top-full mt-1.5 w-56 glass-elevated rounded-xl z-30 py-1.5 overflow-hidden animate-pop">
-              <MenuItem
-                onClick={() => { setShowMoreMenu(false); handleSummarizeThread() }}
-                disabled={summaryLoading}
-                label={summaryLoading ? t('Summarising…') : t('Summarise thread')}
-                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3h10M3 7h7M3 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
-              />
-              <MenuItem
-                onClick={() => { setShowMoreMenu(false); handleExtractActions() }}
-                disabled={actionsLoading}
-                label={actionsLoading ? t('Finding…') : t('Find tasks & dates')}
-                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-              />
-              <MenuItem
-                onClick={() => { setShowMoreMenu(false); handlePrint() }}
-                label={t('Print / save as PDF')}
-                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 6V2h8v4M4 12H2.5A1 1 0 011.5 11V7a1 1 0 011-1h11a1 1 0 011 1v4a1 1 0 01-1 1H12" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M4 9.5h8V14H4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>}
-              />
-              <MenuItem
-                onClick={() => { setShowMoreMenu(false); handleMarkUnread() }}
-                label={t('Mark as unread')}
-                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4a1 1 0 011-1h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3"/><path d="M2 4l6 5 6-5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-              />
-              {selectedEmail.threadId && (
-                <MenuItem
-                  onClick={() => { setShowMoreMenu(false); handleToggleMute() }}
-                  label={isThreadMuted(selectedEmail.accountId, selectedEmail.threadId) ? t('Unmute conversation') : t('Mute conversation')}
-                  icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 6h2.5L9 3v10L5.5 10H3V6z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M11.5 6l3 4M14.5 6l-3 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
-                />
-              )}
-              {/sent/i.test(selectedEmail.folder || '') && (
-                <MenuItem
-                  onClick={() => { setShowMoreMenu(false); handleFollowUpLater(3) }}
-                  label={t('Remind me if no reply in 3 days')}
-                  icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5.5v3l2 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
-                />
-              )}
-              <MenuItem
-                onClick={() => { setShowMoreMenu(false); handleDigestSender() }}
-                label={t('Send this sender to the digest')}
-                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><path d="M4.5 5.5h7M4.5 8h7M4.5 10.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
-              />
-              <MenuItem
-                onClick={() => { setShowMoreMenu(false); handleSortSender() }}
-                label={t('Always sort this sender into…')}
-                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M2.5 8h7M2.5 11.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
-              />
-              {unsubscribeLink && (
-                <MenuItem
-                  onClick={() => { setShowMoreMenu(false); handleUnsubscribe(unsubscribeLink) }}
-                  label={t('Unsubscribe')}
-                  icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M8 3l5 5-5 5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                />
-              )}
-
-              <div className="my-1.5 h-px bg-line/50" role="separator" />
-
-              <MenuItem
-                onClick={() => { setShowMoreMenu(false); handleSpam() }}
-                label={t('Report spam')}
-                danger
-                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>}
-              />
-              <MenuItem
-                onClick={() => { setShowMoreMenu(false); handleBlock() }}
-                label={t('Block sender')}
-                danger
-                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3"/><path d="M3.8 3.8l8.4 8.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
-              />
-            </div>
+            <MoreMenu
+              email={selectedEmail}
+              muted={!!selectedEmail.threadId && isThreadMuted(selectedEmail.accountId, selectedEmail.threadId)}
+              unsubscribeLink={unsubscribeLink}
+              summaryLoading={summaryLoading}
+              actionsLoading={actionsLoading}
+              onClose={() => setShowMoreMenu(false)}
+              handlers={{ handleBlock, handleDigestSender, handleExtractActions, handleFollowUpLater, handleMarkUnread, handlePrint, handleSortSender, handleSpam, handleSummarizeThread, handleToggleMute, handleUnsubscribe }}
+            />
           )}
         </div>
       </div>
@@ -1173,39 +921,7 @@ export function EmailViewer() {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-7 py-6" onClick={() => { setShowMoveMenu(false); setShowSnoozeMenu(false); setShowMoreMenu(false) }}>
-        {body?.pgp?.encrypted && !body.pgp.decrypted && (
-          <div role="alert" className="mb-4 rounded-xl border border-danger/30 bg-danger/8 px-4 py-3 text-[12.5px] text-danger flex items-center gap-3">
-            <span className="flex-1">{body.pgp.error || t('This message is encrypted, and none of your keys can open it.')}</span>
-            {body.pgp.locked && (
-              <button
-                onClick={async () => {
-                  if (!(await promptUnlockPgp())) return
-                  // Open it again now that the key can be used.
-                  const email = selectedEmail
-                  try {
-                    const fresh = await emailsApi.getBody(email.accountId, email.id, email.folder)
-                    if (useEmailStore.getState().selectedEmail?.id === email.id) useEmailStore.getState().setSelectedEmailBody(fresh)
-                  } catch { showNotification('error', t('Could not reload this message')) }
-                }}
-                className="btn-accent text-[11.5px] font-semibold px-3 py-1.5 rounded-lg flex-shrink-0"
-              >
-                {t('Unlock')}
-              </button>
-            )}
-          </div>
-        )}
-        {(body?.pgp?.status === 'bad' || body?.pgp?.status === 'mismatch') && (
-          <div role="alert" className="mb-4 rounded-xl border border-danger/30 bg-danger/8 px-4 py-3 text-[12.5px] text-danger">
-            {body.pgp.status === 'bad'
-              ? t('The signature on this message does not match its content. It may have been altered.')
-              : t('This message is signed with a key that belongs to {signer}, not the sender. Treat it with suspicion.', { signer: body.pgp.signer || t('someone else') })}
-          </div>
-        )}
-        {body?.pgp?.learned?.changed && (
-          <div role="alert" className="mb-4 rounded-xl border border-danger/30 bg-danger/8 px-4 py-3 text-[12.5px] text-danger">
-            {t('{sender} is now advertising a different encryption key. Hermes kept the one you had. Confirm with them before trusting the new key.', { sender: body.pgp.learned.changed })}
-          </div>
-        )}
+        {body?.pgp && <PgpNotices email={selectedEmail} pgp={body.pgp} />}
         {sanitized && totalBlocked(sanitized.blocked) ? (
           <div className="mb-5 flex items-center justify-between gap-3 rounded-xl bg-accent/12 px-3.5 py-2.5 text-[12.5px] text-ink-2">
             <span>{blockedSummary}</span>
@@ -1280,64 +996,7 @@ export function EmailViewer() {
         )}
 
         {body?.attachments && body.attachments.length > 0 && (
-          <div className="mt-6 border-t border-line pt-4">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3 mb-2.5">{t('Attachments ({count})', { count: body.attachments.length })}</div>
-            <div className="flex flex-wrap gap-2">
-              {body.attachments.map((att, i) => (
-                <div key={i} className="flex flex-col gap-2 w-full">
-                  <div className="flex items-center gap-2.5 bg-ink/4 border border-line/50 rounded-xl px-3.5 py-2.5 text-[12.5px]">
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="#f59e0b" strokeWidth="1.2" strokeLinecap="round"/></svg>
-                    <span className="text-ink ">{att.filename}</span>
-                    <span className="text-ink-3 ">({Math.round(att.size / 1024)}KB)</span>
-                    {isPreviewable(att) && (
-                      <button
-                        title={t('Preview')}
-                        onClick={() => togglePreview(att, i)}
-                        className="text-info hover:opacity-70 transition-opacity text-[11px]"
-                      >
-                        {previewOpen[i] ? t('Hide') : t('Preview')}
-                      </button>
-                    )}
-                    <button
-                      title={t('Download')}
-                      onClick={() => downloadAttachment(att, i)}
-                      className="text-accent hover:text-accent-ink transition-colors"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </button>
-                    {(attachmentType(att) === 'application/pdf' || attachmentType(att).startsWith('text/')) && (
-                      <button onClick={() => summarizeAttachment(att, i)} className="text-ai text-[11px]">{t('Summarize')}</button>
-                    )}
-                    {isKeyAttachment(att) && (
-                      <button onClick={() => importKeyAttachment(i)} className="text-info text-[11px]">{t('Import key')}</button>
-                    )}
-                  </div>
-                  {attachmentSummaries[i] && <div className="rounded-md bg-surface-2 p-3 text-xs whitespace-pre-wrap">{attachmentSummaries[i]}</div>}
-                  {previewOpen[i] && isPreviewable(att) && (
-                    <div className="border border-line rounded-md overflow-hidden bg-white w-full">
-                      {previewUrls[i] === 'loading' || !previewUrls[i] ? (
-                        <div className="p-4 text-xs text-ink-3">{t('Loading preview…')}</div>
-                      ) : previewUrls[i] === 'error' ? (
-                        <div className="p-4 text-xs text-danger">{t('Could not load this attachment.')}</div>
-                      ) : isImage(att) ? (
-                        <img src={previewUrls[i]} alt={att.filename} className="w-full h-auto max-h-[80vh] object-contain" />
-                      ) : attachmentType(att) === 'application/pdf' ? (
-                        // The browser's PDF viewer refuses to run inside a
-                        // sandboxed frame. The blob is typed application/pdf by
-                        // us (never by the sender), so it can only ever render
-                        // as a PDF, which has no script access to this page.
-                        <iframe title={att.filename} src={previewUrls[i]} className="w-full h-[80vh]" />
-                      ) : (
-                        // Sandboxed: an attachment is sender-controlled content
-                        // and must never run with this origin's privileges.
-                        <iframe title={att.filename} src={previewUrls[i]} sandbox="" className="w-full h-[80vh]" />
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
+          <AttachmentList key={selectedEmail.id} email={selectedEmail} body={body} />
         )}
         {smartReplies.length > 0 && (
           <div className="mt-6 border-t border-line pt-4">

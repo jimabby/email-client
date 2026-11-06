@@ -7,12 +7,15 @@ import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { useEmailStore, type ArchivedOriginal } from '../store/emailStore'
-import { promptDialog, confirmDialog } from './DialogHost'
+import { confirmDialog } from './DialogHost'
 import * as localOutbox from '../lib/localOutbox'
 import { emailsApi, aiApi, pgpApi, streamAiSuggestion, type StreamHandle } from '../api/client'
 import { promptUnlockPgp } from '../lib/pgpUnlock'
 import type { AiMode, Alias, DraftAttachment, MailTemplate } from '../types/email'
 import { useT, t as translate } from '../lib/i18n'
+import { RichToolbar } from './compose/RichToolbar'
+import { ContactField } from './compose/ContactField'
+import { SendOptions } from './compose/SendOptions'
 
 // Providers reject very large messages, and base64 inflates bytes by ~33%.
 // Refuse locally with a clear message instead of letting the request die with
@@ -38,183 +41,6 @@ const AI_MODES: { value: AiMode; label: string; icon: string; description: strin
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-// ─── Contact Autocomplete Field ───────────────────────────────────────────────
-
-function ContactField({
-  label, value, onChange, contacts, placeholder
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  contacts: string[]
-  placeholder?: string
-}) {
-  const [suggestions, setSuggestions] = useState<string[]>([])
-  const [activeIdx, setActiveIdx] = useState(-1)
-  const ref = useRef<HTMLDivElement>(null)
-  const lookupRef = useRef<number | null>(null)
-  // Read inside the debounced callback to tell a stale response from a current
-  // one without making the timer depend on `value`.
-  const valueRef = useRef(value)
-  valueRef.current = value
-
-  useEffect(() => () => {
-    if (lookupRef.current) window.clearTimeout(lookupRef.current)
-  }, [])
-
-  // Locally remembered addresses answer instantly; the server's ranked address
-  // book — built from every indexed message, weighted by how often and how
-  // recently you have written to someone — arrives a moment later and is
-  // merged in. Typing never waits on the network.
-  const localMatches = (needle: string) => contacts
-    .filter(c => c.toLowerCase().includes(needle))
-    .sort((a, b) => {
-      const aPrefix = a.toLowerCase().startsWith(needle) ? 0 : 1
-      const bPrefix = b.toLowerCase().startsWith(needle) ? 0 : 1
-      return aPrefix - bPrefix // otherwise keep the store's recency order
-    })
-
-  const handleChange = (v: string) => {
-    onChange(v)
-    // Only autocomplete the last token (after the last comma)
-    const lastToken = v.split(',').pop()?.trim() || ''
-
-    if (lastToken.length < 1) {
-      setSuggestions([])
-      if (lookupRef.current) window.clearTimeout(lookupRef.current)
-      return
-    }
-
-    const needle = lastToken.toLowerCase()
-    setSuggestions(localMatches(needle).slice(0, 6))
-    setActiveIdx(-1)
-
-    if (lookupRef.current) window.clearTimeout(lookupRef.current)
-    lookupRef.current = window.setTimeout(async () => {
-      try {
-        const found = await emailsApi.contacts(lastToken, { limit: 8 })
-        // The request may land after the user has typed on; only apply it if
-        // the field still ends with the token it was asked about.
-        const current = (valueRef.current.split(',').pop() || '').trim().toLowerCase()
-        if (current !== needle) return
-
-        const formatted = found.map(c => (c.name ? `${c.name} <${c.email}>` : c.email))
-        const merged: string[] = []
-        const seen = new Set<string>()
-        for (const entry of [...formatted, ...localMatches(needle)]) {
-          const key = (entry.match(/<([^>]+)>/)?.[1] || entry).toLowerCase()
-          if (seen.has(key)) continue
-          seen.add(key)
-          merged.push(entry)
-        }
-        setSuggestions(merged.slice(0, 8))
-      } catch {
-        // Keep whatever the local list already offered.
-      }
-    }, 140)
-  }
-
-  const selectSuggestion = (suggestion: string) => {
-    const parts = value.split(',')
-    parts[parts.length - 1] = ' ' + suggestion
-    onChange(parts.join(',').replace(/^,\s*/, '') + ', ')
-    setSuggestions([])
-    setActiveIdx(-1)
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!suggestions.length) return
-    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, suggestions.length - 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, 0)) }
-    else if (e.key === 'Enter' || e.key === 'Tab') {
-      if (activeIdx >= 0) { e.preventDefault(); selectSuggestion(suggestions[activeIdx]) }
-      else { setSuggestions([]) }
-    } else if (e.key === 'Escape') { setSuggestions([]) }
-  }
-
-  // Close on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setSuggestions([]) }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  return (
-    <div ref={ref} className="relative flex-1">
-      <input
-        type="text"
-        value={value}
-        onChange={e => handleChange(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        className="w-full text-sm bg-transparent text-ink placeholder-ink-3 focus:outline-none"
-      />
-      {suggestions.length > 0 && (
-        <div className="absolute left-0 top-full mt-1.5 w-64 glass-elevated rounded-xl z-50 py-1.5 max-h-48 overflow-y-auto animate-pop">
-          {suggestions.map((s, i) => (
-            <button
-              key={s}
-              onMouseDown={e => { e.preventDefault(); selectSuggestion(s) }}
-              className={`w-full text-left px-3 py-1.5 text-xs truncate transition-colors ${
-                i === activeIdx ? 'bg-surface-3 text-ink ' : 'text-ink hover:bg-surface-3 '
-              }`}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─── TipTap Toolbar ───────────────────────────────────────────────────────────
-
-function RichToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
-  if (!editor) return null
-
-  const btn = (active: boolean) =>
-    `px-1.5 py-1 rounded text-xs font-semibold transition-colors ${
-      active
-        ? 'bg-surface-3 text-ink '
-        : 'text-ink-3 hover:bg-surface-3 hover:text-ink '
-    }`
-
-  const setLink = async () => {
-    const prev = editor.getAttributes('link').href
-    const url = await promptDialog({
-      title: prev ? translate('Edit link') : translate('Insert link'),
-      label: translate('Destination'),
-      defaultValue: prev || 'https://',
-      confirmLabel: prev ? translate('Update') : translate('Insert'),
-    })
-    // Cancelling leaves the document alone; clearing the field removes the
-    // link, which is the only way to unlink from this button.
-    if (url === null) return
-    if (!url) { editor.chain().focus().unsetLink().run(); return }
-    editor.chain().focus().setLink({ href: url }).run()
-  }
-
-  return (
-    <div className="flex items-center gap-0.5 px-3 py-2 border-b border-line/40">
-      <button type="button" onClick={() => editor.chain().focus().toggleBold().run()} className={btn(editor.isActive('bold'))} title={translate('Bold')}>B</button>
-      <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={`${btn(editor.isActive('italic'))} italic`} title={translate('Italic')}>I</button>
-      <button type="button" onClick={() => editor.chain().focus().toggleUnderline().run()} className={`${btn(editor.isActive('underline'))} underline`} title={translate('Underline')}>U</button>
-      <div className="w-px h-4 bg-line mx-1" />
-      <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={btn(editor.isActive('bulletList'))} title={translate('Bullet list')}>
-        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><circle cx="2" cy="3.5" r="1" fill="currentColor"/><line x1="5" y1="3.5" x2="12" y2="3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="2" cy="7" r="1" fill="currentColor"/><line x1="5" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="2" cy="10.5" r="1" fill="currentColor"/><line x1="5" y1="10.5" x2="12" y2="10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-      </button>
-      <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={btn(editor.isActive('orderedList'))} title={translate('Numbered list')}>
-        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><text x="0" y="5" fontSize="5" fill="currentColor">1.</text><line x1="5" y1="3.5" x2="12" y2="3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><text x="0" y="9" fontSize="5" fill="currentColor">2.</text><line x1="5" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><text x="0" y="13" fontSize="5" fill="currentColor">3.</text><line x1="5" y1="10.5" x2="12" y2="10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-      </button>
-      <div className="w-px h-4 bg-line mx-1" />
-      <button type="button" onClick={setLink} className={btn(editor.isActive('link'))} title={translate('Insert link')}>
-        <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5.5 8.5a3.5 3.5 0 005 0l2-2a3.5 3.5 0 00-5-5L6.5 2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M8.5 5.5a3.5 3.5 0 00-5 0l-2 2a3.5 3.5 0 005 5l1-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-      </button>
-    </div>
-  )
 }
 
 // ─── Main Compose Modal ───────────────────────────────────────────────────────
@@ -1079,60 +905,16 @@ export function ComposeModal() {
       >
         {t('Schedule')}
       </button>
-      <select
-        value={undoWindowSec}
-        onChange={e => setUndoWindowSec(parseInt(e.target.value, 10))}
-        title={t('Undo send window')}
-        className="field text-[12px] px-2 py-1.5 !rounded-xl text-ink-2"
-      >
-        <option value={0}>{t('Undo off')}</option>
-        <option value={60}>{t('Undo 1 min')}</option>
-        <option value={120}>{t('Undo 2 min')}</option>
-      </select>
-      <select
-        value={followUpDays}
-        onChange={e => setFollowUpDays(Number(e.target.value))}
-        title={t('Remind me if nobody replies')}
-        aria-label={t('Remind me if nobody replies')}
-        className={`field text-[12px] px-2 py-1.5 !rounded-xl ${followUpDays ? 'text-accent-ink' : 'text-ink-2'}`}
-      >
-        <option value={0}>{t('No follow-up')}</option>
-        <option value={1}>{t('Remind if no reply in 1 day')}</option>
-        <option value={3}>{t('Remind if no reply in 3 days')}</option>
-        <option value={7}>{t('Remind if no reply in 1 week')}</option>
-        <option value={14}>{t('Remind if no reply in 2 weeks')}</option>
-      </select>
-      {pgpReady?.canSign && (
-        <>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={pgpEncrypt}
-            disabled={!pgpReady.canEncrypt}
-            onClick={() => togglePgp('encrypt')}
-            title={pgpReady.canEncrypt
-              ? t('Encrypt: only the recipients can read the body and attachments. The subject is not encrypted.')
-              : pgpReady.missing.length
-                ? t('No encryption key for {emails}', { emails: pgpReady.missing.join(', ') })
-                : t('Add a recipient to encrypt')}
-            className={`field text-[12px] px-2.5 py-1.5 !rounded-xl inline-flex items-center gap-1 disabled:opacity-40 ${pgpEncrypt ? 'text-success !border-success/40' : 'text-ink-2'}`}
-          >
-            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><rect x="2" y="5.5" width="8" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.2"/><path d="M4 5.5V4a2 2 0 014 0v1.5" stroke="currentColor" strokeWidth="1.2"/></svg>
-            {t('Encrypt')}
-          </button>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={pgpSign || pgpEncrypt}
-            disabled={pgpEncrypt}
-            onClick={() => togglePgp('sign')}
-            title={pgpEncrypt ? t('Encrypted mail is always signed') : t('Sign: recipients with your key can verify it came from you, unchanged.')}
-            className={`field text-[12px] px-2.5 py-1.5 !rounded-xl ${pgpSign || pgpEncrypt ? 'text-success !border-success/40' : 'text-ink-2'}`}
-          >
-            {t('Sign')}
-          </button>
-        </>
-      )}
+      <SendOptions
+        undoWindowSec={undoWindowSec}
+        onUndoWindowSec={setUndoWindowSec}
+        followUpDays={followUpDays}
+        onFollowUpDays={setFollowUpDays}
+        pgpReady={pgpReady}
+        pgpEncrypt={pgpEncrypt}
+        pgpSign={pgpSign}
+        onTogglePgp={togglePgp}
+      />
       <div className="flex-1">
         <span className="text-[10px] text-ink-3 hidden sm:inline">{t('Ctrl+Enter to send')}</span>
       </div>

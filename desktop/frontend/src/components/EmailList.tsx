@@ -1,268 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { format, isToday, isYesterday, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
-import { useT, t as translate } from '../lib/i18n'
+import { useT } from '../lib/i18n'
 import { confirmDialog } from './DialogHost'
 import { aiApi, emailsApi, withToken } from '../api/client'
 import type { EmailSummary } from '../types/email'
 import { CategoryTabs } from './CategoryTabs'
-import { Avatar } from './Avatar'
 import { readJson, writeJson } from '../lib/storage'
-
-function formatDate(dateStr: string): string {
-  try {
-    const date = parseISO(dateStr)
-    if (isToday(date)) return format(date, 'h:mm a')
-    if (isYesterday(date)) return 'Yesterday'
-    return format(date, 'MMM d')
-  } catch { return '' }
-}
-
-function getSenderName(from: string): string {
-  const match = from.match(/^([^<]+)</)
-  if (match) return match[1].trim()
-  const emailMatch = from.match(/^<?([^>]+)>?$/)
-  if (emailMatch) return emailMatch[1].trim()
-  return from
-}
-
-function normalizeSubject(subject: string): string {
-  const raw = (subject || '').trim().toLowerCase()
-  if (!raw) return '(no subject)'
-  return raw.replace(/^(re|fw|fwd)\s*:\s*/gi, '').trim() || '(no subject)'
-}
-
-function emailDateValue(email: EmailSummary): number {
-  const t = Date.parse(email.date)
-  return Number.isNaN(t) ? 0 : t
-}
-
-function StarBtn({ starred, onClick }: { starred?: boolean; onClick: (e: React.MouseEvent) => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex-shrink-0 p-0.5 rounded-md text-accent transition-all duration-150 active:scale-90
-        ${starred ? 'opacity-100' : 'opacity-0 group-hover:opacity-50 hover:!opacity-100'}`}
-      title={starred ? 'Unstar' : 'Star'}
-      aria-label={starred ? 'Unstar' : 'Star'}
-    >
-      <svg width="13" height="13" viewBox="0 0 16 16" fill={starred ? 'currentColor' : 'none'}>
-        <path d="M8 1l1.9 3.8 4.2.6-3 3 .7 4.2L8 10.5l-3.8 2.1.7-4.2-3-3 4.2-.6L8 1z"
-          stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-      </svg>
-    </button>
-  )
-}
-
-function EmailRow({ email, isSelected, isChecked, onCheck, onClick, onStar, threadCount, threadExpanded, onToggleThread, compact, indent, accountLabel, priorityLabel }: {
-  email: EmailSummary
-  isSelected: boolean
-  isChecked: boolean
-  onCheck: (e: React.MouseEvent) => void
-  onClick: () => void
-  onStar: (e: React.MouseEvent) => void
-  threadCount?: number
-  threadExpanded?: boolean
-  onToggleThread?: (e: React.MouseEvent) => void
-  compact?: boolean
-  indent?: boolean
-  accountLabel?: string
-  priorityLabel?: string
-}) {
-  return (
-    <div
-      onClick={onClick}
-      role="option"
-      aria-selected={isSelected}
-      aria-label={`${!email.read ? `${translate('Unread')}: ` : ''}${getSenderName(email.from)} — ${email.subject || translate('(no subject)')}`}
-      className={`group relative flex items-start gap-2.5 mx-1.5 rounded-xl cursor-pointer
-                  ${indent ? 'pl-9 pr-3' : 'px-2.5'} ${compact ? 'py-2' : 'py-2.5'}
-                  transition-[background-color,box-shadow] duration-150
-        ${isSelected
-          ? 'bg-accent/14 shadow-[inset_0_0_0_1px_rgb(var(--accent)/0.28)]'
-          : isChecked
-          ? 'bg-info/12 shadow-[inset_0_0_0_1px_rgb(var(--info)/0.30)]'
-          : 'hover:bg-ink/5'
-        }`}
-    >
-      {/* Unread marker — a soft bar on the leading edge, rather than a dot
-          competing with the avatar for attention. */}
-      {!email.read && !isChecked && (
-        <div className="absolute left-1 top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full bg-accent" aria-hidden />
-      )}
-
-      {/* Checkbox */}
-      <div
-        onClick={onCheck}
-        role="checkbox"
-        aria-checked={isChecked}
-        aria-label={isChecked ? translate('Deselect email') : translate('Select email')}
-        className={`flex-shrink-0 mt-1.5 w-[17px] h-[17px] rounded-[6px] border flex items-center justify-center
-                    cursor-pointer transition-all duration-150
-          ${isChecked
-            ? 'bg-info border-info'
-            : 'border-line opacity-0 group-hover:opacity-100 hover:border-ink-3'
-          }`}
-      >
-        {isChecked && (
-          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-            <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        )}
-      </div>
-
-      {/* Avatar */}
-      <Avatar from={email.from} size={compact ? 28 : 34} className="mt-px" />
-
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className={`text-[13px] truncate tracking-[-0.005em] ${!email.read ? 'font-semibold text-ink' : 'text-ink-2'}`}>
-            {getSenderName(email.from)}
-          </span>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <StarBtn starred={email.starred} onClick={onStar} />
-            {accountLabel && (
-              <span className="text-[10px] px-1.5 py-px rounded-full bg-ink/10 text-ink-2">
-                {accountLabel}
-              </span>
-            )}
-            {typeof threadCount === 'number' && threadCount > 1 && onToggleThread && (
-              <button
-                onClick={onToggleThread}
-                title={threadExpanded ? translate('Collapse thread') : translate('Expand thread')}
-                className="p-0.5 text-ink-3 hover:text-ink transition-colors"
-              >
-                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`${threadExpanded ? 'rotate-180' : ''} transition-transform duration-200`}>
-                  <path d="M2.5 4.5l3.5 3 3.5-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </button>
-            )}
-            {email.hasAttachments && (
-              <span title={translate('Has attachments')} aria-label={translate('Has attachments')} className="text-ink-3 flex-shrink-0">
-                <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                  <path d="M10 4L6 8.5a2 2 0 01-3-2.5L8 1a3 3 0 014 4.5L5.5 11A4 4 0 01.5 5.5L6 0" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-                </svg>
-              </span>
-            )}
-            <span className={`text-[11px] tabular-nums ${!email.read ? 'text-accent-ink font-medium' : 'text-ink-3'}`}>
-              {formatDate(email.date)}
-            </span>
-          </div>
-        </div>
-
-        <div className={`text-[12.5px] truncate mt-px ${!email.read ? 'font-medium text-ink' : 'text-ink-2'}`}>
-          {email.subject || translate('(no subject)')}
-          {typeof threadCount === 'number' && threadCount > 1 && (
-            <span className="ml-1.5 text-[10px] px-1.5 py-px rounded-full bg-ink/10 text-ink-2 align-middle">
-              {threadCount}
-            </span>
-          )}
-          {priorityLabel && (
-            <span className="ml-1.5 text-[10px] px-1.5 py-px rounded-full bg-accent/20 text-accent-ink font-medium align-middle">
-              {priorityLabel}
-            </span>
-          )}
-        </div>
-
-        {email.snippet && (
-          <div className="text-[12px] text-ink-3 truncate leading-snug mt-0.5">{email.snippet}</div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// A search, as remembered. The same shape backs both the recent list and the
-// saved list — what differs is how an entry gets there.
-interface SearchEntry {
-  id: string
-  name: string
-  query: string
-  mode: 'email' | 'attachment'
-  attachmentType: string
-  searchAll: boolean
-  accountId: string | null
-  folder: string
-  category: string
-}
-
-/** One line in the virtualised list, in either display mode. */
-type Thread = { key: string; items: EmailSummary[]; latest: EmailSummary; unreadCount: number }
-type RenderRow =
-  | { kind: 'thread'; key: string; thread: Thread }
-  | { kind: 'child'; key: string; email: EmailSummary }
-  | { kind: 'flat'; key: string; email: EmailSummary }
-
-const RECENT_KEY = 'hermes-recent-searches'
-const SAVED_KEY = 'hermes-saved-searches'
-const RECENT_LIMIT = 12
-
-/** Two entries are the same search if every input that shaped it matches. */
-function sameSearch(a: SearchEntry, b: SearchEntry): boolean {
-  return a.query === b.query
-    && a.mode === b.mode
-    && a.attachmentType === b.attachmentType
-    && a.searchAll === b.searchAll
-    && a.accountId === b.accountId
-    && a.folder === b.folder
-    && a.category === b.category
-}
-
-/** One titled group in the search dropdown — Saved or Recent. */
-function SearchSection({ title, entries, onApply, onRemove, removeTitle, onClearAll, clearLabel }: {
-  title: string
-  entries: SearchEntry[]
-  onApply: (entry: SearchEntry) => void
-  onRemove: (id: string) => void
-  removeTitle: string
-  onClearAll?: () => void
-  clearLabel?: string
-}) {
-  return (
-    <div className="pb-1">
-      <div className="flex items-center justify-between gap-2 px-3 pt-1 pb-1">
-        <span className="text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em]">{title}</span>
-        {onClearAll && (
-          <button
-            onMouseDown={e => e.preventDefault()}
-            onClick={onClearAll}
-            className="text-[11px] text-ink-3 hover:text-danger transition-colors"
-          >
-            {clearLabel}
-          </button>
-        )}
-      </div>
-      {entries.map(entry => (
-        <div key={entry.id} className="group flex items-center gap-2 px-3 py-1.5 hover:bg-ink/6 transition-colors">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" className="text-ink-3 flex-shrink-0">
-            <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.4"/>
-            <path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-          </svg>
-          <button
-            onMouseDown={e => e.preventDefault()}
-            onClick={() => onApply(entry)}
-            className="text-left text-[12.5px] text-ink truncate flex-1"
-            title={entry.query}
-          >
-            {entry.name}
-            {entry.searchAll && <span className="ml-1.5 text-[10px] text-ink-3">all accounts</span>}
-            {entry.mode === 'attachment' && <span className="ml-1.5 text-[10px] text-ink-3">attachments</span>}
-          </button>
-          <button
-            onMouseDown={e => e.preventDefault()}
-            onClick={() => onRemove(entry.id)}
-            className="opacity-0 group-hover:opacity-100 text-ink-3 hover:text-danger transition-all p-0.5 flex-shrink-0"
-            title={removeTitle}
-            aria-label={removeTitle}
-          >
-            <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
-          </button>
-        </div>
-      ))}
-    </div>
-  )
-}
+import { normalizeSubject, emailDateValue, EmailRow } from './email-list/EmailRow'
+import { RECENT_KEY, SAVED_KEY, RECENT_LIMIT, sameSearch } from './email-list/SearchHistory'
+import type { SearchEntry } from './email-list/SearchHistory'
+import type { Thread, RenderRow } from './email-list/EmailRow'
+import { SelectionToolbar } from './email-list/SelectionToolbar'
+import { SearchPanel } from './email-list/SearchPanel'
 
 export function EmailList() {
   const {
@@ -290,7 +40,6 @@ export function EmailList() {
   const [searchMode, setSearchMode] = useState<'email' | 'attachment'>('email')
   const [attachmentType, setAttachmentType] = useState('')
   const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({})
-  const [showMoveMenu, setShowMoveMenu] = useState(false)
   const [searchAll, setSearchAll] = useState(false)
   // Two distinct lists. Every search used to be filed as "saved", which meant
   // the saved list was really an unlabelled history the user never asked for
@@ -659,7 +408,6 @@ export function EmailList() {
   const handleBulkMove = async (targetFolder: string) => {
     const selected = getSelectedEmails()
     if (!selected.length) { clearEmailSelection(); return }
-    setShowMoveMenu(false)
     try {
       await Promise.all(groupSelection(selected).map(g => emailsApi.bulkMove(g.accountId, g.ids, targetFolder, g.folder)))
       removeFromViews(selected.map(e => e.id))
@@ -1004,162 +752,25 @@ export function EmailList() {
       {/* Header */}
       <div className="px-2.5 min-h-[52px] py-2 border-b border-line/40 flex items-center gap-1.5 flex-shrink-0">
         {selectedEmailIds.length > 0 ? (
-          /* Selection toolbar */
-          <div className="flex-1 flex items-center gap-1">
-            <div
-              onClick={handleSelectAll}
-              className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-all mr-1
-                ${prioritySorted.length > 0 && prioritySorted.every(e => selectedEmailIds.includes(e.id))
-                  ? 'bg-info border-info'
-                  : 'border-line '
-                }`}
-              title={prioritySorted.every(e => selectedEmailIds.includes(e.id)) ? t('Deselect all') : t('Select all')}
-            >
-              {prioritySorted.length > 0 && prioritySorted.every(e => selectedEmailIds.includes(e.id)) ? (
-                <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-                  <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              ) : selectedEmailIds.length > 0 ? (
-                <div className="w-2 h-0.5 bg-info rounded" />
-              ) : null}
-            </div>
-            <span className="text-xs font-semibold text-ink mr-1">{t('{count} selected', { count: selectedEmailIds.length })}</span>
-            <button onClick={handleBulkMarkRead} title={t('Mark as read')}
-              className="btn-ghost w-8 h-8 flex items-center justify-center">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 4l7 5 7-5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3"/></svg>
-            </button>
-            <button onClick={handleBulkMarkUnread} title={t('Mark as unread')}
-              className="btn-ghost w-8 h-8 flex items-center justify-center">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 4l7 5 7-5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><circle cx="13" cy="4" r="3" fill="#f59e0b"/></svg>
-            </button>
-            <div className="relative">
-              <button onClick={() => setShowMoveMenu(m => !m)} title={t('Move to folder')}
-                className="btn-ghost w-8 h-8 flex items-center justify-center">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.44a1 1 0 01.7.29L8 4h5.5A1.5 1.5 0 0115 5.5v7A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5v-9z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
-              </button>
-              {showMoveMenu && currentAccountId && (
-                <div className="absolute left-0 top-full mt-1.5 z-50 glass-elevated rounded-xl py-1.5 min-w-[160px] animate-pop">
-                  {(folders[currentAccountId] || [
-                    { name: 'Inbox', path: 'INBOX' }, { name: 'Trash', path: 'Trash' },
-                    { name: 'Spam', path: 'Spam' }, { name: 'Archive', path: 'Archive' },
-                  ]).filter(f => f.path !== currentFolder).map(f => (
-                    <button key={f.path} onClick={() => handleBulkMove(f.path)}
-                      className="w-full text-left px-3 py-1.5 text-[13px] text-ink hover:bg-ink/6 transition-colors">
-                      {f.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <button onClick={handleBulkArchive} title={t('Archive')}
-              className="btn-ghost w-8 h-8 flex items-center justify-center">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                <path d="M2 4h12v1H2zM3 5v7a1 1 0 001 1h8a1 1 0 001-1V5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-                <path d="M6 8h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-              </svg>
-            </button>
-            <button onClick={handleBulkDelete} title={t('Delete')}
-              className="btn-ghost w-8 h-8 flex items-center justify-center hover:!text-danger hover:!bg-danger/10">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3M2 4h12M5 4v9a1 1 0 001 1h4a1 1 0 001-1V4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </button>
-            <button onClick={clearEmailSelection} title={t('Deselect all')}
-              className="btn-ghost ml-auto w-8 h-8 flex items-center justify-center">
-              <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-            </button>
-          </div>
+          <SelectionToolbar
+            count={selectedEmailIds.length}
+            allSelected={prioritySorted.length > 0 && prioritySorted.every(e => selectedEmailIds.includes(e.id))}
+            everySelected={prioritySorted.every(e => selectedEmailIds.includes(e.id))}
+            canMove={!!currentAccountId}
+            moveTargets={(currentAccountId && folders[currentAccountId] || [
+              { name: 'Inbox', path: 'INBOX' }, { name: 'Trash', path: 'Trash' },
+              { name: 'Spam', path: 'Spam' }, { name: 'Archive', path: 'Archive' },
+            ]).filter(f => f.path !== currentFolder)}
+            onToggleAll={handleSelectAll}
+            onMarkRead={handleBulkMarkRead}
+            onMarkUnread={handleBulkMarkUnread}
+            onMove={handleBulkMove}
+            onArchive={handleBulkArchive}
+            onDelete={handleBulkDelete}
+            onClear={clearEmailSelection}
+          />
         ) : showSearch ? (
-          <div className="flex-1 flex flex-col gap-1.5 relative">
-            <div className="flex items-center gap-2">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="text-ink-3 flex-shrink-0"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-              <input
-                autoFocus
-                type="text"
-                value={searchInput}
-                onChange={e => setSearchInput(e.target.value)}
-                onFocus={() => setShowSavedMenu(true)}
-                onBlur={() => setTimeout(() => setShowSavedMenu(false), 120)}
-                onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType(''); setSearchAll(false); setShowSavedMenu(false) } }}
-                placeholder={searchMode === 'attachment' ? t('Attachment name…') : t('Search emails…')}
-                className="flex-1 text-[13px] bg-transparent text-ink placeholder-ink-3 focus:outline-none"
-              />
-              <button
-                onClick={() => { setSearchMode(searchMode === 'attachment' ? 'email' : 'attachment'); setAttachmentType('') }}
-                title={t('Search attachments')}
-                className={`px-2 py-1 text-[10px] rounded-full border transition-colors ${searchMode === 'attachment'
-                  ? 'text-ink bg-accent/10 border-accent/40'
-                  : 'text-ink-3 border-line hover:text-ink '
-                }`}
-              >
-                {t('Attachments')}
-              </button>
-              <button
-                onMouseDown={e => e.preventDefault()}
-                onClick={saveCurrentSearch}
-                disabled={!searchInput.trim() || isCurrentSearchSaved}
-                title={isCurrentSearchSaved ? t('Already saved') : t('Save this search')}
-                aria-label={t('Save this search')}
-                className={`px-2 py-1 text-[10px] rounded-full border transition-colors disabled:opacity-40
-                  ${isCurrentSearchSaved
-                    ? 'text-accent-ink bg-accent/14 border-accent/40'
-                    : 'text-ink-3 border-line/60 hover:text-ink hover:bg-ink/5'
-                  }`}
-              >
-                {isCurrentSearchSaved ? t('Saved') : t('Save')}
-              </button>
-              <button
-                onClick={() => setSearchAll(v => !v)}
-                title={t('Search all accounts')}
-                className={`px-2 py-1 text-[10px] rounded-full border transition-colors ${searchAll
-                  ? 'text-ink bg-info/10 border-info/40'
-                  : 'text-ink-3 border-line hover:text-ink '
-                }`}
-              >
-                {t('All accounts')}
-              </button>
-              <button onClick={() => { setShowSearch(false); setSearchInput(''); setSearchResults(null); setSearchMode('email'); setAttachmentType(''); setSearchAll(false) }}
-                className="text-ink-3 hover:text-danger transition-colors p-0.5 flex-shrink-0">
-                <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-              </button>
-            </div>
-            {searchMode === 'attachment' && (
-              <div className="flex items-center gap-2">
-                <div className="text-[10px] text-ink-3 ">{t('Type')}</div>
-                <input
-                  type="text"
-                  value={attachmentType}
-                  onChange={e => setAttachmentType(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') handleSearch(searchInput) }}
-                  placeholder="pdf, png, image/*"
-                  className="flex-1 text-[10.5px] bg-transparent text-ink placeholder-ink-3 focus:outline-none"
-                />
-              </div>
-            )}
-            {showSavedMenu && (savedSearches.length > 0 || recentSearches.length > 0) && (
-              <div className="absolute left-0 right-0 top-full mt-1.5 z-50 glass-elevated rounded-xl py-1.5 animate-pop max-h-80 overflow-y-auto">
-                {savedSearches.length > 0 && (
-                  <SearchSection
-                    title={t('Saved')}
-                    entries={savedSearches}
-                    onApply={applySavedSearch}
-                    onRemove={deleteSavedSearch}
-                    removeTitle={t('Remove saved search')}
-                  />
-                )}
-
-                {recentSearches.length > 0 && (
-                  <SearchSection
-                    title={t('Recent')}
-                    entries={recentSearches}
-                    onApply={applySavedSearch}
-                    onRemove={deleteRecentSearch}
-                    removeTitle={t('Remove from recents')}
-                    onClearAll={() => persistRecentSearches([])}
-                    clearLabel={t('Clear recent searches')}
-                  />
-                )}
-              </div>
-            )}
-          </div>
+          <SearchPanel search={{ accounts, applySavedSearch, attachmentType, deleteRecentSearch, deleteSavedSearch, handleSearch, isCurrentSearchSaved, persistRecentSearches, recentSearches, saveCurrentSearch, savedSearches, searchAll, searchInput, searchMode, setAttachmentType, setSearchAll, setSearchInput, setSearchMode, setSearchResults, setShowSavedMenu, setShowSearch, showSavedMenu }} />
         ) : (
           <>
             <div className="flex-1 min-w-0 flex items-baseline gap-2 pl-1.5">

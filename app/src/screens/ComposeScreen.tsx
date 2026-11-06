@@ -404,7 +404,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
               accessibilityRole="switch"
               accessibilityState={{ checked: pgpEncrypt, disabled: !pgpReady.canEncrypt }}
               accessibilityHint={pgpReady.canEncrypt
-                ? tr('Encrypt: only the recipients can read the body and attachments. The subject is not encrypted.')
+                ? tr('Encrypt: only the recipients can read the subject, body, and attachments. Sender and recipients stay visible.')
                 : pgpReady.missing.length ? tr('No encryption key for {emails}', { emails: pgpReady.missing.join(', ') }) : tr('Add a recipient to encrypt')}
             >
               <Text style={pgpEncrypt ? styles.toolActive : [styles.toolText, !pgpReady.canEncrypt && { opacity: 0.4 }]}>

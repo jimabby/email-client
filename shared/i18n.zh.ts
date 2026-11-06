@@ -1107,4 +1107,5 @@ export const ZH: Record<string, string> = {
   "Your encryption key is locked. Enter its passphrase to encrypt this message.": "你的加密密钥已锁定。请输入口令以加密此邮件。",
   "Off": "关闭",
   "Use a device token created in desktop Settings → Privacy & Appearance → Device access. It is kept in the phone's encrypted credential storage.": "请使用在桌面端“设置 → 隐私与外观 → 设备访问”中创建的设备令牌。它保存在手机的加密凭据存储中。",
+  "Encrypt: only the recipients can read the subject, body, and attachments. Sender and recipients stay visible.": "加密：只有收件人能读取主题、正文和附件。发件人和收件人仍然可见。",
 }

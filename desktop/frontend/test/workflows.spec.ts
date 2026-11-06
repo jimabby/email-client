@@ -182,3 +182,31 @@ test('a message encrypted to a locked key can be unlocked from the reader', asyn
   await expect.poll(() => unlocked).toBe('correct horse battery')
   await expect(page.getByText('Now readable.')).toBeVisible()
 })
+
+test('checking messages swaps in the bulk toolbar, and archive acts on them', async ({ page }) => {
+  await setup(page)
+  const second = { ...message, id: 'one::INBOX::8', subject: 'Second' }
+  await page.evaluate(async ([a, b]) => {
+    const s = (await import('/src/store/emailStore.ts')).useEmailStore.getState()
+    s.setCurrentAccount('one'); s.setEmails([a as any, b as any]); s.toggleEmailSelection((a as any).id); s.toggleEmailSelection((b as any).id)
+  }, [message, second] as const)
+  await expect(page.getByText('2 selected')).toBeVisible()
+  let moved: any = null
+  await page.route('**/api/emails/one/bulk/move**', route => { moved = route.request().postDataJSON(); return route.fulfill({ json: { succeeded: 2, failed: 0, errors: [] } }) })
+  await page.getByTitle('Archive', { exact: true }).click()
+  await expect.poll(() => moved?.emailIds?.sort()).toEqual(['one::INBOX::7', 'one::INBOX::8'])
+})
+
+test('a search can be run and saved from the search header', async ({ page }) => {
+  await setup(page)
+  let query = ''
+  await page.route('**/api/emails/search-index**', route => { query = new URL(route.request().url()).searchParams.get('q') || ''; return route.fulfill({ json: { emails: [] } }) })
+  await page.route('**/api/emails/one/search**', route => route.fulfill({ json: [] }))
+  await page.getByLabel('Search emails…', { exact: true }).first().click()
+  const box = page.getByPlaceholder('Search emails…')
+  await box.fill('from:friend')
+  await box.press('Enter')
+  await page.getByRole('button', { name: 'Save this search' }).click()
+  await expect(page.getByRole('button', { name: 'Save this search' })).toHaveText('Saved')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('hermes-saved-searches') || '[]').map((s: any) => s.query))).toEqual(['from:friend'])
+})
