@@ -34,7 +34,7 @@ function sweep(now = Date.now()) {
  *        as a download. Mobile opens tickets in the OS viewer, so inline is
  *        the default.
  */
-function issue({ kind = 'attachment', accountId, emailId, index, folder, inline = true, limit }) {
+function issue({ kind = 'attachment', accountId, emailId, index, folder, inline = true, limit, pgp = false }) {
   const token = crypto.randomBytes(32).toString('base64url');
   tickets.set(token, {
     kind,
@@ -44,6 +44,7 @@ function issue({ kind = 'attachment', accountId, emailId, index, folder, inline 
     folder: folder || 'INBOX',
     inline: inline !== false,
     limit,
+    pgp: pgp === true,
     expiresAt: Date.now() + TTL_MS,
     used: false,
   });

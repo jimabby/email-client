@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const store = require('../store');
-const { categorizeEmails, VALID_CATEGORIES } = require('../services/categorizationService');
+const { categorizeEmails, overrideFor, senderAddress, senderDomain, VALID_CATEGORIES } = require('../services/categorizationService');
 const { categorizeEmailsWithAI } = require('../services/aiService');
 const { createQueuedSend, cancelQueuedSend, retryQueuedSend, listOutbox } = require('../services/sendQueueService');
 const { ensureWatch, subscribe, getUnreadCounts, invalidateCounts } = require('../services/mailWatchService');
@@ -148,7 +148,66 @@ function sendAttachment(res, attachment, index, wantsInlineRequested) {
 }
 
 /** Pull one attachment's bytes, whichever provider the account uses. */
-async function loadAttachment(account, emailId, index, folder) {
+// ─── OpenPGP on read ─────────────────────────────────────────────────────────
+// A protected message is opened from its raw source. What comes out is held
+// in memory only, for a short while, so its attachments can be downloaded:
+// it is never written to the offline cache or the search index, which keep
+// the message as the provider stores it.
+const pgpService = require('../services/pgpService');
+const PGP_TTL_MS = 10 * 60 * 1000;
+const pgpOpened = new Map(); // `${accountId}:${emailId}` -> { at, attachments }
+
+function rememberOpened(key, attachments) {
+  pgpOpened.delete(key);
+  pgpOpened.set(key, { at: Date.now(), attachments });
+  while (pgpOpened.size > 50) pgpOpened.delete(pgpOpened.keys().next().value);
+}
+
+async function rawSource(account, emailId, folder) {
+  const service = getService(account.type);
+  if (!service.getRawMessage) return null;
+  if (account.type === 'imap') {
+    const target = imapTarget(emailId, folder);
+    return service.getRawMessage(account, target.uid, target.folder);
+  }
+  return service.getRawMessage(account, gmailOrOutlookId(emailId));
+}
+
+/**
+ * Decrypt and/or verify a message whose body looks OpenPGP-protected.
+ * @returns the body to show (with `pgp` status), or null to show it as-is.
+ */
+async function openProtected(account, emailId, folder, body, { force = false } = {}) {
+  if (!force && !pgpService.looksProtected(body)) return null;
+  const raw = await rawSource(account, emailId, folder);
+  if (!raw) return null;
+  const opened = await pgpService.open(raw, { from: body?.from, fallbackText: body?.text });
+  if (!opened) return null;
+  rememberOpened(`${account.id}:${emailId}`, opened.attachments || []);
+  return {
+    ...body,
+    text: opened.text,
+    html: opened.html,
+    attachments: (opened.attachments || []).map(({ content, ...meta }) => ({ ...meta, content: null })),
+    pgp: opened.pgp,
+  };
+}
+
+async function loadAttachment(account, emailId, index, folder, { pgp = false } = {}) {
+  const key = `${account.id}:${emailId}`;
+  let opened = pgpOpened.get(key);
+  if (opened && Date.now() - opened.at > PGP_TTL_MS) { pgpOpened.delete(key); opened = null; }
+  // The client says the message was opened with OpenPGP (its attachment list
+  // came from the decrypted content), but the memory copy has gone: open again.
+  if (!opened && pgp) {
+    await openProtected(account, emailId, folder, null, { force: true });
+    opened = pgpOpened.get(key);
+  }
+  if (opened) {
+    const attachment = opened.attachments[index];
+    if (!attachment) throw new Error('Attachment not found');
+    return attachment;
+  }
   const service = getService(account.type);
   if (!service.getAttachment) throw new Error('Attachments are not supported for this account');
   if (account.type === 'imap') {
@@ -339,7 +398,7 @@ router.patch('/outbox/:jobId', (req, res) => {
 });
 
 router.get('/search-coverage', (req, res) => res.json(require('../services/searchCoverageService').coverage()));
-router.post('/search-backfill', (req, res) => { try { res.status(202).json(require('../services/searchCoverageService').start(req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); } });
+router.post('/search-backfill', (req, res) => { try { const coverage = require('../services/searchCoverageService'); res.status(202).json(coverage.publicJob(coverage.start(req.body || {}))); } catch (e) { res.status(400).json({ error: e.message }); } });
 router.get('/shared-drafts', (req, res) => { try { res.json(require('../services/sharedDraftService').list()); } catch (e) { res.status(500).json({ error: e.message }); } });
 router.get('/sync-status', (req, res) => res.json(require('../services/mailWatchService').syncStatus()));
 router.post('/sync/:accountId', (req, res) => {
@@ -425,7 +484,9 @@ router.post('/categorize', async (req, res) => {
   const emails = req.body.emails.slice(0, 200);
 
   const cached = store.getEmailCategories();
-  const uncached = emails.filter(e => !cached[e.id] || !VALID_CATEGORIES.has(cached[e.id]));
+  const overrides = store.getCategoryOverrides();
+  // A sender the user has sorted by hand never goes to the AI at all.
+  const uncached = emails.filter(e => !overrideFor(e.from, overrides) && (!cached[e.id] || !VALID_CATEGORIES.has(cached[e.id])));
 
   if (uncached.length) {
     let fresh = await categorizeEmailsWithAI(uncached);
@@ -440,8 +501,37 @@ router.post('/categorize', async (req, res) => {
   }
 
   const result = {};
-  for (const e of emails) result[e.id] = cached[e.id] || 'Primary';
+  for (const e of emails) result[e.id] = overrideFor(e.from, overrides) || cached[e.id] || 'Primary';
   res.json({ categories: result });
+});
+
+// ─── Category overrides ("always put this sender in…") ──────────────────────
+// GET    /api/emails/category-overrides
+// PUT    /api/emails/category-overrides  Body: { from, scope: 'sender'|'domain', category }
+// DELETE /api/emails/category-overrides  Body: { key, scope }
+router.get('/category-overrides', (req, res) => res.json(store.getCategoryOverrides()));
+
+router.put('/category-overrides', (req, res) => {
+  const { from, scope = 'sender', category } = req.body || {};
+  if (!VALID_CATEGORIES.has(category)) return res.status(400).json({ error: 'Unknown category' });
+  if (!['sender', 'domain'].includes(scope)) return res.status(400).json({ error: 'scope must be "sender" or "domain"' });
+  const key = scope === 'sender' ? senderAddress(from) : senderDomain(from);
+  if (!key || !/^[^\s@]*@?[a-z0-9.-]+\.[a-z0-9-]+$/i.test(key)) return res.status(400).json({ error: 'Could not read a sender address' });
+  const overrides = store.getCategoryOverrides();
+  const bucket = scope === 'sender' ? overrides.senders : overrides.domains;
+  if (!bucket[key] && Object.keys(bucket).length >= 2000) return res.status(400).json({ error: 'Too many category overrides' });
+  bucket[key] = category;
+  store.saveCategoryOverrides(overrides);
+  res.json({ success: true, key, scope, category, overrides });
+});
+
+router.delete('/category-overrides', (req, res) => {
+  const { key, scope = 'sender' } = req.body || {};
+  const overrides = store.getCategoryOverrides();
+  const bucket = scope === 'domain' ? overrides.domains : overrides.senders;
+  delete bucket[String(key || '').toLowerCase()];
+  store.saveCategoryOverrides(overrides);
+  res.json({ success: true, overrides });
 });
 
 // POST /api/emails/trigger-report — force-run the daily report immediately.
@@ -693,6 +783,33 @@ router.delete('/screener/senders', (req, res) => {
 
 // ─── Muted conversations ────────────────────────────────────────────────────
 
+// ─── Newsletter digest ──────────────────────────────────────────────────────
+// GET  /api/emails/digest                    what is waiting, grouped by sender
+// PUT  /api/emails/digest                    { enabled?, folder?, deliverAt?, autoDetect? }
+// POST /api/emails/digest/senders            { sender, decision: 'digest'|'keep'|'remove' }
+// POST /api/emails/digest/release            { sender } — not a newsletter: back to the inbox
+// POST /api/emails/digest/read-all           mark everything waiting as read
+router.get('/digest', async (req, res) => {
+  try { res.json(await require('../services/digestService').list()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+router.put('/digest', (req, res) => {
+  try { res.json(require('../services/digestService').configure(req.body || {})); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+router.post('/digest/senders', (req, res) => {
+  try { res.json(require('../services/digestService').setSender(req.body?.sender, req.body?.decision)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+router.post('/digest/release', async (req, res) => {
+  try { const result = await require('../services/digestService').release(req.body?.sender); invalidateCounts(); res.json(result); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+router.post('/digest/read-all', async (req, res) => {
+  try { const result = await require('../services/digestService').markAllRead(); invalidateCounts(); res.json(result); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.get('/muted', (req, res) => res.json(store.getMutedThreads()));
 
 // ─── Notification preferences ───────────────────────────────────────────────
@@ -756,6 +873,8 @@ router.get('/settings-export', (req, res) => {
     },
     notifications: store.getNotificationSettings(),
     screener: (({ enabled, folder, allowed, blocked }) => ({ enabled, folder, allowed, blocked }))(store.getScreenerSettings()),
+    categoryOverrides: store.getCategoryOverrides(),
+    digest: (({ folder, deliverAt, autoDetect, senders, excluded }) => ({ folder, deliverAt, autoDetect, senders, excluded }))(store.getDigestSettings()),
   });
 });
 
@@ -836,6 +955,31 @@ router.post('/settings-import', (req, res) => {
         end: time(n.quietHours?.end, '07:00'),
         allowVips: n.quietHours?.allowVips !== false,
       },
+    });
+  }
+
+  if (data.digest && typeof data.digest === 'object') {
+    const clean = (list) => (Array.isArray(list) ? list : []).map(screenerService.normalizeSender).filter(Boolean).slice(0, 5000);
+    const d = data.digest;
+    store.saveDigestSettings({
+      // Never switched on by a restore: it would start moving mail unannounced.
+      folder: typeof d.folder === 'string' && d.folder.trim() ? d.folder.trim().slice(0, 100) : undefined,
+      deliverAt: /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(d.deliverAt || '')) ? String(d.deliverAt) : undefined,
+      autoDetect: typeof d.autoDetect === 'boolean' ? d.autoDetect : undefined,
+      senders: clean(d.senders),
+      excluded: clean(d.excluded),
+    });
+  }
+
+  if (data.categoryOverrides && typeof data.categoryOverrides === 'object') {
+    const clean = (map) => Object.fromEntries(Object.entries(map && typeof map === 'object' ? map : {})
+      .filter(([key, value]) => VALID_CATEGORIES.has(value) && /^[^\s@]*@?[a-z0-9.-]+\.[a-z0-9-]+$/i.test(key))
+      .slice(0, 2000)
+      .map(([key, value]) => [key.toLowerCase(), value]));
+    const current = store.getCategoryOverrides();
+    store.saveCategoryOverrides({
+      senders: { ...current.senders, ...clean(data.categoryOverrides.senders) },
+      domains: { ...current.domains, ...clean(data.categoryOverrides.domains) },
     });
   }
 
@@ -935,7 +1079,7 @@ router.get('/attachment-ticket/:token', async (req, res) => {
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   try {
-    const attachment = await loadAttachment(account, claim.emailId, claim.index, claim.folder);
+    const attachment = await loadAttachment(account, claim.emailId, claim.index, claim.folder, { pgp: claim.pgp === true });
     sendAttachment(res, attachment, claim.index, claim.inline !== false);
   } catch (err) {
     console.error('Ticketed attachment error:', err);
@@ -1085,7 +1229,12 @@ router.get('/:accountId/message/:emailId', async (req, res) => {
     const clientBody = publicBody(body);
     store.saveEmailCache(`body:${account.id}:${emailId}:${folder}`, clientBody);
     searchIndex.indexBody(emailId, body);
-    res.json(clientBody);
+    // After caching and indexing, which keep the provider's copy: decrypted
+    // text is shown, never stored.
+    let protectedBody = null;
+    try { protectedBody = await openProtected(account, emailId, folder, clientBody); }
+    catch (err) { console.warn('[pgp] Could not open message:', err.message); }
+    res.json(protectedBody || clientBody);
   } catch (err) {
     console.error('Fetch email body error:', err);
     const cached = store.getEmailCache(`body:${account.id}:${emailId}:${folder}`);
@@ -1105,7 +1254,7 @@ router.get('/:accountId/message/:emailId/attachment/:index', async (req, res) =>
   if (!Number.isInteger(index) || index < 0) return res.status(400).json({ error: 'Invalid attachment index' });
 
   try {
-    const attachment = await loadAttachment(account, req.params.emailId, index, req.query.folder);
+    const attachment = await loadAttachment(account, req.params.emailId, index, req.query.folder, { pgp: req.query.pgp === '1' });
     sendAttachment(res, attachment, index, req.query.inline === 'true');
   } catch (err) {
     console.error('Fetch attachment error:', err);
@@ -1134,6 +1283,7 @@ router.post('/:accountId/message/:emailId/attachment/:index/ticket', (req, res) 
     folder: req.query.folder || 'INBOX',
     // A desktop "Download" wants a file; the phone opens tickets in a viewer.
     inline: req.query.inline !== 'false',
+    pgp: req.query.pgp === '1',
   });
 
   res.json({ url: `/api/emails/attachment-ticket/${token}`, expiresIn });
@@ -1151,7 +1301,17 @@ router.get('/:accountId/thread/:threadId', async (req, res) => {
     for (const item of items) {
       if (item?.summary?.id) searchIndex.indexBody(item.summary.id, item.body);
     }
-    res.json(items.map(item => ({ ...item, body: publicBody(item.body) })));
+    const out = [];
+    for (const item of items) {
+      const body = publicBody(item.body);
+      let opened = null;
+      if (item?.summary?.id) {
+        try { opened = await openProtected(account, item.summary.id, item.summary.folder || req.query.folder || 'INBOX', body); }
+        catch (err) { console.warn('[pgp] Could not open thread message:', err.message); }
+      }
+      out.push({ ...item, body: opened || body });
+    }
+    res.json(out);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1251,7 +1411,7 @@ router.post('/:accountId/send', async (req, res) => {
 
   const {
     to, cc, bcc, subject, text, html, attachments, sendAt, undoWindowSec, requestId,
-    inReplyTo, references, threadId, replyToEmailId, replyToFolder, sendAs, followUpDays,
+    inReplyTo, references, threadId, replyToEmailId, replyToFolder, sendAs, followUpDays, pgp: pgpRequest,
   } = req.body;
   if (requestId !== undefined && (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))) return res.status(400).json({ error: 'Invalid requestId' });
   // An empty subject is legal mail; the composer asks before sending one.
@@ -1271,15 +1431,36 @@ router.post('/:accountId/send', async (req, res) => {
     if (!known) return res.status(400).json({ error: `${sendAs.email} is not a configured alias for this account` });
   }
 
+  // OpenPGP: checked here, before anything is queued, so a missing key is an
+  // error the composer can show rather than a failed send in the outbox. The
+  // queue re-checks at send time and never falls back to plaintext.
+  const pgpOptions = pgpRequest && (pgpRequest.encrypt === true || pgpRequest.sign === true)
+    ? { encrypt: pgpRequest.encrypt === true, sign: pgpRequest.sign === true }
+    : null;
+  if (pgpOptions) {
+    const fromAddress = sendAs?.email || account.email;
+    const ready = require('../services/pgpService').readiness({ from: fromAddress, to, cc, bcc });
+    if (!ready.canSign) return res.status(400).json({ error: `You have no OpenPGP key for ${fromAddress}. Create or import one in Settings → Encryption.`, code: 'PGP_NO_IDENTITY' });
+    if (pgpOptions.encrypt && ready.missing.length) {
+      return res.status(400).json({ error: `No OpenPGP key for ${ready.missing.join(', ')}.`, code: 'PGP_MISSING_KEYS', missing: ready.missing });
+    }
+  }
+
   try {
     const email = { to, cc, bcc, subject, text, html, attachments, inReplyTo, references, threadId, sendAs };
+    if (pgpOptions) email.pgp = pgpOptions;
 
     // Threading is best-effort: resolve what the client didn't supply.
     try {
       if (replyToEmailId) {
-        if (account.type === 'outlook') {
+        if (account.type === 'outlook' && !pgpOptions) {
           // Outlook threads via the Graph reply endpoint, not headers.
           email.replyToProviderId = gmailOrOutlookId(replyToEmailId);
+        } else if (account.type === 'outlook') {
+          // A PGP/MIME message goes to Graph as raw MIME, which threads by its
+          // own In-Reply-To/References headers like any other client's mail.
+          const meta = await getService('outlook').getThreadingInfo?.(account, gmailOrOutlookId(replyToEmailId));
+          if (meta) { email.inReplyTo = email.inReplyTo || meta.inReplyTo; email.references = email.references || meta.references; }
         } else if (!email.inReplyTo) {
           const service = getService(account.type);
           const meta = account.type === 'gmail'
@@ -1911,4 +2092,5 @@ router.post('/:accountId/bulk/move', async (req, res) => {
   res.json({ success: results.failed === 0 && !results.skipped, ...results });
 });
 
+router._internals = { loadAttachment, openProtected };
 module.exports = router;

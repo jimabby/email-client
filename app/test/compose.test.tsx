@@ -1,4 +1,5 @@
 /// <reference types="jest" />
+jest.mock('../src/backgroundOutbox', () => ({ ensureBackgroundDelivery: jest.fn(async () => true) }));
 jest.mock('../src/offline', () => ({ queueOffline: jest.fn(), offlineUnavailable: () => false }));
 import React from 'react';
 import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
@@ -7,7 +8,7 @@ import ComposeScreen from '../src/screens/ComposeScreen';
 import { api } from '../src/api';
 import { saveLocalDraft } from '../src/drafts';
 import * as DocumentPicker from 'expo-document-picker';
-jest.mock('../src/api', () => ({ api: { aiSettings: jest.fn(async () => ({ configured: false })), send: jest.fn(), saveDraft: jest.fn() }, errorMessage: (e: Error) => e.message }));
+jest.mock('../src/api', () => ({ api: { aiSettings: jest.fn(async () => ({ configured: false })), send: jest.fn(), saveDraft: jest.fn(), pgpReadiness: jest.fn(async () => ({ canSign: false, canEncrypt: false, missing: [] })) }, errorMessage: (e: Error) => e.message }));
 jest.mock('../src/drafts', () => ({ saveLocalDraft: jest.fn(async () => {}), removeLocalDraft: jest.fn(async () => {}) }));
 jest.mock('expo-document-picker', () => ({ getDocumentAsync: jest.fn() }));
 jest.mock('expo-file-system/legacy', () => ({ readAsStringAsync: jest.fn(async () => 'YXR0YWNobWVudA=='), EncodingType: { Base64: 'base64' } }));
@@ -57,4 +58,26 @@ test('lost response retries reuse the request id and preserve composition', asyn
   await waitFor(() => expect(api.send).toHaveBeenCalledTimes(2));
   expect((api.send as jest.Mock).mock.calls[0][1].requestId).toBe((api.send as jest.Mock).mock.calls[1][1].requestId);
   expect(ui.getByDisplayValue('Keep me')).toBeTruthy(); await ui.unmount();
+});
+test('encrypt appears once the sender has a key, and an encrypted send says so to the server', async () => {
+  (api.pgpReadiness as jest.Mock).mockResolvedValue({ canSign: true, canEncrypt: true, missing: [] });
+  (api.send as jest.Mock).mockResolvedValue({ jobId: 'job' });
+  const ui = await screen({ prefill: { to: 'friend@example.org', subject: 'Private', body: 'Secret' } });
+  await waitFor(() => expect(ui.getByText(/Encrypt/)).toBeTruthy(), { timeout: 2000 });
+  await fireEvent.press(ui.getByText(/Encrypt/));
+  const header = await render(options.headerRight()); await fireEvent.press(header.getByText('Send'));
+  await waitFor(() => expect(api.send).toHaveBeenCalled());
+  expect((api.send as jest.Mock).mock.calls[0][1].pgp).toEqual({ encrypt: true, sign: true });
+  await ui.unmount();
+});
+test('encrypt cannot be switched on while a recipient has no key', async () => {
+  (api.pgpReadiness as jest.Mock).mockResolvedValue({ canSign: true, canEncrypt: false, missing: ['stranger@x.example'] });
+  (api.send as jest.Mock).mockResolvedValue({ jobId: 'job' });
+  const ui = await screen({ prefill: { to: 'stranger@x.example', subject: 'Hi', body: 'Hello' } });
+  await waitFor(() => expect(ui.getByText(/Encrypt/)).toBeTruthy(), { timeout: 2000 });
+  await fireEvent.press(ui.getByText(/Encrypt/));
+  const header = await render(options.headerRight()); await fireEvent.press(header.getByText('Send'));
+  await waitFor(() => expect(api.send).toHaveBeenCalled());
+  expect((api.send as jest.Mock).mock.calls[0][1].pgp).toBeUndefined();
+  await ui.unmount();
 });

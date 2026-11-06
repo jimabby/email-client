@@ -9,7 +9,7 @@ import Placeholder from '@tiptap/extension-placeholder'
 import { useEmailStore, type ArchivedOriginal } from '../store/emailStore'
 import { promptDialog, confirmDialog } from './DialogHost'
 import * as localOutbox from '../lib/localOutbox'
-import { emailsApi, aiApi, streamAiSuggestion, type StreamHandle } from '../api/client'
+import { emailsApi, aiApi, pgpApi, streamAiSuggestion, type StreamHandle } from '../api/client'
 import type { AiMode, Alias, DraftAttachment, MailTemplate } from '../types/email'
 import { useT, t as translate } from '../lib/i18n'
 
@@ -270,6 +270,10 @@ export function ComposeModal() {
   const [undoWindowSec, setUndoWindowSec] = useState(60)
   // "Remind me if nobody replies" — 0 is off.
   const [followUpDays, setFollowUpDays] = useState(0)
+  // OpenPGP. The controls only appear once the sending address has a key.
+  const [pgpEncrypt, setPgpEncrypt] = useState(false)
+  const [pgpSign, setPgpSign] = useState(false)
+  const [pgpReady, setPgpReady] = useState<{ canSign: boolean; canEncrypt: boolean; missing: string[] } | null>(null)
   const [showSchedule, setShowSchedule] = useState(false)
   const [scheduledAt, setScheduledAt] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -481,6 +485,24 @@ export function ComposeModal() {
     },
   }
 
+  // Who we could encrypt to, rechecked as the recipients change. Debounced:
+  // it is a round trip per keystroke otherwise.
+  const pgpFrom = sendAs || accounts.find(a => a.id === accountId)?.email || ''
+  useEffect(() => {
+    if (!pgpFrom) return
+    const timer = window.setTimeout(() => {
+      pgpApi.readiness({ from: pgpFrom, to, cc, bcc })
+        .then(ready => {
+          setPgpReady(ready)
+          // Never leave Encrypt on for a recipient we have no key for.
+          if (!ready.canEncrypt) setPgpEncrypt(false)
+          if (!ready.canSign) setPgpSign(false)
+        })
+        .catch(() => setPgpReady(null))
+    }, 400)
+    return () => window.clearTimeout(timer)
+  }, [pgpFrom, to, cc, bcc])
+
   const handleSend = async (options: { archiveOriginal?: boolean } = {}) => {
     if (isSending) return
     if (!to.trim()) { showNotification('error', t('Add at least one recipient')); return }
@@ -530,6 +552,7 @@ export function ComposeModal() {
         replyToEmailId: ownsOriginal ? r?.id : composeData?.replyToEmailId,
         replyToFolder: ownsOriginal ? r?.folder : composeData?.replyToFolder,
         followUpDays: followUpDays > 0 ? followUpDays : undefined,
+        pgp: pgpEncrypt || pgpSign ? { encrypt: pgpEncrypt, sign: pgpSign || pgpEncrypt } : undefined,
       }
 
       let sendResult
@@ -1063,6 +1086,37 @@ export function ComposeModal() {
         <option value={7}>{t('Remind if no reply in 1 week')}</option>
         <option value={14}>{t('Remind if no reply in 2 weeks')}</option>
       </select>
+      {pgpReady?.canSign && (
+        <>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={pgpEncrypt}
+            disabled={!pgpReady.canEncrypt}
+            onClick={() => setPgpEncrypt(v => !v)}
+            title={pgpReady.canEncrypt
+              ? t('Encrypt: only the recipients can read the body and attachments. The subject is not encrypted.')
+              : pgpReady.missing.length
+                ? t('No encryption key for {emails}', { emails: pgpReady.missing.join(', ') })
+                : t('Add a recipient to encrypt')}
+            className={`field text-[12px] px-2.5 py-1.5 !rounded-xl inline-flex items-center gap-1 disabled:opacity-40 ${pgpEncrypt ? 'text-success !border-success/40' : 'text-ink-2'}`}
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><rect x="2" y="5.5" width="8" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.2"/><path d="M4 5.5V4a2 2 0 014 0v1.5" stroke="currentColor" strokeWidth="1.2"/></svg>
+            {t('Encrypt')}
+          </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={pgpSign || pgpEncrypt}
+            disabled={pgpEncrypt}
+            onClick={() => setPgpSign(v => !v)}
+            title={pgpEncrypt ? t('Encrypted mail is always signed') : t('Sign: recipients with your key can verify it came from you, unchanged.')}
+            className={`field text-[12px] px-2.5 py-1.5 !rounded-xl ${pgpSign || pgpEncrypt ? 'text-success !border-success/40' : 'text-ink-2'}`}
+          >
+            {t('Sign')}
+          </button>
+        </>
+      )}
       <div className="flex-1">
         <span className="text-[10px] text-ink-3 hidden sm:inline">{t('Ctrl+Enter to send')}</span>
       </div>

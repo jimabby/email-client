@@ -22,6 +22,7 @@ const RulesModal = lazy(() => import('./components/RulesModal').then(m => ({ def
 const FollowupsModal = lazy(() => import('./components/FollowupsModal').then(m => ({ default: m.FollowupsModal })))
 const CommandPalette = lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
 const ScreenerModal = lazy(() => import('./components/ScreenerModal').then(m => ({ default: m.ScreenerModal })))
+const DigestModal = lazy(() => import('./components/DigestModal').then(m => ({ default: m.DigestModal })))
 
 // Bridge exposed by the Electron preload script. Absent when running in a
 // plain browser, so every use is optional.
@@ -465,7 +466,7 @@ export default function App() {
     isComposeOpen, composeNonce, showAccountModal, showDraftsModal, showOutboxModal, showRulesModal,
     setAccounts, setCurrentAccount, showNotification, theme, setAiConfig, setPendingReport,
     setSnoozes, isChatOpen, showFollowupsModal, showCommandPalette, setFollowups, setMutedThreads,
-    showScreenerModal,
+    showScreenerModal, showDigestModal,
   } = useEmailStore()
   useKeyboardShortcuts()
   const [showShortcuts, setShowShortcuts] = useState(false)
@@ -615,6 +616,7 @@ export default function App() {
       if (target.view === 'outbox') { useEmailStore.getState().setShowOutboxModal(true); return }
       if (target.view === 'followups') { useEmailStore.getState().setShowFollowupsModal(true); return }
       if (target.view === 'screener') { useEmailStore.getState().setShowScreenerModal(true); return }
+      if (target.view === 'digest') { useEmailStore.getState().setShowDigestModal(true); return }
       if (!target.accountId) return
 
       const store = useEmailStore.getState()
@@ -724,6 +726,7 @@ export default function App() {
           {showFollowupsModal && <FollowupsModal />}
           {showCommandPalette && <CommandPalette />}
           {showScreenerModal && <ScreenerModal />}
+          {showDigestModal && <DigestModal />}
           <DailyReportModal />
         </Suspense>
         <Notification />

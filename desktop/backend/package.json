@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
-    "@azure/msal-node": "^7.0.0",
+    "@azure/msal-node": "^7.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.0.0",
     "express": "^4.22.3",
@@ -18,10 +18,11 @@
     "google-auth-library": "^11.1.0",
     "googleapis": "^182.0.0",
     "imapflow": "^2.1.1",
-    "mailparser": "^3.9.30",
+    "mailparser": "^3.14.2",
     "node-cron": "^4.2.1",
-    "nodemailer": "^10.0.12",
+    "nodemailer": "^10.3.1",
+    "openpgp": "^6.3.2",
     "pdf-parse": "^1.1.1",
-    "re2js": "^2.8.6"
+    "re2js": "^2.9.1"
   }
 }

@@ -4,7 +4,7 @@ import { Linking } from 'react-native';
 import { useAppStore } from './store';
 import type {
   Account, EmailSummary, EmailBody, Folder, OutboxItem, UnreadCounts, UnifiedPage,
-  ThreadSummary, MailRule, Followup, MutedThread, AiMode, ScreenerState,
+  ThreadSummary, MailRule, Followup, MutedThread, AiMode, ScreenerState, DigestState,
 } from './types';
 
 // The base URL and private token are configured on the Settings screen. In
@@ -19,7 +19,7 @@ function client() {
   const originalGet = instance.get.bind(instance);
   instance.get = ((url: string, config?: any) => {
     const cacheable = url === '/auth/accounts' || url === '/emails/unified' || /^\/emails\/[^/]+(?:\/folders|\/message\/[^/]+)?$/.test(url);
-    if (!cacheable || /outbox|sync-status|devices|shared-drafts|snoozed|followups|rules|screener/.test(url)) return originalGet(url, config);
+    if (!cacheable || /outbox|sync-status|devices|shared-drafts|snoozed|followups|rules|screener|digest|pgp/.test(url)) return originalGet(url, config);
     return cachedRead(JSON.stringify([url, config?.params || {}]), () => originalGet(url, config).then(r => r.data))
       .then(data => ({ data, status: 200, statusText: 'OK', headers: {}, config: config || {} }));
   }) as typeof instance.get;
@@ -41,7 +41,8 @@ export const api = {
   devices: () => client().get<AccessDevice[]>('/auth/devices').then(r => r.data),
   addDevice: (name: string) => client().post<AccessDevice & { token: string }>('/auth/devices', { name }).then(r => r.data),
   revokeDevice: (id: string) => client().delete(`/auth/devices/${id}`),
-  health: () => client().get<{ status: string; authenticated: boolean }>('/auth-check').then((r) => r.data),
+  /** `scope` is what this token may do: admin (the master token), full, mail, or read. */
+  health: () => client().get<{ status: string; authenticated: boolean; scope?: 'admin' | 'full' | 'mail' | 'read' }>('/auth-check').then((r) => r.data),
 
   listAccounts: () =>
     client().get<Account[]>('/auth/accounts').then((r) => r.data),
@@ -178,6 +179,8 @@ export const api = {
       undoWindowSec?: number;
       /** Remind me if nobody has replied after this many days. */
       followUpDays?: number;
+      /** OpenPGP: sent as PGP/MIME; the server refuses rather than send in the clear. */
+      pgp?: { encrypt: boolean; sign: boolean };
     }
   ) => client()
     .post<{ jobId: string; sendAt: string; canUndoUntil: string | null }>(`/emails/${accountId}/send`, data)
@@ -188,6 +191,18 @@ export const api = {
   remindAgain: (id: string, days: number) =>
     client().post<Followup>(`/emails/followups/${id}/remind`, { days }).then((r) => r.data),
   dismissFollowup: (id: string) => client().delete(`/emails/followups/${id}`).then((r) => r.data),
+
+  // ─── Newsletter digest ────────────────────────────────────────────────────
+  digest: () => client().get<DigestState>('/emails/digest', { timeout: 45000 }).then((r) => r.data),
+  configureDigest: (settings: Partial<DigestState['settings']>) =>
+    client().put<DigestState['settings']>('/emails/digest', settings).then((r) => r.data),
+  releaseDigestSender: (sender: string) =>
+    client().post<{ moved: number }>('/emails/digest/release', { sender }, { timeout: 60000 }).then((r) => r.data),
+  readAllDigest: () => client().post<{ marked: number }>('/emails/digest/read-all', {}, { timeout: 60000 }).then((r) => r.data),
+
+  // ─── OpenPGP ──────────────────────────────────────────────────────────────
+  pgpReadiness: (draft: { from: string; to?: string; cc?: string; bcc?: string }) =>
+    client().post<{ canSign: boolean; canEncrypt: boolean; missing: string[] }>('/pgp/readiness', draft).then((r) => r.data),
 
   // ─── Sender screener ──────────────────────────────────────────────────────
   // Listing reads a folder per account, so it gets more time than the default.
@@ -270,7 +285,10 @@ export const api = {
     client().get<{ provider: string | null; configured: boolean }>('/ai/settings').then((r) => r.data),
 
   smartReplies: (data: { from?: string; subject?: string; body?: string }) =>
-    client().post<{ replies: string[] }>('/ai/smart-replies', data).then((r) => r.data.replies),
+    // Never undefined: the viewer maps over this, and a response without the
+    // array (an older backend, a captive-portal page) would crash it.
+    client().post<{ replies: string[] }>('/ai/smart-replies', data)
+      .then((r) => (Array.isArray(r.data?.replies) ? r.data.replies.filter((x): x is string => typeof x === 'string') : [])),
 
   threadSummary: (data: { subject?: string; messages: { from?: string; date?: string; body?: string }[] }) =>
     client().post<ThreadSummary>('/ai/thread-summary', data).then((r) => r.data),
@@ -305,13 +323,15 @@ export async function openAttachment(
   emailId: string,
   index: number,
   filename?: string,
-  folder?: string
+  folder?: string,
+  pgp?: boolean
 ): Promise<void> {
   const { serverUrl } = useAppStore.getState();
   const { data } = await client().post<{ url: string; expiresIn: number }>(
     `/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}/ticket`,
     {},
-    { params: folder ? { folder } : {} }
+    // pgp=1: the list came from the decrypted message; serve from that.
+    { params: { ...(folder ? { folder } : {}), ...(pgp ? { pgp: '1' } : {}) } }
   );
 
   const url = `${serverUrl.replace(/\/$/, '')}${data.url}`;

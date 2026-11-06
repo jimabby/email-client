@@ -93,3 +93,78 @@ test('missing attachment warning can cancel delivery', async ({ page }) => {
   expect(calls).toBe(0)
   await expect(page.getByPlaceholder('Email subject')).toHaveValue('Important draft')
 })
+
+const message = { id: 'one::INBOX::7', accountId: 'one', folder: 'INBOX', from: 'Friend <friend@example.org>', to: 'one@example.com', subject: 'Plans', snippet: '', date: new Date().toISOString(), read: true, starred: false }
+async function openMessage(page: Page, body: Record<string, unknown>) {
+  await page.route('**/api/emails/one/message/**', route => route.fulfill({ json: { from: message.from, to: message.to, subject: message.subject, date: message.date, text: 'Meet at noon.', html: '', attachments: [], ...body } }))
+  // The list loads a body when a row is clicked; here the body is handed to
+  // the store directly, the way that click would.
+  const full = { from: message.from, to: message.to, subject: message.subject, date: message.date, text: 'Meet at noon.', html: '', attachments: [], ...body }
+  await page.evaluate(async ([m, b]) => {
+    const s = (await import('/src/store/emailStore.ts')).useEmailStore.getState()
+    s.setEmails([m as any]); s.setSelectedEmail(m as any); s.setSelectedEmailBody(b as any)
+  }, [message, full] as const)
+}
+
+test('encrypt toggle appears with a key and sends the request as OpenPGP', async ({ page }) => {
+  await setup(page)
+  await page.route('**/api/pgp/readiness', route => route.fulfill({ json: { canSign: true, canEncrypt: true, missing: [] } }))
+  await compose(page)
+  let payload: any = null
+  await page.route('**/api/emails/one/send', route => { payload = route.request().postDataJSON(); return route.fulfill({ json: { queued: true, jobId: 'job' } }) })
+  await page.getByRole('switch', { name: 'Encrypt' }).click()
+  await expect(page.getByRole('switch', { name: 'Encrypt' })).toHaveAttribute('aria-checked', 'true')
+  await page.getByLabel('Send email', { exact: true }).click()
+  await expect.poll(() => payload?.pgp).toEqual({ encrypt: true, sign: true })
+})
+
+test('encrypt stays off while a recipient has no key', async ({ page }) => {
+  await setup(page)
+  await page.route('**/api/pgp/readiness', route => route.fulfill({ json: { canSign: true, canEncrypt: false, missing: ['recipient@example.com'] } }))
+  await compose(page)
+  await expect(page.getByRole('switch', { name: 'Encrypt' })).toBeDisabled()
+  await expect(page.getByRole('switch', { name: 'Encrypt' })).toHaveAttribute('title', /recipient@example\.com/)
+})
+
+test('the reader shows what OpenPGP made of a message', async ({ page }) => {
+  await setup(page)
+  await openMessage(page, { pgp: { encrypted: true, decrypted: true, signed: true, status: 'verified', signer: 'friend@example.org', fingerprint: 'ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234' } })
+  await expect(page.getByText('Encrypted · Signed')).toBeVisible()
+  await expect(page.getByText('Meet at noon.')).toBeVisible()
+})
+
+test('a signature from the wrong key is flagged in the reader', async ({ page }) => {
+  await setup(page)
+  await openMessage(page, { pgp: { encrypted: false, signed: true, status: 'mismatch', signer: 'impostor@evil.example' } })
+  await expect(page.getByRole('alert').filter({ hasText: 'impostor@evil.example' })).toBeVisible()
+})
+
+test('"Not a newsletter" sends a digest sender back to the inbox', async ({ page }) => {
+  await setup(page)
+  const digest = {
+    settings: { enabled: true, folder: 'Digest', deliverAt: '17:00', autoDetect: true, senders: [], excluded: [] },
+    state: { lastDeliveredAt: null, lastDeliveredDate: null, collected: {}, lastCount: 0 },
+    groups: [{ sender: 'news@acme.example', name: 'Acme', count: 1, unread: 1, latest: new Date().toISOString(), emails: [{ ...message, id: 'one::Digest::1', folder: 'Digest', digestFolder: 'Digest', from: 'Acme <news@acme.example>', subject: 'October news', read: false, isNew: true }] }],
+    errors: [],
+  }
+  await page.route('**/api/emails/digest', route => route.fulfill({ json: digest }))
+  let released = ''
+  await page.route('**/api/emails/digest/release', route => { released = route.request().postDataJSON().sender; return route.fulfill({ json: { sender: released, moved: 1, failures: [] } }) })
+  await page.evaluate(async () => (await import('/src/store/emailStore.ts')).useEmailStore.getState().setShowDigestModal(true))
+  await expect(page.getByText('October news')).toBeVisible()
+  await page.getByRole('button', { name: 'Not a newsletter' }).click()
+  await expect.poll(() => released).toBe('news@acme.example')
+})
+
+test('a sender can be sorted into a tab for good', async ({ page }) => {
+  await setup(page)
+  await openMessage(page, {})
+  let saved: any = null
+  await page.route('**/api/emails/category-overrides', route => { saved = route.request().postDataJSON(); return route.fulfill({ json: { key: 'friend@example.org', scope: 'sender', category: saved.category } }) })
+  await page.getByLabel('More actions').click()
+  await page.getByRole('menuitem', { name: 'Always sort this sender into…' }).click()
+  await page.getByRole('radio', { name: 'Jobs' }).click()
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect.poll(() => saved).toEqual({ from: message.from, scope: 'sender', category: 'Jobs' })
+  await expect.poll(() => page.evaluate(async () => (await import('/src/store/emailStore.ts')).useEmailStore.getState().emailCategories['one::INBOX::7'])).toBe('Jobs')
+})

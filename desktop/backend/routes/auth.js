@@ -36,7 +36,7 @@ router.use('/devices', (req, res, next) => {
 });
 router.get('/devices', (req, res) => res.json(require('../services/deviceAccessService').list()));
 router.post('/devices', (req, res) => {
-  try { res.status(201).json(require('../services/deviceAccessService').create(req.body.name)); }
+  try { res.status(201).json(require('../services/deviceAccessService').create(req.body.name, req.body.scope || 'full')); }
   catch (error) { res.status(400).json({ error: error.message }); }
 });
 router.delete('/devices/:id', (req, res) => {

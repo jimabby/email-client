@@ -82,6 +82,54 @@ export interface EmailBody {
   /** Set when served from the offline cache. */
   offline?: boolean;
   cachedAt?: string;
+  /** Set when the message was opened with OpenPGP (see PgpBadge). */
+  pgp?: PgpStatus | null;
+}
+
+/** What OpenPGP made of a message. */
+export interface PgpStatus {
+  encrypted: boolean;
+  /** For encrypted mail: whether one of our keys opened it. */
+  decrypted?: boolean;
+  signed?: boolean;
+  /** verified: good signature by a key naming the sender. mismatch: good
+   *  signature, but the key names someone else. unknown-key: we lack the
+   *  signer's key. bad: the signature does not match the content. */
+  status?: 'verified' | 'mismatch' | 'unknown-key' | 'bad';
+  signer?: string | null;
+  fingerprint?: string;
+  keyId?: string;
+  error?: string;
+  learned?: { learned?: string; changed?: string };
+}
+
+export interface PgpKeyInfo {
+  email: string;
+  fingerprint: string;
+  keyId: string;
+  userIds: string[];
+  algorithm: string | null;
+  createdAt: string | null;
+  addedAt?: string;
+  source?: 'generated' | 'imported' | 'manual' | 'autocrypt' | 'attachment';
+  publicKey?: string;
+  keyChanged?: { fingerprint: string; seenAt: string } | null;
+}
+
+export interface DigestGroup {
+  sender: string;
+  name: string;
+  count: number;
+  unread: number;
+  latest: string | null;
+  emails: (EmailSummary & { digestFolder: string; isNew: boolean })[];
+}
+
+export interface DigestState {
+  settings: { enabled: boolean; folder: string; deliverAt: string; autoDetect: boolean; senders: string[]; excluded: string[] };
+  state: { lastDeliveredAt: string | null; lastDeliveredDate: string | null; collected: Record<string, number>; lastCount: number };
+  groups: DigestGroup[];
+  errors: { accountId: string; email: string; error: string }[];
 }
 
 /** The receiving provider's sender-authentication result. */

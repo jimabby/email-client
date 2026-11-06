@@ -260,6 +260,19 @@ function normalizeRule(rule) {
   return { ...rule, match: rule.match || 'all', conditions, actions };
 }
 
+// The rule-based categorizer changed in a way that re-sorts existing mail
+// (sender matching moved from substrings of the From text to the domain).
+// Drop categories computed under older rules so they are worked out again.
+{
+  const { RULES_VERSION } = require('./services/categorizationService');
+  if (store.categoriesVersion !== RULES_VERSION) {
+    for (const key of Object.keys(categories)) delete categories[key];
+    store.categoriesVersion = RULES_VERSION;
+    saveCategories();
+    saveStore();
+  }
+}
+
 // Rewrite accounts.json once so any existing plaintext credentials get sealed.
 if (Array.isArray(store.accounts) && store.accounts.length) saveStore();
 
@@ -385,6 +398,20 @@ module.exports = {
     saveCategories();
   },
 
+  // Categories the user chose by hand, by exact sender or by domain. They win
+  // over both the AI and the rule-based categorizer.
+  getCategoryOverrides() {
+    const value = store.categoryOverrides || {};
+    return { senders: { ...(value.senders || {}) }, domains: { ...(value.domains || {}) } };
+  },
+  saveCategoryOverrides(overrides) {
+    store.categoryOverrides = {
+      senders: { ...(overrides?.senders || {}) },
+      domains: { ...(overrides?.domains || {}) },
+    };
+    saveStore();
+  },
+
   // ─── Daily report run tracking ───────────────────────────────────────────
   getLastReportDate() {
     return store.lastReportDate || null;
@@ -411,6 +438,29 @@ module.exports = {
   },
 
   // ─── Send queue / outbox ──────────────────────────────────────────────────
+  // Search backfill jobs, so one interrupted by a restart resumes from the
+  // last page it finished rather than being forgotten.
+  getBackfillJobs() { return { ...(state.backfills || {}) }; },
+  saveBackfillJob(accountId, job) {
+    state.backfills = { ...(state.backfills || {}) };
+    if (job) state.backfills[accountId] = job; else delete state.backfills[accountId];
+    saveState();
+  },
+  // OpenPGP keys. They live in the sealed state file, never accounts.json:
+  // identities hold private keys (unlocked, so mail can be decrypted without
+  // a prompt), contacts hold other people's public keys.
+  getPgpKeys() {
+    const raw = state.pgp || {};
+    return {
+      identities: { ...(raw.identities || {}) },
+      contacts: { ...(raw.contacts || {}) },
+    };
+  },
+  savePgpKeys(value) {
+    state.pgp = { identities: { ...(value?.identities || {}) }, contacts: { ...(value?.contacts || {}) } };
+    saveState();
+    stateWriter.flush();
+  },
   getSyncState(accountId) { return state.sync?.[accountId] || null; },
   setSyncState(accountId, value) {
     const previous = state.sync;
@@ -660,6 +710,49 @@ module.exports = {
     store.notificationSettings = settings;
     saveStore();
     return this.getNotificationSettings();
+  },
+
+  // ─── Newsletter digest ────────────────────────────────────────────────────
+  // Senders are bare lower-case addresses, or "@domain" for a whole domain,
+  // exactly as for the screener.
+  getDigestSettings() {
+    const raw = store.digest || {};
+    const list = (value) => (Array.isArray(value) ? value.filter(v => typeof v === 'string') : []);
+    return {
+      enabled: raw.enabled === true,
+      folder: typeof raw.folder === 'string' && raw.folder.trim() ? raw.folder : 'Digest',
+      deliverAt: typeof raw.deliverAt === 'string' && /^\d{1,2}:\d{2}$/.test(raw.deliverAt) ? raw.deliverAt : '17:00',
+      // Read newsletters out of the categorizer's Promotions, not only the
+      // senders listed below.
+      autoDetect: raw.autoDetect !== false,
+      senders: list(raw.senders),
+      excluded: list(raw.excluded),
+    };
+  },
+
+  saveDigestSettings(settings) {
+    const given = Object.fromEntries(Object.entries(settings || {}).filter(([, v]) => v !== undefined));
+    store.digest = { ...this.getDigestSettings(), ...given };
+    saveStore();
+    return this.getDigestSettings();
+  },
+
+  // Delivery bookkeeping lives in the sealed state file, not accounts.json.
+  getDigestState() {
+    const raw = state.digest || {};
+    return {
+      lastDeliveredAt: raw.lastDeliveredAt || null,
+      lastDeliveredDate: raw.lastDeliveredDate || null,
+      // accountId -> messages filed into the digest since the last delivery.
+      collected: raw.collected && typeof raw.collected === 'object' ? { ...raw.collected } : {},
+      lastCount: Number(raw.lastCount) || 0,
+    };
+  },
+
+  saveDigestState(value) {
+    state.digest = { ...this.getDigestState(), ...value };
+    saveState();
+    return this.getDigestState();
   },
 
   // ─── Sender screener ──────────────────────────────────────────────────────

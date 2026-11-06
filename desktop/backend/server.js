@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const apiAuth = require('./middleware/apiAuth');
+const { deviceScope, normalizeScope } = require('./middleware/deviceScope');
 const { hostGuard, isLoopbackHost } = require('./middleware/hostGuard');
 const { apiLimiter, webhookLimiter, aiLimiter, sendLimiter, isLoopback } = require('./middleware/rateLimit');
 const store = require('./store');
@@ -129,13 +130,14 @@ app.use('/api', (req, res, next) => {
   // OS viewer without putting the master token in a browser's history.
   if (req.path.startsWith('/emails/attachment-ticket/')) return next();
   if (req.path.startsWith('/emails/export-ticket/') && req.method === 'GET') return next();
-  return apiAuth(req, res, next);
+  return apiAuth(req, res, () => deviceScope(req, res, next));
 });
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/emails', require('./routes/emails'));
 app.use('/api/ai', require('./routes/ai'));
+app.use('/api/pgp', require('./routes/pgp'));
 app.use('/api/webhooks', require('./routes/webhooks'));
 
 // Health check
@@ -148,7 +150,9 @@ app.get('/api/health', (req, res) => {
 
 // Unlike /health, this endpoint verifies the mobile app's credentials.
 app.get('/api/auth-check', (req, res) => {
-  res.json({ status: 'ok', authenticated: true });
+  // `scope` lets a client hide what this token cannot do; the server enforces
+  // it regardless (middleware/deviceScope.js).
+  res.json({ status: 'ok', authenticated: true, scope: req.auth?.deviceId ? normalizeScope(req.auth.scope) : 'admin' });
 });
 
 // Serve the built frontend (used when running as a desktop app via Electron).
@@ -197,9 +201,19 @@ const server = app.listen(PORT, BIND_HOST, () => {
   require('./services/snoozeService').startScheduler();
   require('./services/searchIndexService').startScheduler();
   require('./services/followupService').startScheduler();
+  require('./services/digestService').startScheduler();
   // Watch every account from boot, not just when a client opens the SSE
   // stream — that is what makes notifications arrive with the window closed.
   require('./services/mailWatchService').watchAll();
+  require('./services/searchCoverageService').resumeInterrupted();
+  if (isProduction && process.env.GMAIL_PUBSUB_TOPIC && !process.env.GMAIL_PUBSUB_SA_EMAIL) {
+    console.warn('   ⚠️  Gmail push is configured but GMAIL_PUBSUB_SA_EMAIL is not: /api/webhooks/gmail accepts');
+    console.warn('      unsigned requests, so anyone can trigger mailbox refreshes. Set it to the push');
+    console.warn("      subscription's service account to verify Google's signature.");
+  }
+  if (isProduction && !process.env.WEBHOOK_CLIENT_STATE && process.env.OUTLOOK_CLIENT_ID) {
+    console.warn('   ⚠️  WEBHOOK_CLIENT_STATE is not set: Outlook push notifications will be ignored.');
+  }
 });
 
 module.exports = { app, server };

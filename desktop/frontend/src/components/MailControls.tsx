@@ -37,7 +37,7 @@ export function MailControls() {
     <label className="block">From <input aria-label="Backfill from" type="date" className="field" value={since} onChange={e => setSince(e.target.value)} /></label>
     <label className="block">Through <input aria-label="Backfill through" type="date" className="field" value={until} onChange={e => setUntil(e.target.value)} /></label>
     <button disabled={!accountId || coverage?.jobs?.some((j: any) => j.accountId === accountId && j.running)} onClick={async () => { try { await recoveryApi.backfill({ accountId, folder, since, until }); setCoverage(await recoveryApi.coverage()); setError('') } catch (e) { setError(String(e)) } }} className="text-info">Backfill selected range</button>
-    {coverage?.jobs?.map((job: any) => <p key={job.accountId} role="status">{job.folder}: {job.running ? 'Running' : job.error ? 'Stopped' : 'Finished'} — {job.indexed} bodies indexed / {job.scanned} checked. {job.error}</p>)}
+    {coverage?.jobs?.map((job: any) => <p key={job.accountId} role="status">{job.folder}: {job.running ? (job.resumedAt ? 'Running (resumed after a restart)' : 'Running') : job.interrupted ? 'Interrupted — resumes when the backend starts' : job.error ? 'Stopped' : 'Finished'} — {job.indexed} bodies indexed / {job.scanned} checked. {job.error}</p>)}
     {error && <p role="alert" className="text-danger">{error}</p>}
   </section>
 }

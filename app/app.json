@@ -34,7 +34,8 @@
         {
           "color": "#fbbf24"
         }
-      ]
+      ],
+      "expo-background-task"
     ]
   }
 }

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import { useEmailStore } from '../store/emailStore'
-import { confirmDialog } from './DialogHost'
-import { aiApi, emailsApi } from '../api/client'
+import { confirmDialog, choiceDialog } from './DialogHost'
+import { aiApi, digestApi, emailsApi, pgpApi } from '../api/client'
+import { PgpBadge } from './PgpBadge'
 import { Avatar, bareAddress } from './Avatar'
 import { readJson, writeJson } from '../lib/storage'
 import {
@@ -11,7 +12,8 @@ import {
 import { ReaderFrame } from './ReaderFrame'
 import { InviteCard } from './InviteCard'
 import { SenderBadge } from './SenderBadge'
-import type { Attachment, DraftAttachment } from '../types/email'
+import type { Attachment, DraftAttachment, EmailCategory } from '../types/email'
+import { EMAIL_CATEGORIES } from '../types/email'
 import { useT } from '../lib/i18n'
 
 function formatFullDate(dateStr: string): string {
@@ -99,7 +101,7 @@ export function EmailViewer() {
     toggleStarLocal, markEmailUnread, setSelectedEmail,
     folders, currentAccountId, currentFolder, emails, accounts,
     snoozeEmailLocal, unsnoozeLocal, getArchiveFolder,
-    isThreadMuted, setMutedThreads, setFollowups,
+    isThreadMuted, setMutedThreads, setFollowups, setEmailCategories,
   } = useEmailStore()
   const t = useT()
 
@@ -198,10 +200,14 @@ export function EmailViewer() {
         subject: selectedEmail.subject,
         body: selectedEmailBody.text || stripHtml(selectedEmailBody.html || ''),
       })
-        .then(({ replies }) => {
+        .then((result) => {
           if (cancelled) return
+          // A response without a `replies` array (an older or misbehaving
+          // backend, a proxy page) used to set undefined here and crash the
+          // whole reader on `.length`.
+          const replies = Array.isArray(result?.replies) ? result.replies.filter((r): r is string => typeof r === 'string') : []
           setSmartReplies(replies)
-          writeSmartReplies(selectedEmail.id, replies)
+          if (replies.length) writeSmartReplies(selectedEmail.id, replies)
         })
         .catch(() => {})
     }
@@ -411,6 +417,58 @@ export function EmailViewer() {
       else openPage(fallbackLink)
     } catch (err) {
       showNotification('error', err instanceof Error ? err.message : t('Could not unsubscribe'))
+    }
+  }
+
+  // "Always digest this sender": future mail from them goes to the digest.
+  const handleDigestSender = async () => {
+    const sender = bareAddress(selectedEmail.from)
+    try {
+      await digestApi.setSender(sender, 'digest')
+      showNotification('success', t('Future mail from {sender} goes to your digest', { sender }))
+      window.dispatchEvent(new CustomEvent('hermes:digest-changed'))
+    } catch {
+      showNotification('error', t('Could not save that sender'))
+    }
+  }
+
+  const isKeyAttachment = (att: Attachment) =>
+    /application\/pgp-keys/i.test(att.contentType || '') || (/\.(asc|pub|key)$/i.test(att.filename || '') && !/^(encrypted|signature)\.asc$/i.test(att.filename || ''))
+
+  const importKeyAttachment = async (index: number) => {
+    try {
+      const imported = await pgpApi.importFromAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder, !!body?.pgp)
+      showNotification('success', t('Imported a key for {emails}', { emails: imported.map(i => i.email).join(', ') }))
+    } catch (err) {
+      showNotification('error', (err as { response?: { data?: { error?: string } } })?.response?.data?.error || t('That attachment is not a public key'))
+    }
+  }
+
+  const handleSortSender = async () => {
+    const current = useEmailStore.getState().emailCategories[selectedEmail.id]
+    const choice = await choiceDialog({
+      title: t('Always sort this sender into…'),
+      body: t('Future and loaded mail from {sender} goes to this tab.', { sender: selectedEmail.from }),
+      choices: EMAIL_CATEGORIES.filter(c => c !== 'All').map(c => ({ value: c, label: t(c) })),
+      defaultValue: current && current !== 'All' ? current : 'Primary',
+      toggle: { label: t('Apply to everyone at this domain') },
+    })
+    if (!choice) return
+    const scope = choice.toggle ? 'domain' : 'sender'
+    try {
+      const { key } = await emailsApi.setCategoryOverride(selectedEmail.from, scope, choice.value)
+      const matches = (from: string) => {
+        const address = bareAddress(from)
+        if (scope === 'sender') return address === key
+        const domain = address.split('@')[1] || ''
+        return domain === key || domain.endsWith(`.${key}`)
+      }
+      const updates: Record<string, EmailCategory> = {}
+      for (const email of useEmailStore.getState().emails) if (matches(email.from)) updates[email.id] = choice.value as EmailCategory
+      setEmailCategories(updates)
+      showNotification('success', t('Mail from {sender} will go to {category}', { sender: key, category: t(choice.value) }))
+    } catch {
+      showNotification('error', t('Could not save that category'))
     }
   }
 
@@ -804,6 +862,7 @@ export function EmailViewer() {
       const blob = await emailsApi.attachmentBlob(selectedEmail.accountId, selectedEmail.id, index, {
         folder: selectedEmail.folder,
         type: attachmentType(att),
+        pgp: !!body?.pgp,
       })
       const url = URL.createObjectURL(blob)
       previewUrlRef.current[index] = url
@@ -818,7 +877,7 @@ export function EmailViewer() {
   // large file is never held in JS memory, and the URL carries no credential.
   const downloadAttachment = async (att: Attachment, index: number) => {
     try {
-      const url = await emailsApi.attachmentDownloadUrl(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder)
+      const url = await emailsApi.attachmentDownloadUrl(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder, !!body?.pgp)
       const link = document.createElement('a')
       link.href = url
       link.download = att.filename || `attachment-${index}`
@@ -834,7 +893,7 @@ export function EmailViewer() {
   const summarizeAttachment = async (att: Attachment, index: number) => {
     setAttachmentSummaries(s => ({ ...s, [index]: t('Summarizing…') }))
     try {
-      const buffer = await emailsApi.fetchAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder)
+      const buffer = await emailsApi.fetchAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder, !!body?.pgp)
       let binary = ''
       const bytes = new Uint8Array(buffer)
       // Chunked to stay under the argument limit of String.fromCharCode.
@@ -859,7 +918,7 @@ export function EmailViewer() {
     const out: DraftAttachment[] = []
     for (const [index, att] of list.entries()) {
       try {
-        const buffer = await emailsApi.fetchAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder)
+        const buffer = await emailsApi.fetchAttachment(selectedEmail.accountId, selectedEmail.id, index, selectedEmail.folder, !!body?.pgp)
         const bytes = new Uint8Array(buffer)
         let binary = ''
         for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -1037,6 +1096,16 @@ export function EmailViewer() {
                   icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.3"/><path d="M8 5.5v3l2 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
                 />
               )}
+              <MenuItem
+                onClick={() => { setShowMoreMenu(false); handleDigestSender() }}
+                label={t('Send this sender to the digest')}
+                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><path d="M4.5 5.5h7M4.5 8h7M4.5 10.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
+              />
+              <MenuItem
+                onClick={() => { setShowMoreMenu(false); handleSortSender() }}
+                label={t('Always sort this sender into…')}
+                icon={<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11M2.5 8h7M2.5 11.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>}
+              />
               {unsubscribeLink && (
                 <MenuItem
                   onClick={() => { setShowMoreMenu(false); handleUnsubscribe(unsubscribeLink) }}
@@ -1075,6 +1144,7 @@ export function EmailViewer() {
               <div className="flex items-center gap-2 min-w-0">
                 <span className="font-semibold text-ink text-[14px] truncate tracking-[-0.01em]">{selectedEmail.from}</span>
                 <SenderBadge authentication={body?.authentication} />
+                <PgpBadge pgp={body?.pgp} />
               </div>
               <span className="text-[12px] text-ink-3 flex-shrink-0 tabular-nums">
                 {body?.date ? formatFullDate(body.date) : formatFullDate(selectedEmail.date)}
@@ -1088,6 +1158,23 @@ export function EmailViewer() {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-7 py-6" onClick={() => { setShowMoveMenu(false); setShowSnoozeMenu(false); setShowMoreMenu(false) }}>
+        {body?.pgp?.encrypted && !body.pgp.decrypted && (
+          <div role="alert" className="mb-4 rounded-xl border border-danger/30 bg-danger/8 px-4 py-3 text-[12.5px] text-danger">
+            {body.pgp.error || t('This message is encrypted, and none of your keys can open it.')}
+          </div>
+        )}
+        {(body?.pgp?.status === 'bad' || body?.pgp?.status === 'mismatch') && (
+          <div role="alert" className="mb-4 rounded-xl border border-danger/30 bg-danger/8 px-4 py-3 text-[12.5px] text-danger">
+            {body.pgp.status === 'bad'
+              ? t('The signature on this message does not match its content. It may have been altered.')
+              : t('This message is signed with a key that belongs to {signer}, not the sender. Treat it with suspicion.', { signer: body.pgp.signer || t('someone else') })}
+          </div>
+        )}
+        {body?.pgp?.learned?.changed && (
+          <div role="alert" className="mb-4 rounded-xl border border-danger/30 bg-danger/8 px-4 py-3 text-[12.5px] text-danger">
+            {t('{sender} is now advertising a different encryption key. Hermes kept the one you had. Confirm with them before trusting the new key.', { sender: body.pgp.learned.changed })}
+          </div>
+        )}
         {sanitized && totalBlocked(sanitized.blocked) ? (
           <div className="mb-5 flex items-center justify-between gap-3 rounded-xl bg-accent/12 px-3.5 py-2.5 text-[12.5px] text-ink-2">
             <span>{blockedSummary}</span>
@@ -1189,6 +1276,9 @@ export function EmailViewer() {
                     </button>
                     {(attachmentType(att) === 'application/pdf' || attachmentType(att).startsWith('text/')) && (
                       <button onClick={() => summarizeAttachment(att, i)} className="text-ai text-[11px]">{t('Summarize')}</button>
+                    )}
+                    {isKeyAttachment(att) && (
+                      <button onClick={() => importKeyAttachment(i)} className="text-info text-[11px]">{t('Import key')}</button>
                     )}
                   </div>
                   {attachmentSummaries[i] && <div className="rounded-md bg-surface-2 p-3 text-xs whitespace-pre-wrap">{attachmentSummaries[i]}</div>}

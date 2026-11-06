@@ -29,6 +29,8 @@ import AddAccountScreen from './src/screens/AddAccountScreen';
 import RulesScreen from './src/screens/RulesScreen';
 import FollowupsScreen from './src/screens/FollowupsScreen';
 import ScreenerScreen from './src/screens/ScreenerScreen';
+import DigestScreen from './src/screens/DigestScreen';
+import { resumeBackgroundDeliveryIfNeeded } from './src/backgroundOutbox';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -40,6 +42,8 @@ function Root() {
     if (!serverReady || !serverUrl) return;
     const flush = () => { flushLocalSends(api.send).catch(() => {}); };
     flush(); const timer = setInterval(flush, 30000);
+    // Anything still waiting keeps the OS background retry scheduled.
+    resumeBackgroundDeliveryIfNeeded();
     const listener = AppState.addEventListener('change', state => { if (state === 'active') flush(); });
     return () => { clearInterval(timer); listener.remove(); };
   }, [serverReady, serverUrl, apiToken]);
@@ -75,6 +79,8 @@ function Root() {
 
     // A follow-up reminder is about a sent message, not one in a folder.
     if (target.reason === 'followup') { nav.navigate('Followups'); return; }
+    // The daily digest notification is about the digest as a whole.
+    if (target.reason === 'digest') { nav.navigate('Digest'); return; }
 
     try {
       const accounts = await api.listAccounts();
@@ -198,6 +204,7 @@ function Root() {
           <Stack.Screen name="Rules" component={RulesScreen} options={{ title: tr('Rules') }} />
           <Stack.Screen name="Followups" component={FollowupsScreen} options={{ title: tr('Follow-ups') }} />
           <Stack.Screen name="Screener" component={ScreenerScreen} options={{ title: tr('Screener') }} />
+          <Stack.Screen name="Digest" component={DigestScreen} options={{ title: tr('Digest') }} />
         </Stack.Navigator>
       </NavigationContainer>
     </>

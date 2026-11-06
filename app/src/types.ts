@@ -47,6 +47,34 @@ export interface EmailBody {
     /** Always null — bytes are fetched on demand from the attachment endpoint. */
     content?: string | null;
   }[];
+  /** Set when the backend opened the message with OpenPGP. */
+  pgp?: PgpStatus | null;
+}
+
+/** What OpenPGP made of a message (mirrors the desktop type). */
+export interface PgpStatus {
+  encrypted: boolean;
+  decrypted?: boolean;
+  signed?: boolean;
+  status?: 'verified' | 'mismatch' | 'unknown-key' | 'bad';
+  signer?: string | null;
+  fingerprint?: string;
+  error?: string;
+}
+
+export interface DigestGroup {
+  sender: string;
+  name: string;
+  count: number;
+  unread: number;
+  latest: string | null;
+  emails: (EmailSummary & { digestFolder: string; isNew: boolean })[];
+}
+
+export interface DigestState {
+  settings: { enabled: boolean; folder: string; deliverAt: string; autoDetect: boolean; senders: string[]; excluded: string[] };
+  groups: DigestGroup[];
+  errors: { accountId: string; email: string; error: string }[];
 }
 
 export interface Folder {

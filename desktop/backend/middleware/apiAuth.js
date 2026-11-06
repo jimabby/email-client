@@ -33,13 +33,13 @@ function apiAuth(req, res, next) {
   const token = extractToken(req);
   if (token && safeEqual(token, expected)) { req.auth = { admin: true }; return next(); }
   const device = require('../services/deviceAccessService').authenticate(token);
-  if (device) { req.auth = { admin: false, deviceId: device.id }; return next(); }
-  {
-    res.set('WWW-Authenticate', 'Bearer');
-    return res.status(401).json({ error: 'Invalid or missing API token' });
+  if (device) {
+    req.auth = { admin: false, deviceId: device.id, scope: device.scope || 'full' };
+    return next();
   }
 
-  return next();
+  res.set('WWW-Authenticate', 'Bearer');
+  return res.status(401).json({ error: 'Invalid or missing API token' });
 }
 
 module.exports = apiAuth;

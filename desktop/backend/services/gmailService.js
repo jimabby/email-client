@@ -750,6 +750,20 @@ async function sendEmail(account, draft) {
   await gmail.users.messages.send({ userId: 'me', requestBody });
 }
 
+/**
+ * Send a message that is already a complete RFC 822 document — the PGP/MIME
+ * path, where the body must reach the recipient byte for byte. Gmail reads
+ * Bcc from the raw headers and strips it before delivery.
+ */
+async function sendRaw(account, { raw }, draft = {}) {
+  const gmail = getGmailClient(account);
+  const requestBody = {
+    raw: Buffer.from(raw).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  };
+  if (draft.threadId) requestBody.threadId = draft.threadId;
+  await gmail.users.messages.send({ userId: 'me', requestBody });
+}
+
 // Save a draft to the Gmail Drafts folder (synced to all clients).
 async function saveDraft(account, draft) {
   const gmail = getGmailClient(account);
@@ -834,6 +848,7 @@ async function importMessage(account, raw, folder = 'INBOX') {
 
 module.exports = {
   _internals: { extractBody, messageDate, messageToSummary },
+  sendRaw,
   importMessage,
   getHeaders,
   getAuthUrl,

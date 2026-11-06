@@ -4,7 +4,7 @@ import type {
   MailRule, MailTemplate, Alias, OutboxItem, UnreadCounts,
   Contact, VacationSettings, SignatureMap, UnifiedPage,
   Followup, MutedThread, NotificationSettings, ImportResult, AiModelChoices,
-  ScreenerState,
+  ScreenerState, DigestState, PgpKeyInfo,
 } from '../types/email'
 
 // When the backend runs with an API_TOKEN it injects the value into the served
@@ -174,9 +174,11 @@ export const emailsApi = {
    * URL is a 401 whenever the backend has a token, which the desktop app
    * always does. Previews use an object URL built from this instead.
    */
-  attachmentBlob: async (accountId: string, emailId: string, index: number, opts: { folder?: string; type?: string } = {}) => {
+  attachmentBlob: async (accountId: string, emailId: string, index: number, opts: { folder?: string; type?: string; pgp?: boolean } = {}) => {
     const res = await api.get<ArrayBuffer>(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}`, {
-      params: { ...(opts.folder ? { folder: opts.folder } : {}), inline: 'true' },
+      // pgp=1: the attachment list came from the decrypted message, so the
+      // server must serve from that rather than the provider's parts.
+      params: { ...(opts.folder ? { folder: opts.folder } : {}), inline: 'true', ...(opts.pgp ? { pgp: '1' } : {}) },
       responseType: 'arraybuffer',
     })
     return new Blob([res.data], { type: opts.type || String(res.headers['content-type'] || 'application/octet-stream') })
@@ -187,16 +189,16 @@ export const emailsApi = {
    * streamed by the browser's own download manager, never held in JS memory,
    * and the URL carries no reusable credential.
    */
-  attachmentDownloadUrl: (accountId: string, emailId: string, index: number, folder?: string) =>
+  attachmentDownloadUrl: (accountId: string, emailId: string, index: number, folder?: string, pgp?: boolean) =>
     api.post<{ url: string }>(
       `/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}/ticket`, {},
-      { params: { ...(folder ? { folder } : {}), inline: 'false' } },
+      { params: { ...(folder ? { folder } : {}), inline: 'false', ...(pgp ? { pgp: '1' } : {}) } },
     ).then(r => r.data.url),
 
   /** Fetch attachment bytes (used when the content is needed in memory). */
-  fetchAttachment: (accountId: string, emailId: string, index: number, folder?: string) =>
+  fetchAttachment: (accountId: string, emailId: string, index: number, folder?: string, pgp?: boolean) =>
     api.get<ArrayBuffer>(`/emails/${accountId}/message/${encodeURIComponent(emailId)}/attachment/${index}`, {
-      params: folder ? { folder } : {},
+      params: { ...(folder ? { folder } : {}), ...(pgp ? { pgp: '1' } : {}) },
       responseType: 'arraybuffer',
     }).then(r => r.data),
 
@@ -312,6 +314,8 @@ export const emailsApi = {
     replyToFolder?: string
     /** Remind me if nobody has replied after this many days. */
     followUpDays?: number
+    /** OpenPGP: sent as PGP/MIME; the server refuses rather than send in the clear. */
+    pgp?: { encrypt: boolean; sign: boolean }
   }) => api.post<{
     success: boolean
     queued?: boolean
@@ -433,6 +437,16 @@ export const emailsApi = {
 
   categorize: (emails: { id: string; from: string; subject: string; snippet?: string }[]) =>
     api.post<{ categories: Record<string, string> }>('/emails/categorize', { emails }).then(r => r.data),
+
+  /** "Always put this sender (or their whole domain) in <category>." */
+  setCategoryOverride: (from: string, scope: 'sender' | 'domain', category: string) =>
+    api.put<{ key: string; scope: string; category: string }>('/emails/category-overrides', { from, scope, category }).then(r => r.data),
+
+  getCategoryOverrides: () =>
+    api.get<{ senders: Record<string, string>; domains: Record<string, string> }>('/emails/category-overrides').then(r => r.data),
+
+  removeCategoryOverride: (key: string, scope: 'sender' | 'domain') =>
+    api.delete('/emails/category-overrides', { data: { key, scope } }).then(r => r.data),
 
   getDailyReport: () =>
     api.get<{ subject: string; html: string; text: string; date: string } | null>('/emails/daily-report').then(r => r.data),
@@ -629,13 +643,42 @@ export function streamAiSuggestion(
 }
 
 export interface SyncStatus { accountId: string; email: string; syncing?: boolean; scanned?: number; lastSuccessAt?: string; error?: string; incomplete?: boolean; indexedMessages: number; indexScope: string }
-export interface AccessDevice { id: string; name: string; createdAt: string; revokedAt?: string }
+export type DeviceScope = 'full' | 'mail' | 'read'
+export interface AccessDevice { id: string; name: string; createdAt: string; revokedAt?: string; scope?: DeviceScope }
 export const recoveryApi = {
   coverage: () => api.get('/emails/search-coverage').then(r => r.data),
   backfill: (data: { accountId: string; folder: string; since?: string; until?: string }) => api.post('/emails/search-backfill', data),
   syncStatus: () => api.get<SyncStatus[]>('/emails/sync-status').then(r => r.data),
   sync: (id: string) => api.post(`/emails/sync/${id}`),
   devices: () => api.get<AccessDevice[]>('/auth/devices').then(r => r.data),
-  addDevice: (name: string) => api.post<AccessDevice & { token: string }>('/auth/devices', { name }).then(r => r.data),
+  addDevice: (name: string, scope: DeviceScope = 'mail') => api.post<AccessDevice & { token: string }>('/auth/devices', { name, scope }).then(r => r.data),
   revokeDevice: (id: string) => api.delete(`/auth/devices/${id}`),
+}
+
+// ─── Newsletter digest ──────────────────────────────────────────────────────
+export const digestApi = {
+  get: () => api.get<DigestState>('/emails/digest').then(r => r.data),
+  configure: (settings: Partial<DigestState['settings']>) => api.put<DigestState['settings']>('/emails/digest', settings).then(r => r.data),
+  /** digest: always digest this sender. keep: never. remove: let auto-detect decide. */
+  setSender: (sender: string, decision: 'digest' | 'keep' | 'remove') =>
+    api.post<DigestState['settings']>('/emails/digest/senders', { sender, decision }).then(r => r.data),
+  release: (sender: string) => api.post<{ sender: string; moved: number; failures: string[] }>('/emails/digest/release', { sender }).then(r => r.data),
+  readAll: () => api.post<{ marked: number }>('/emails/digest/read-all').then(r => r.data),
+}
+
+// ─── OpenPGP ────────────────────────────────────────────────────────────────
+export const pgpApi = {
+  keys: () => api.get<{ identities: PgpKeyInfo[]; contacts: PgpKeyInfo[] }>('/pgp/keys').then(r => r.data),
+  generate: (email: string, name?: string) => api.post<PgpKeyInfo>('/pgp/identities', { email, name }).then(r => r.data),
+  importIdentity: (email: string, armoredKey: string, passphrase?: string) =>
+    api.post<PgpKeyInfo>('/pgp/identities', { email, armoredKey, passphrase }).then(r => r.data),
+  exportIdentity: (email: string, passphrase: string) =>
+    api.post<{ armoredKey: string }>(`/pgp/identities/${encodeURIComponent(email)}/export`, { passphrase }).then(r => r.data.armoredKey),
+  removeIdentity: (email: string) => api.delete(`/pgp/identities/${encodeURIComponent(email)}`),
+  importContact: (armoredKey: string) => api.post<{ imported: { email: string; fingerprint: string }[] }>('/pgp/contacts', { armoredKey }).then(r => r.data.imported),
+  importFromAttachment: (accountId: string, emailId: string, index: number, folder?: string, pgp?: boolean) =>
+    api.post<{ imported: { email: string; fingerprint: string }[] }>('/pgp/contacts/from-attachment', { accountId, emailId, index, folder, pgp }).then(r => r.data.imported),
+  removeContact: (email: string) => api.delete(`/pgp/contacts/${encodeURIComponent(email)}`),
+  readiness: (draft: { from: string; to?: string; cc?: string; bcc?: string }) =>
+    api.post<{ canSign: boolean; canEncrypt: boolean; missing: string[] }>('/pgp/readiness', draft).then(r => r.data),
 }

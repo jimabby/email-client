@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useEmailStore } from '../store/emailStore'
-import { accountsApi, emailsApi } from '../api/client'
+import { accountsApi, digestApi, emailsApi } from '../api/client'
 import { promptDialog, confirmDialog } from './DialogHost'
 import * as localOutbox from '../lib/localOutbox'
 import { useT, t as translate } from '../lib/i18n'
@@ -14,6 +14,7 @@ const SnoozeIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="n
 const FolderIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 4a1 1 0 011-1h4l1.5 2H14a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
 const OutboxIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 10h3l1.5 2h5L12 10h3v3a1 1 0 01-1 1H2a1 1 0 01-1-1v-3z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/><path d="M8 8V1M5.5 3.5L8 1l2.5 2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
 const RulesIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><circle cx="13" cy="11" r="2" stroke="currentColor" strokeWidth="1.2"/></svg>
+const DigestIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><path d="M4.5 5.5h7M4.5 8h7M4.5 10.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
 const ScreenerIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="6.5" cy="5" r="2.5" stroke="currentColor" strokeWidth="1.3"/><path d="M1.5 13.5c.4-2.6 2.4-4.2 5-4.2 1 0 1.9.2 2.6.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M11 10.5l1.5 1.5 2.5-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
 const StarIcon = ({ filled }: { filled?: boolean }) => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill={filled ? 'currentColor' : 'none'} className="text-accent">
@@ -116,9 +117,11 @@ export function Sidebar() {
     unifiedView, setUnifiedView, showNotification,
     followups, setShowFollowupsModal,
     screenerPending, setScreenerPending, setShowScreenerModal,
+    digestUnread, setDigestUnread, setShowDigestModal,
   } = useEmailStore()
   const t = useT()
   const [screenerOn, setScreenerOn] = useState(false)
+  const [digestOn, setDigestOn] = useState(false)
   const dueFollowups = followups.filter(f => f.status === 'due').length
   const waitingFollowups = followups.filter(f => f.status === 'waiting').length
 
@@ -204,6 +207,19 @@ export function Sidebar() {
     const timer = setInterval(refresh, 120_000)
     window.addEventListener('hermes:screener-changed', refresh)
     return () => { clearInterval(timer); window.removeEventListener('hermes:screener-changed', refresh) }
+  }, [accounts.length])
+
+  // Unread newsletters waiting in the digest. Like the screener, each check
+  // lists a provider folder per account, so it is a slow poll.
+  useEffect(() => {
+    if (!accounts.length) return
+    const refresh = () => digestApi.get()
+      .then(state => { setDigestOn(state.settings.enabled); setDigestUnread(state.groups.reduce((sum, g) => sum + g.unread, 0)) })
+      .catch(() => {})
+    refresh()
+    const timer = setInterval(refresh, 300_000)
+    window.addEventListener('hermes:digest-changed', refresh)
+    return () => { clearInterval(timer); window.removeEventListener('hermes:digest-changed', refresh) }
   }, [accounts.length])
 
   const [parkedCount, setParkedCount] = useState(0)
@@ -544,6 +560,20 @@ export function Sidebar() {
           {screenerOn && screenerPending > 0 && (
             <span className="text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums bg-accent text-[#201500]">
               {screenerPending}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setShowDigestModal(true)}
+          title={digestOn ? t('Newsletters collected for your daily digest') : t('Digest is off — open to turn it on')}
+          className="w-full flex items-center gap-2.5 px-2.5 py-[7px] text-[12.5px] text-ink-2 hover:text-ink hover:bg-ink/5 rounded-lg transition-colors duration-150"
+        >
+          <span className="text-ink-3"><DigestIcon /></span>
+          <span className="flex-1 text-left">{t('Digest')}</span>
+          {digestOn && digestUnread > 0 && (
+            <span className="text-[10px] font-semibold rounded-full px-1.5 py-px leading-[1.4] tabular-nums bg-ink/8 text-ink-2">
+              {digestUnread}
             </span>
           )}
         </button>

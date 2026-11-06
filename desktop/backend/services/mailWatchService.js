@@ -159,6 +159,16 @@ function handleNewMail(accountId, meta = {}) {
         console.warn('[watch] Screener failed:', err.message);
       }
 
+      // Newsletters go to the digest folder and are announced once a day, not
+      // one notification each. Runs after the screener: a first-time sender
+      // is screened before anything else is decided about them.
+      try {
+        const digest = require('./digestService');
+        for (const id of await digest.collectArrivals(account, fresh.filter(e => !removed.has(e.id)))) removed.add(id);
+      } catch (err) {
+        console.warn('[watch] Digest failed:', err.message);
+      }
+
       const kept = fresh.filter(e => !removed.has(e.id));
       const notable = kept.filter(e => !markedRead.has(e.id));
 

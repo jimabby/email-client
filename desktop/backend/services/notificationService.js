@@ -197,8 +197,30 @@ function notifyFollowup(followup) {
   });
 }
 
+/**
+ * Today's newsletter digest is ready. One notification for the lot, which is
+ * the point: the newsletters themselves arrived silently. Quiet hours still
+ * apply, as they do to any other non-VIP mail.
+ * @param {{accountId: string, count: number}[]} perAccount
+ */
+function notifyDigest(perAccount, total) {
+  const settings = store.getNotificationSettings();
+  if (inQuietHours(settings.quietHours, new Date(), settings.timeZone)) return false;
+  const body = total === 1 ? '1 newsletter is waiting' : `${total} newsletters are waiting`;
+  for (const { accountId, count } of perAccount) {
+    pushToDevices(push => push.send(accountId, {
+      title: 'Your digest is ready',
+      body: count === 1 ? '1 newsletter is waiting' : `${count} newsletters are waiting`,
+      data: { reason: 'digest', view: 'digest' },
+    }));
+  }
+  post({ type: 'notify', title: 'Your digest is ready', body, payload: { view: 'digest' } });
+  return true;
+}
+
 module.exports = {
   notifyNewMail,
+  notifyDigest,
   notifySnoozeWake,
   notifyFollowup,
   updateBadge,

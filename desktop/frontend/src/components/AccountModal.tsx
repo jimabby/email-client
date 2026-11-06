@@ -1,4 +1,6 @@
 import { RecoverySettings } from './RecoverySettings'
+import { EncryptionSettings } from './EncryptionSettings'
+import { CategoryOverrides } from './CategoryOverrides'
 import { useState, useEffect } from 'react'
 import { useEmailStore } from '../store/emailStore'
 import { AwaySettings } from './AwaySettings'
@@ -8,7 +10,7 @@ import { accountsApi, aiApi, emailsApi } from '../api/client'
 import type { Account, Alias, MailTemplate } from '../types/email'
 import { useT, useLanguageStore, LANGUAGE_NAMES, type LanguagePreference } from '../lib/i18n'
 
-type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature' | 'productivity' | 'notifications' | 'privacy' | 'away'
+type Tab = 'imap' | 'gmail' | 'outlook' | 'ai' | 'signature' | 'productivity' | 'notifications' | 'privacy' | 'security' | 'away'
 
 const IMAP_PRESETS: Record<string, { imapHost: string; imapPort: number; smtpHost: string; smtpPort: number }> = {
   'Gmail (App Password)': { imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 587 },
@@ -59,7 +61,7 @@ export function AccountModal() {
     signature, setSignature, accounts, accountSignatures, setAccountSignature,
     setShowRulesModal, setAliases,
     gravatarEnabled, setGravatarEnabled, theme, toggleTheme,
-    setAccounts, setShowScreenerModal,
+    setAccounts, setShowScreenerModal, setShowDigestModal,
   } = useEmailStore()
   const t = useT()
   const languagePreference = useLanguageStore(s => s.preference)
@@ -180,6 +182,7 @@ export function AccountModal() {
     { id: 'productivity' as Tab, label: t('Rules & Templates'), sub: t('Automate mail') },
     { id: 'notifications' as Tab, label: t('Notifications'), sub: t('VIPs, quiet hours') },
     { id: 'privacy' as Tab, label: t('Privacy & Appearance'), sub: t('Tracking, theme, language') },
+    { id: 'security' as Tab, label: t('Encryption'), sub: t('OpenPGP keys') },
     { id: 'away' as Tab, label: t('Away & Import/Export'), sub: t('Auto-reply, backup') },
   ]
 
@@ -211,7 +214,7 @@ export function AccountModal() {
               </button>
             ))}
             <div className="mt-2 mb-0.5 text-[10px] font-semibold text-ink-3 uppercase tracking-[0.08em] px-2 py-1.5">{t('Preferences')}</div>
-            {tabs.filter(item => ['ai','signature','productivity','notifications','privacy','away'].includes(item.id)).map(item => (
+            {tabs.filter(item => ['ai','signature','productivity','notifications','privacy','security','away'].includes(item.id)).map(item => (
               <button key={item.id} onClick={() => setTab(item.id)}
                 className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors
                   ${tab === item.id
@@ -376,6 +379,7 @@ export function AccountModal() {
           )}
 
           {tab === 'away' && <AwaySettings />}
+          {tab === 'security' && <EncryptionSettings />}
           {tab === 'notifications' && <NotificationSettings />}
 
           {tab === 'signature' && (
@@ -617,6 +621,21 @@ export function AccountModal() {
                   {t('Open screener')}
                 </button>
               </section>
+
+              <section className="border-t border-line pt-5">
+                <h3 className="text-sm font-semibold text-ink mb-1">{t('Digest')}</h3>
+                <p className="text-[11px] text-ink-3 mb-3">
+                  {t('Collect newsletters in one place and hear about them once a day, not one at a time.')}
+                </p>
+                <button
+                  onClick={() => { setShowAccountModal(false); setShowDigestModal(true) }}
+                  className="px-3 py-2 rounded-md bg-accent text-xs font-bold text-[#201500] hover:bg-accent transition-colors"
+                >
+                  {t('Open digest')}
+                </button>
+              </section>
+
+              <CategoryOverrides />
 
               {accounts.some(a => a.type === 'imap') && (
                 <section className="border-t border-line pt-5">

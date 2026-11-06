@@ -51,6 +51,7 @@ draft migration, new controls, validation commands, and remaining audit findings
   recovery when delivery is uncertain
 - Encrypted local drafts and offline desktop sends; mobile attachment uploads
 - Sync diagnostics, read-only rule previews, and individually revocable device tokens
+  with a chosen scope (full, mail only, or read only)
 - Sent mail is saved to the Sent folder on IMAP servers that don't keep their
   own copy (configurable per account)
 - Send & archive: reply and file the original in one step
@@ -62,6 +63,9 @@ draft migration, new controls, validation commands, and remaining audit findings
 - **Screener**: mail from first-time senders waits in a holding folder until
   you allow or block them, per address or for a whole domain. Everyone you
   already correspond with is approved when you switch it on.
+- **Digest**: newsletters skip the inbox and collect in a Digest folder, with
+  one notification a day at the time you choose. People you write to and VIPs
+  are never included; "Not a newsletter" sends a sender back for good.
 - Rules with multiple conditions and actions, run on the server as mail arrives
 - Snooze, follow-up reminders ("remind me if nobody replies"), and muted threads
 - Vacation auto-reply with loop protection and per-sender cooldown
@@ -73,8 +77,17 @@ draft migration, new controls, validation commands, and remaining audit findings
   `has:attachment`, `is:unread`, `is:starred`, `"phrases"`), plus attachment search
 - Optional AI: draft assistance in 9 modes, smart replies, thread summaries,
   priority inbox, task/date extraction, and inbox categories
+- Inbox tabs (Primary, Social, Jobs, Promotions, Receipts) that you can correct:
+  "Always sort this sender into…" applies to one address or a whole domain
 
 **Privacy and security**
+- **OpenPGP**: create or import a key per address, sign and encrypt outgoing
+  mail as PGP/MIME, and read encrypted or signed mail (PGP/MIME and inline).
+  Correspondents' keys are imported by hand, from a key attachment, or from
+  their Autocrypt header; a changed key is flagged, never silently replaced.
+  Subjects and recipients are not encrypted. The backend holds your private key
+  (encrypted at rest) so it can open mail for every client, which means a cloud
+  backend can read your encrypted mail.
 - Credentials, cached mail, the outbox, and the search index are encrypted at
   rest (AES-256-GCM; the desktop app keeps the key in the OS keychain)
 - Messages render in a sandboxed frame where scripts can never run; remote

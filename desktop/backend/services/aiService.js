@@ -56,14 +56,15 @@ function buildUserMessage({ subject, body, mode, customPrompt, replyTo }) {
 // another in Settings → AI; a free-text id is accepted for anything not listed.
 
 const DEFAULT_MODELS = {
-  claude: 'claude-haiku-4-5-20251001',
+  claude: 'claude-haiku-5-5',
   openai: 'gpt-4o-mini',
   gemini: 'gemini-2.5-flash',
 };
 
 const MODEL_CHOICES = {
   claude: [
-    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 — fastest, lowest cost (default)' },
+    { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5 — fastest, lowest cost (default)' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 — previous generation' },
     { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — stronger writing and summaries' },
     { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 — most capable, highest cost' },
   ],
@@ -90,15 +91,16 @@ function modelFor(provider) {
 }
 
 /**
- * Request parameters for the chosen Claude model. Haiku keeps the original
- * shape. The 5.5 models think adaptively by default, which would eat a 1024
- * token cap and return no text, so they get room for that and run at low
+ * Request parameters for the chosen Claude model. Haiku 4.x keeps the original
+ * shape: it never thinks unless asked and does not accept `effort`. The 5.x
+ * models (Haiku 5.5 included) think adaptively by default, which would eat a
+ * 1024 token cap and return no text, so they get room for that and run at low
  * effort — these are short, per-message tasks.
  */
 function claudeParams(systemPrompt, userMessage) {
   const model = modelFor('claude');
   const base = { model, system: systemPrompt, messages: [{ role: 'user', content: userMessage }] };
-  if (/haiku/i.test(model)) return { ...base, max_tokens: 1024 };
+  if (/haiku-[34]/i.test(model)) return { ...base, max_tokens: 1024 };
   return { ...base, max_tokens: 8000, output_config: { effort: 'low' } };
 }
 
@@ -718,6 +720,7 @@ async function suggestText(params) {
 module.exports = {
   DEFAULT_MODELS,
   MODEL_CHOICES,
+  _internals: { claudeParams },
   modelFor,
   suggestText,
   streamSuggestion,

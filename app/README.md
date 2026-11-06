@@ -49,11 +49,28 @@ so the phone cannot use it.
   delete, archive, snooze, reply, attachments, and the AI summary / smart
   replies when a key is configured on the server
 - **Compose** - new message, reply, encrypted local draft recovery, attachments,
-  send later, and undo send
+  send later, undo send, and OpenPGP encryption once the address has a key
+  (keys are managed in the desktop app's Settings → Encryption)
 - **Local drafts** - resume or discard drafts from Settings
 - **Screener** - first-time senders waiting for approval; allow or block each
   one (or a whole domain). Turn it on here or in the desktop app
+- **Digest** - newsletters collected for the daily digest, grouped by sender;
+  "Not a newsletter" sends a sender back to the inbox
 - **Outbox**, **Rules**, **Follow-ups** - the same lists the desktop shows
+
+Messages the backend opened with OpenPGP show whether they were encrypted and
+whether the signature checks out, above the body.
+
+Messages that could not reach the server wait in the phone's Outbox. They are
+retried every 30 seconds while the app is open and, after a native rebuild, by
+an OS background task while it is closed (Android WorkManager, iOS
+BGTaskScheduler). The OS decides when that task runs (no more often than every
+15 minutes, and often less), so it narrows the gap rather than guaranteeing
+delivery. The task registers only while something is waiting.
+
+A device token can be limited to **mail only** or **read only** when it is
+created on the desktop. **Test connection** in Settings shows which one this
+phone has.
 
 ## Notifications
 

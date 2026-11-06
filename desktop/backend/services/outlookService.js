@@ -346,6 +346,32 @@ async function getRawMessage(account, outlookId) {
 }
 
 /**
+ * Send a prebuilt RFC 822 message (PGP/MIME). Graph accepts MIME on
+ * /sendMail as base64 text, keeps it intact, and files it in Sent Items.
+ */
+async function sendRaw(account, { raw }) {
+  const send = (token) => fetch(`${GRAPH_ROOT}/me/sendMail`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
+    body: Buffer.from(raw).toString('base64'),
+  });
+  let res = await send(account.accessToken);
+  if (res.status === 401) res = await send(await refreshAccessToken(account));
+  if (!res.ok) {
+    const err = new Error(`Graph API error: ${res.status} ${await res.text()}`);
+    err.status = res.status;
+    throw err;
+  }
+}
+
+/** Message-ID and References, so a raw-MIME reply threads by its headers. */
+async function getThreadingInfo(account, outlookId) {
+  const data = await graphRequestWithRefresh(account, `/me/messages/${outlookId}?$select=internetMessageId,internetMessageHeaders`);
+  const header = (name) => (data?.internetMessageHeaders || []).find(h => String(h.name).toLowerCase() === name)?.value || '';
+  return { inReplyTo: data?.internetMessageId || '', references: header('references') };
+}
+
+/**
  * Delete = move to Deleted Items, explicitly, so the id to undo with comes
  * back in the response. A message already in Deleted Items is removed.
  */
@@ -596,6 +622,8 @@ async function importMessage(account, raw, folder = 'INBOX') {
 }
 
 module.exports = {
+  sendRaw,
+  getThreadingInfo,
   _internals: { graphUrl, formatSender },
   importMessage,
   getHeaders,

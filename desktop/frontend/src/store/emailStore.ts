@@ -217,6 +217,10 @@ interface EmailStore {
   /** Senders waiting in the screener, for the sidebar badge. */
   screenerPending: number
   setScreenerPending: (count: number) => void
+  showDigestModal: boolean
+  setShowDigestModal: (show: boolean) => void
+  digestUnread: number
+  setDigestUnread: (count: number) => void
 
   // Ctrl+K command palette
   showCommandPalette: boolean
@@ -564,6 +568,10 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   setShowScreenerModal: (show) => set({ showScreenerModal: show }),
   screenerPending: 0,
   setScreenerPending: (count) => set({ screenerPending: count }),
+  showDigestModal: false,
+  setShowDigestModal: (show) => set({ showDigestModal: show }),
+  digestUnread: 0,
+  setDigestUnread: (count) => set({ digestUnread: count }),
 
   showCommandPalette: false,
   setShowCommandPalette: (show) => set({ showCommandPalette: show }),

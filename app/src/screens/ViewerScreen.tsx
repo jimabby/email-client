@@ -12,7 +12,7 @@ import { avatarColor, radius, space, type Palette } from '../theme';
 import type { Ui } from '../ui';
 import { ActionSheet } from '../components/ActionSheet';
 import { initials, senderName, formatFullDate, stripHtml } from '../utils';
-import type { EmailBody, EmailSummary, ThreadSummary } from '../types';
+import type { EmailBody, EmailSummary, PgpStatus, ThreadSummary } from '../types';
 import type { RootStackParamList } from '../navigation';
 import { useTr, tr as translate } from '../i18n';
 
@@ -374,6 +374,17 @@ export default function ViewerScreen({ navigation, route }: Props) {
               </View>
             )}
 
+            {!!body?.pgp && (body.pgp.encrypted || body.pgp.signed) && (
+              <View style={[styles.privacyNotice, { borderColor: pgpTone(body.pgp) === 'bad' ? t.danger : pgpTone(body.pgp) === 'good' ? t.success : t.border }]}>
+                <Text
+                  style={[styles.privacyText, { color: pgpTone(body.pgp) === 'bad' ? t.danger : pgpTone(body.pgp) === 'good' ? t.success : t.textMuted }]}
+                  accessibilityRole="text"
+                >
+                  {pgpLine(body.pgp, tr)}
+                </Text>
+              </View>
+            )}
+
             {sanitized ? (
               <View style={styles.bodyWrap}>
                 {totalBlocked(sanitized.blocked) > 0 && (
@@ -428,7 +439,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
                 onPress={async () => {
                   setOpeningAttachment(i);
                   try {
-                    await openAttachment(email.accountId, email.id, i, a.filename, email.folder);
+                    await openAttachment(email.accountId, email.id, i, a.filename, email.folder, !!body?.pgp);
                   } catch (err) {
                     Alert.alert(tr('Could not open attachment'), errorMessage(err));
                   } finally {
@@ -588,4 +599,23 @@ function makeStyles(t: Palette, ui: Ui) {
     secondaryBtn: ui.btnSecondary,
     secondaryText: ui.btnSecondaryText,
   });
+}
+
+/** good: decrypted or verified. bad: cannot open, or a signature to distrust. */
+function pgpTone(pgp: PgpStatus): 'good' | 'bad' | 'neutral' {
+  if (pgp.encrypted && !pgp.decrypted) return 'bad';
+  if (pgp.status === 'bad' || pgp.status === 'mismatch') return 'bad';
+  if (pgp.status === 'verified') return 'good';
+  return 'neutral';
+}
+
+function pgpLine(pgp: PgpStatus, tr: (key: string, params?: Record<string, string | number>) => string): string {
+  if (pgp.encrypted && !pgp.decrypted) return pgp.error || tr('This message is encrypted, and none of your keys can open it.');
+  if (pgp.status === 'bad') return tr('The signature on this message does not match its content. It may have been altered.');
+  if (pgp.status === 'mismatch') return tr('This message is signed with a key that belongs to {signer}, not the sender. Treat it with suspicion.', { signer: pgp.signer || tr('someone else') });
+  const parts = [];
+  if (pgp.encrypted) parts.push(tr('Encrypted'));
+  if (pgp.status === 'verified') parts.push(tr('Signed by {signer}. Key fingerprint: {fingerprint}', { signer: pgp.signer || '', fingerprint: (pgp.fingerprint || '').replace(/(.{4})/g, '$1 ').trim() }));
+  else if (pgp.status === 'unknown-key') parts.push(tr('Unverified signature'));
+  return parts.join(' · ');
 }

@@ -24,4 +24,5 @@ export type RootStackParamList = {
   Rules: undefined;
   Followups: undefined;
   Screener: undefined;
+  Digest: undefined;
 };

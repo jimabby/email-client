@@ -718,6 +718,25 @@ async function sendEmail(account, email) {
   return info;
 }
 
+/**
+ * Send a prebuilt RFC 822 message (PGP/MIME). The envelope carries every
+ * recipient, Bcc included; the headers on the wire do not name Bcc.
+ */
+async function sendRaw(account, { rawForSmtp, raw, envelope }) {
+  const transporter = getTransporter(account);
+  const info = await transporter.sendMail({ envelope, raw: rawForSmtp });
+  if (shouldSaveSentCopy(account)) {
+    // Delivered already; a failed copy must not fail the send (see sendEmail).
+    try {
+      const sent = await findSpecialFolder(account, '\\Sent', /^sent( items| messages| mail)?$/i);
+      await getConn(account).run(client => client.append(sent?.path || 'Sent', raw, ['\\Seen']));
+    } catch (err) {
+      console.warn(`[imap] Sent, but could not save a copy to Sent for ${account.email}: ${err.message}`);
+    }
+  }
+  return info;
+}
+
 // Fetch just the headers needed to thread a reply to this message.
 async function getThreadingInfo(account, uid, folder = 'INBOX') {
   return getConn(account).run(async (client) => {
@@ -974,6 +993,7 @@ async function testConnection(account) {
 }
 
 module.exports = {
+  sendRaw,
   _internals: { snippetFromSource, threadRoot, referencesFromHeaders, parseHeaderBlock, shouldSaveSentCopy, uidSet },
   bulkSetFlag,
   bulkMove,

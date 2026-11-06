@@ -57,8 +57,13 @@ Preview again after changing conditions or actions.
 
 Device access tokens can be created and revoked using the master API token in
 the recovery settings. The secret is displayed once; the backend stores its hash.
-Device tokens grant access to the connected backend's accounts, but cannot
-create, list, or revoke other access tokens. Revocation rejects new requests,
+Each token has a scope, enforced by `middleware/deviceScope.js`: **full** (every
+route except device management; tokens created before scopes existed keep it),
+**mail** (no account, AI-key, OpenPGP private-key, settings-restore, or
+whole-mailbox import/export changes), or **read** (GETs plus the reading aids:
+categorize, summaries, smart replies, attachment tickets, push registration).
+New tokens default to mail only. No device token can create, list, or revoke
+other access tokens. Revocation rejects new requests,
 closes that device's event streams, and removes linked push registrations.
 Requests already executing may complete. Existing master-token clients remain
 supported; migrate each device to its own token for independent revocation.
@@ -66,6 +71,10 @@ supported; migrate each device to its own token for independent revocation.
 Unsubscribe requests reject private IPv4 and IPv6 destinations, including mapped
 IPv6 forms, and pin the validated DNS address for the HTTPS connection. Redirects
 are not followed or reported as success; only a successful HTTP response counts.
+
+Search backfill jobs are checkpointed to the sealed state file after every
+page. A backend restart mid-backfill resumes from the last finished page
+instead of forgetting the job; a job for a removed account is dropped.
 
 ## Validation and remaining limits
 

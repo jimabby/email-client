@@ -40,7 +40,18 @@ interface ConfirmRequest {
   danger?: boolean
 }
 
-type Request = (PromptRequest | ConfirmRequest) & { resolve: (value: string | null) => void }
+interface ChoiceRequest {
+  kind: 'choice'
+  title: string
+  body?: string
+  choices: { value: string; label: string }[]
+  defaultValue?: string
+  /** An optional extra checkbox, e.g. "Apply to the whole domain". */
+  toggle?: { label: string; defaultValue?: boolean }
+  confirmLabel?: string
+}
+
+type Request = (PromptRequest | ConfirmRequest | ChoiceRequest) & { resolve: (value: string | null) => void }
 
 let publish: ((request: Request) => void) | null = null
 
@@ -62,14 +73,31 @@ export function confirmDialog(options: Omit<ConfirmRequest, 'kind'>): Promise<bo
   })
 }
 
+/** @returns the chosen value and the toggle's state, or null if cancelled. */
+export function choiceDialog(options: Omit<ChoiceRequest, 'kind'>): Promise<{ value: string; toggle: boolean } | null> {
+  return new Promise((resolve) => {
+    if (!publish) return resolve(null)
+    publish({
+      kind: 'choice',
+      ...options,
+      resolve: (raw) => {
+        if (raw === null) return resolve(null)
+        try { resolve(JSON.parse(raw)) } catch { resolve(null) }
+      },
+    })
+  })
+}
+
 export function DialogHost() {
   const [request, setRequest] = useState<Request | null>(null)
   const [value, setValue] = useState('')
+  const [toggle, setToggle] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     publish = (next) => {
-      setValue(next.kind === 'prompt' ? next.defaultValue ?? '' : '')
+      setValue(next.kind === 'prompt' || next.kind === 'choice' ? next.defaultValue ?? '' : '')
+      setToggle(next.kind === 'choice' ? next.toggle?.defaultValue === true : false)
       setRequest(next)
     }
     return () => { publish = null }
@@ -93,10 +121,12 @@ export function DialogHost() {
   }
 
   const isPrompt = request.kind === 'prompt'
-  const confirmLabel = request.confirmLabel || (isPrompt ? t('Save') : t('Confirm'))
-  const danger = !isPrompt && request.danger === true
+  const isChoice = request.kind === 'choice'
+  const confirmLabel = request.confirmLabel || (isPrompt || isChoice ? t('Save') : t('Confirm'))
+  const danger = request.kind === 'confirm' && request.danger === true
   // An empty prompt is a cancel — every call site treats "" as "no answer".
-  const canSubmit = !isPrompt || value.trim().length > 0
+  const canSubmit = (!isPrompt && !isChoice) || value.trim().length > 0
+  const result = () => isChoice ? JSON.stringify({ value, toggle }) : isPrompt ? value.trim() : ''
 
   return (
     <div
@@ -110,7 +140,7 @@ export function DialogHost() {
         onMouseDown={e => e.stopPropagation()}
         onKeyDown={e => {
           if (e.key === 'Escape') { e.stopPropagation(); close(null) }
-          if (e.key === 'Enter' && canSubmit) { e.stopPropagation(); close(isPrompt ? value.trim() : '') }
+          if (e.key === 'Enter' && canSubmit) { e.stopPropagation(); close(result()) }
         }}
         className="glass-elevated rounded-2xl w-[min(90vw,22rem)] overflow-hidden animate-rise"
       >
@@ -135,6 +165,30 @@ export function DialogHost() {
                 className="field w-full mt-2.5 px-3 py-2 text-[13px]"
               />
             </>
+          ) : request.kind === 'choice' ? (
+            <>
+              {request.body && <p className="text-[13px] text-ink-2 mt-2 leading-relaxed">{request.body}</p>}
+              <div role="radiogroup" aria-label={request.title} className="mt-2.5 grid grid-cols-2 gap-1.5">
+                {request.choices.map(choice => (
+                  <button
+                    key={choice.value}
+                    role="radio"
+                    aria-checked={value === choice.value}
+                    onClick={() => setValue(choice.value)}
+                    className={`px-3 py-2 rounded-lg text-[12.5px] text-left transition-colors
+                      ${value === choice.value ? 'bg-accent/16 text-accent-ink font-semibold shadow-[inset_0_0_0_1px_rgb(var(--accent)/0.22)]' : 'text-ink hover:bg-ink/6'}`}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
+              </div>
+              {request.toggle && (
+                <label className="flex items-center gap-2 mt-3 text-[12.5px] text-ink-2">
+                  <input type="checkbox" checked={toggle} onChange={e => setToggle(e.target.checked)} />
+                  {request.toggle.label}
+                </label>
+              )}
+            </>
           ) : (
             request.body && <p className="text-[13px] text-ink-2 mt-2 leading-relaxed max-h-[50vh] overflow-y-auto whitespace-pre-wrap break-words">{request.body}</p>
           )}
@@ -148,7 +202,7 @@ export function DialogHost() {
             {t('Cancel')}
           </button>
           <button
-            onClick={() => close(isPrompt ? value.trim() : '')}
+            onClick={() => close(result())}
             disabled={!canSubmit}
             className={`px-3.5 py-1.5 rounded-lg text-[12.5px] font-semibold disabled:opacity-40 disabled:cursor-default
               ${danger ? 'bg-danger text-white hover:brightness-110' : 'btn-accent'}`}

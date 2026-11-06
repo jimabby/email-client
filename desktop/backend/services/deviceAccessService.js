@@ -1,11 +1,13 @@
 const crypto = require('crypto');
 const store = require('../store');
+const { SCOPES, normalizeScope } = require('../middleware/deviceScope');
 const events = new (require('events').EventEmitter)();
-function list() { return store.getAccessDevices().map(({ hash, ...device }) => device); }
-function create(name) {
+function list() { return store.getAccessDevices().map(({ hash, ...device }) => ({ ...device, scope: normalizeScope(device.scope) })); }
+function create(name, scope = 'full') {
   if (!String(name || '').trim()) throw new Error('Device name is required');
+  if (!SCOPES.includes(scope)) throw new Error(`Access must be one of: ${SCOPES.join(', ')}`);
   const token = 'hermes_' + crypto.randomBytes(32).toString('hex');
-  const device = { id: crypto.randomUUID(), name: String(name).trim().slice(0, 80), createdAt: new Date().toISOString(), hash: crypto.createHash('sha256').update(token).digest('hex') };
+  const device = { id: crypto.randomUUID(), name: String(name).trim().slice(0, 80), createdAt: new Date().toISOString(), scope, hash: crypto.createHash('sha256').update(token).digest('hex') };
   store.saveAccessDevices([...store.getAccessDevices(), device]);
   const { hash, ...publicDevice } = device;
   return { ...publicDevice, token };

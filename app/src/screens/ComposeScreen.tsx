@@ -1,5 +1,6 @@
 import { sendChecks } from '../../../shared/sendChecks';
 import { queueOffline, offlineUnavailable } from '../offline';
+import { ensureBackgroundDelivery } from '../backgroundOutbox';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
@@ -100,6 +101,17 @@ export default function ComposeScreen({ navigation, route }: Props) {
   const [laterOpen, setLaterOpen] = useState(false);
 
   const [followUpDays, setFollowUpDays] = useState(0);
+  // OpenPGP: the toggle appears once this account's address has a key.
+  const [pgpEncrypt, setPgpEncrypt] = useState(false);
+  const [pgpReady, setPgpReady] = useState<{ canSign: boolean; canEncrypt: boolean; missing: string[] } | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      api.pgpReadiness({ from: account.email, to, cc, bcc })
+        .then(ready => { setPgpReady(ready); if (!ready.canEncrypt) setPgpEncrypt(false); })
+        .catch(() => setPgpReady(null));
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [account.email, to, cc, bcc]);
   const [followUpOpen, setFollowUpOpen] = useState(false);
 
   // Draft help. The previous text is kept so one tap puts it back.
@@ -198,12 +210,15 @@ export default function ComposeScreen({ navigation, route }: Props) {
         sendAt: sendAt?.toISOString(),
         undoWindowSec: sendAt ? 0 : UNDO_WINDOW_SEC,
         followUpDays: followUpDays || undefined,
+        pgp: pgpEncrypt ? { encrypt: true, sign: true } : undefined,
       };
       let result;
       try { result = await api.send(account.id, payload); }
       catch (error) {
         if (!offlineUnavailable(error)) throw error;
         await queueOffline(account.id, payload);
+        // Keep trying with the app closed, not only the next time it opens.
+        ensureBackgroundDelivery().catch(() => {});
         setCanLeave(true);
         await removeLocalDraft(draftId.current);
         Alert.alert(tr('Saved on this phone'), tr('Waiting for a connection. The server has not accepted this message yet. Open Outbox to inspect or remove it.'), [{ text: tr('OK'), onPress: () => navigation.goBack() }]);
@@ -291,7 +306,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
           </View>
         ),
     });
-  }, [navigation, to, cc, bcc, subject, text, sending, followUpDays, styles, t, tr]);
+  }, [navigation, to, cc, bcc, subject, text, sending, followUpDays, pgpEncrypt, styles, t, tr]);
 
   return (
     <KeyboardAvoidingView
@@ -373,6 +388,22 @@ export default function ComposeScreen({ navigation, route }: Props) {
           {beforeAi !== null && !aiBusy && (
             <TouchableOpacity style={styles.tool} onPress={() => { setText(beforeAi); setBeforeAi(null); }}>
               <Text style={styles.toolText}>{tr('Undo AI')}</Text>
+            </TouchableOpacity>
+          )}
+          {pgpReady?.canSign && (
+            <TouchableOpacity
+              style={styles.tool}
+              disabled={!pgpReady.canEncrypt}
+              onPress={() => setPgpEncrypt(v => !v)}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: pgpEncrypt, disabled: !pgpReady.canEncrypt }}
+              accessibilityHint={pgpReady.canEncrypt
+                ? tr('Encrypt: only the recipients can read the body and attachments. The subject is not encrypted.')
+                : pgpReady.missing.length ? tr('No encryption key for {emails}', { emails: pgpReady.missing.join(', ') }) : tr('Add a recipient to encrypt')}
+            >
+              <Text style={pgpEncrypt ? styles.toolActive : [styles.toolText, !pgpReady.canEncrypt && { opacity: 0.4 }]}>
+                🔒 {tr('Encrypt')}
+              </Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity style={styles.tool} onPress={() => setFollowUpOpen(true)}>

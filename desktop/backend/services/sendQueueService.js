@@ -165,7 +165,15 @@ async function sendOne(item) {
       const account = store.getAccount(item.accountId);
       if (!account) throw new Error('Account no longer exists');
       const service = getService(account.type);
-      await service.sendEmail(account, fresh.email);
+      if (fresh.email?.pgp && (fresh.email.pgp.encrypt || fresh.email.pgp.sign)) {
+        // Built here, at send time, from the keys as they are now. Any failure
+        // fails the send: an encrypted message is never sent in the clear.
+        const message = await require('./pgpService').protect(account, fresh.email, fresh.email.pgp);
+        if (!service.sendRaw) throw new Error(`Encrypted sending is not supported for ${account.type} accounts`);
+        await service.sendRaw(account, message, fresh.email);
+      } else {
+        await service.sendEmail(account, fresh.email);
+      }
       providerAccepted = true;
       store.updateSendQueueItem(item.id, {
         status: 'sent',

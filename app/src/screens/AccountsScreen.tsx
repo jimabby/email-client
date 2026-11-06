@@ -150,6 +150,9 @@ export default function AccountsScreen({ navigation }: Props) {
                 <View style={styles.badge}><Text style={styles.badgeText}>{screenerPending}</Text></View>
               )}
             </TouchableOpacity>
+            <TouchableOpacity style={[styles.footerBtn, { flex: 1 }]} onPress={() => navigation.navigate('Digest')}>
+              <Text style={styles.footerBtnText}>{tr('Digest')}</Text>
+            </TouchableOpacity>
           </View>
         </View>
       }

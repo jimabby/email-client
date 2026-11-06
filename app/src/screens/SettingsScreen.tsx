@@ -61,8 +61,11 @@ export default function SettingsScreen({ navigation }: Props) {
     setTesting(true);
     setStatus(null);
     try {
-      await api.health();
-      setStatus({ ok: true, msg: tr('Connected — backend is reachable.') });
+      const health = await api.health();
+      const access = health.scope === 'read' ? tr('Read only') : health.scope === 'mail' ? tr('Mail only') : health.scope === 'full' ? tr('Full access') : null;
+      setStatus({ ok: true, msg: access
+        ? `${tr('Connected — backend is reachable.')} ${tr('This device token has {access} access.', { access })}`
+        : tr('Connected — backend is reachable.') });
     } catch (err) {
       setStatus({ ok: false, msg: errorMessage(err) });
     } finally {
