@@ -180,7 +180,9 @@ async function sendOne(item) {
         sentAt: new Date().toISOString(),
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown send error';
+      const message = err?.code === 'PGP_LOCKED'
+        ? `${err.message} Then retry this message from the Outbox.`
+        : err instanceof Error ? err.message : 'Unknown send error';
       // A lost response after DATA / an HTTP send cannot prove non-delivery.
       const explicitRejection = Number(err.responseCode) >= 400 || (Number(err.status || err.response?.status) >= 400 && Number(err.status || err.response?.status) < 500)
         || /\b429\b/.test(message);

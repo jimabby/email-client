@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { pgpApi } from '../api/client'
 import { useEmailStore } from '../store/emailStore'
 import { confirmDialog, promptDialog } from './DialogHost'
+import { promptUnlockPgp } from '../lib/pgpUnlock'
 import { useT } from '../lib/i18n'
 import type { PgpKeyInfo } from '../types/email'
 
@@ -89,6 +90,26 @@ export function EncryptionSettings() {
     if (ok) await run(() => pgpApi.removeIdentity(email), t('Key deleted'))
   }
 
+  const requirePassphrase = async (email: string) => {
+    const first = await promptDialog({
+      title: t('Require a passphrase'),
+      label: t('Choose a passphrase (8 characters or more). The key will be stored encrypted with it, and must be unlocked after every restart. If you forget it, mail encrypted to this key cannot be read.'),
+      secret: true,
+      confirmLabel: t('Continue'),
+    })
+    if (!first) return
+    const second = await promptDialog({ title: t('Repeat the passphrase'), secret: true, confirmLabel: t('Require passphrase') })
+    if (second === null) return
+    if (first !== second) { setError(t('The passphrases do not match')); return }
+    await run(() => pgpApi.setPassphraseRequired(email, first, true), t('Passphrase required. The key stays unlocked for this session.'))
+  }
+
+  const stopRequiring = async (email: string) => {
+    const pass = await promptDialog({ title: t('Stop requiring a passphrase'), label: t('Enter the current passphrase.'), secret: true, confirmLabel: t('Stop requiring') })
+    if (!pass) return
+    await run(() => pgpApi.setPassphraseRequired(email, pass, false), t('The key no longer needs a passphrase'))
+  }
+
   const copy = async (text: string) => {
     try { await navigator.clipboard.writeText(text); showNotification('success', t('Copied')) }
     catch { showNotification('error', t('Could not copy')) }
@@ -115,6 +136,26 @@ export function EncryptionSettings() {
                         <div className="text-[11px] text-ink-2 font-mono mt-1 break-all">{formatFingerprint(key.fingerprint)}</div>
                         <div className="text-[10.5px] text-ink-3 mt-0.5">
                           {key.algorithm} · {key.source === 'generated' ? t('Created here') : t('Imported')} · {key.createdAt ? new Date(key.createdAt).toLocaleDateString() : ''}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[10.5px]">
+                          {key.locked ? (
+                            <>
+                              <span className={key.unlockedUntil ? 'text-success' : 'text-danger'}>
+                                {key.unlockedUntil
+                                  ? t('Passphrase required · unlocked until {time}', { time: new Date(key.unlockedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+                                  : t('Passphrase required · locked')}
+                              </span>
+                              {key.unlockedUntil
+                                ? <button disabled={busy} onClick={() => run(() => pgpApi.lock(email), t('Key locked'))} className="text-info hover:underline">{t('Lock now')}</button>
+                                : <button disabled={busy} onClick={async () => { if (await promptUnlockPgp(email)) await refresh() }} className="text-info hover:underline">{t('Unlock')}</button>}
+                              <button disabled={busy} onClick={() => stopRequiring(email)} className="text-ink-3 hover:text-ink hover:underline">{t('Stop requiring')}</button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-ink-3">{t('No passphrase: opens mail without asking')}</span>
+                              <button disabled={busy} onClick={() => requirePassphrase(email)} className="text-info hover:underline">{t('Require passphrase')}</button>
+                            </>
+                          )}
                         </div>
                       </>
                     ) : (

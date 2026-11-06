@@ -186,6 +186,9 @@ async function openProtected(account, emailId, folder, body, { force = false } =
   rememberOpened(`${account.id}:${emailId}`, opened.attachments || []);
   return {
     ...body,
+    // The protected subject, when the encrypted part carries one (the
+    // provider only ever saw "[...]").
+    ...(typeof opened.subject === 'string' ? { subject: opened.subject } : {}),
     text: opened.text,
     html: opened.html,
     attachments: (opened.attachments || []).map(({ content, ...meta }) => ({ ...meta, content: null })),
@@ -1441,6 +1444,7 @@ router.post('/:accountId/send', async (req, res) => {
     const fromAddress = sendAs?.email || account.email;
     const ready = require('../services/pgpService').readiness({ from: fromAddress, to, cc, bcc });
     if (!ready.canSign) return res.status(400).json({ error: `You have no OpenPGP key for ${fromAddress}. Create or import one in Settings → Encryption.`, code: 'PGP_NO_IDENTITY' });
+    if (ready.locked) return res.status(400).json({ error: `Your OpenPGP key for ${fromAddress} is locked. Unlock it first.`, code: 'PGP_LOCKED' });
     if (pgpOptions.encrypt && ready.missing.length) {
       return res.status(400).json({ error: `No OpenPGP key for ${ready.missing.join(', ')}.`, code: 'PGP_MISSING_KEYS', missing: ready.missing });
     }
@@ -1527,14 +1531,32 @@ router.post('/:accountId/drafts', async (req, res) => {
 
   const {
     to, cc, bcc, subject, text, html, attachments, replaceRef, draftId,
-    inReplyTo, references, sendAs, replyToEmailId, replyToFolder,
+    inReplyTo, references, sendAs, replyToEmailId, replyToFolder, pgp: pgpRequest,
   } = req.body;
   try {
-    const service = getService(account.type);
-    if (!service.saveDraft) return res.status(400).json({ error: 'Drafts are not supported for this account' });
+    const providerService = getService(account.type);
+    if (!providerService.saveDraft) return res.status(400).json({ error: 'Drafts are not supported for this account' });
+
+    // A message the author means to encrypt is not left readable in the
+    // provider's Drafts folder: it is stored there encrypted to the author's
+    // own key (subject included). Hermes opens it like any encrypted mail.
+    // The shared-draft record on this backend stays sealed at rest as before.
+    let service = providerService;
+    if (pgpRequest?.encrypt === true) {
+      if (!providerService.saveRawDraft) return res.status(400).json({ error: `Encrypted drafts are not supported for ${account.type} accounts` });
+      const pgpDrafts = require('../services/pgpService');
+      if (!pgpDrafts.readiness({ from: sendAs?.email || account.email }).canSign) {
+        return res.status(400).json({ error: `You have no OpenPGP key for ${sendAs?.email || account.email}. Create or import one in Settings → Encryption.`, code: 'PGP_NO_IDENTITY' });
+      }
+      service = {
+        ...providerService,
+        saveDraft: async (acc, input) => providerService.saveRawDraft(acc, await pgpDrafts.protect(acc, input, { encrypt: true, sign: true, selfOnly: true })),
+      };
+    }
 
     const ref = await require('../services/sharedDraftService').save(account, {
       to, cc, bcc, subject, text, html, attachments, inReplyTo, references, sendAs, replyToEmailId, replyToFolder, replaceRef, draftId,
+      ...(pgpRequest?.encrypt === true ? { pgp: { encrypt: true } } : {}),
     }, service);
     res.json({ success: true, ref });
   } catch (err) {

@@ -6,6 +6,7 @@ import {
 import RenderHtml from 'react-native-render-html';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { api, errorMessage, openAttachment, resolveArchiveFolder } from '../api';
+import UnlockKey from '../components/UnlockKey';
 import { sanitizeEmailHtml, totalBlocked, isAllowedImageSource } from '../emailHtml';
 import { useTheme } from '../ThemeContext';
 import { avatarColor, radius, space, type Palette } from '../theme';
@@ -44,13 +45,22 @@ function serverThreadId(email: EmailSummary): string | null {
 }
 
 export default function ViewerScreen({ navigation, route }: Props) {
-  const { account, email } = route.params;
+  const { account, email: listedEmail } = route.params;
   const { width } = useWindowDimensions();
   const { t, ui } = useTheme();
   const styles = useMemo(() => makeStyles(t, ui), [t, ui]);
   const tr = useTr();
 
   const [body, setBody] = useState<EmailBody | null>(null);
+  // Bumped after unlocking an OpenPGP key, to open the message again.
+  const [reloadKey, setReloadKey] = useState(0);
+  // An encrypted message's real subject is inside the encrypted part; the
+  // list only ever saw "[...]". Everything below (header, reply, forward)
+  // reads the subject from here.
+  const email = useMemo(
+    () => (body?.pgp?.encrypted && typeof body.subject === 'string' ? { ...listedEmail, subject: body.subject } : listedEmail),
+    [listedEmail, body],
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [starred, setStarred] = useState(!!email.starred);
@@ -94,7 +104,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
       }
     })();
     return () => { active = false; };
-  }, [account.id, email.id, email.folder]);
+  }, [account.id, email.id, email.folder, reloadKey]);
 
   useEffect(() => {
     const threadId = serverThreadId(email);
@@ -382,6 +392,7 @@ export default function ViewerScreen({ navigation, route }: Props) {
                 >
                   {pgpLine(body.pgp, tr)}
                 </Text>
+                {body.pgp.locked && <UnlockKey onUnlocked={() => setReloadKey(n => n + 1)} />}
               </View>
             )}
 

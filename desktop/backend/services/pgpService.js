@@ -3,6 +3,7 @@ const openpgp = require('openpgp');
 const MailComposer = require('nodemailer/lib/mail-composer');
 const MimeNode = require('nodemailer/lib/mime-node');
 const addressparser = require('nodemailer/lib/addressparser');
+const mimeFuncs = require('nodemailer/lib/mime-funcs');
 const { simpleParser } = require('mailparser');
 const store = require('../store');
 
@@ -68,7 +69,15 @@ async function listKeys() {
   const { identities, contacts } = store.getPgpKeys();
   const out = { identities: [], contacts: [] };
   for (const [email, entry] of Object.entries(identities)) {
-    try { out.identities.push({ email, ...describe(await parseKey(entry.publicKey), { addedAt: entry.addedAt, source: entry.source }), publicKey: entry.publicKey }); }
+    try {
+      out.identities.push({
+        email,
+        ...describe(await parseKey(entry.publicKey), { addedAt: entry.addedAt, source: entry.source }),
+        publicKey: entry.publicKey,
+        locked: entry.locked === true,
+        unlockedUntil: entry.locked === true ? unlockedUntil(email) : null,
+      });
+    }
     catch { /* an unreadable entry is skipped, not fatal */ }
   }
   for (const [email, entry] of Object.entries(contacts)) {
@@ -102,6 +111,7 @@ async function generateIdentity({ email, name }) {
   const keys = store.getPgpKeys();
   keys.identities[address] = { privateKey, publicKey, addedAt: new Date().toISOString(), source: 'generated' };
   store.savePgpKeys(keys);
+  unlocked.delete(address);
   return describe(await parseKey(publicKey), { email: address, publicKey });
 }
 
@@ -121,6 +131,7 @@ async function importIdentity({ email, armoredKey, passphrase }) {
   const keys = store.getPgpKeys();
   keys.identities[address] = { privateKey: key.armor(), publicKey, addedAt: new Date().toISOString(), source: 'imported' };
   store.savePgpKeys(keys);
+  unlocked.delete(address);
   return describe(key, { email: address, publicKey });
 }
 
@@ -133,7 +144,7 @@ async function exportIdentity(email, passphrase) {
   const entry = store.getPgpKeys().identities[lower(email)];
   if (!entry) throw new Error('No key for that address');
   if (String(passphrase || '').length < 8) throw new Error('Choose a passphrase of at least 8 characters');
-  const key = await openpgp.readPrivateKey({ armoredKey: entry.privateKey });
+  const key = await usablePrivateKey(lower(email));
   const locked = await openpgp.encryptKey({ privateKey: key, passphrase: String(passphrase) });
   return locked.armor();
 }
@@ -141,7 +152,118 @@ async function exportIdentity(email, passphrase) {
 function removeIdentity(email) {
   const keys = store.getPgpKeys();
   delete keys.identities[lower(email)];
+  unlocked.delete(lower(email));
   store.savePgpKeys(keys);
+}
+
+// ─── Passphrase-locked keys ────────────────────────────────────────────────
+//
+// By default a private key is stored unlocked (inside the sealed state file)
+// so mail opens without a prompt. "Require passphrase" changes what is stored:
+// the key itself is then passphrase-encrypted, so a copy of the data
+// directory, a backup, or a stolen disk is useless for reading mail even with
+// the sealing key. Unlocking holds the decrypted key in this process's memory
+// for a while; a restart, "Lock now", or the timeout forgets it.
+//
+// What it does not change: while unlocked, this server can read your mail.
+
+const DEFAULT_UNLOCK_HOURS = 8;
+const MAX_UNLOCK_HOURS = 72;
+const unlocked = new Map(); // address -> { key, until }
+
+function unlockedUntil(address) {
+  const entry = unlocked.get(address);
+  if (!entry) return null;
+  if (entry.until <= Date.now()) { unlocked.delete(address); return null; }
+  return new Date(entry.until).toISOString();
+}
+
+function lockedError(address) {
+  const error = new Error(`Your OpenPGP key for ${address} is locked. Unlock it with its passphrase first.`);
+  error.code = 'PGP_LOCKED';
+  error.address = address;
+  return error;
+}
+
+/** The decrypted private key for an identity, or PGP_LOCKED. */
+async function usablePrivateKey(address) {
+  const entry = store.getPgpKeys().identities[address];
+  if (!entry) throw new Error('No key for that address');
+  if (entry.locked !== true) return openpgp.readPrivateKey({ armoredKey: entry.privateKey });
+  if (!unlockedUntil(address)) throw lockedError(address);
+  return unlocked.get(address).key;
+}
+
+function isLocked(address) {
+  const entry = store.getPgpKeys().identities[lower(address)];
+  return !!entry && entry.locked === true && !unlockedUntil(lower(address));
+}
+
+/** Start requiring a passphrase. The key stays unlocked for this session. */
+async function requirePassphrase(email, passphrase, { hours = DEFAULT_UNLOCK_HOURS } = {}) {
+  const address = lower(email);
+  if (String(passphrase || '').length < 8) throw new Error('Choose a passphrase of at least 8 characters');
+  const keys = store.getPgpKeys();
+  const entry = keys.identities[address];
+  if (!entry) throw new Error('No key for that address');
+  if (entry.locked === true) throw new Error('This key already requires a passphrase');
+  const key = await openpgp.readPrivateKey({ armoredKey: entry.privateKey });
+  const protectedKey = await openpgp.encryptKey({ privateKey: key, passphrase: String(passphrase) });
+  keys.identities[address] = { ...entry, privateKey: protectedKey.armor(), locked: true };
+  store.savePgpKeys(keys);
+  unlocked.set(address, { key, until: Date.now() + clampHours(hours) * 3600_000 });
+  return { locked: true, unlockedUntil: unlockedUntil(address) };
+}
+
+/** Stop requiring a passphrase: store the key unlocked again. */
+async function removePassphrase(email, passphrase) {
+  const address = lower(email);
+  const keys = store.getPgpKeys();
+  const entry = keys.identities[address];
+  if (!entry || entry.locked !== true) throw new Error('This key does not require a passphrase');
+  const key = await decryptStored(entry, passphrase);
+  keys.identities[address] = { ...entry, privateKey: key.armor(), locked: false };
+  store.savePgpKeys(keys);
+  unlocked.delete(address);
+  return { locked: false };
+}
+
+async function decryptStored(entry, passphrase) {
+  const stored = await openpgp.readPrivateKey({ armoredKey: entry.privateKey });
+  try { return await openpgp.decryptKey({ privateKey: stored, passphrase: String(passphrase || '') }); }
+  catch { throw Object.assign(new Error('That passphrase does not unlock this key'), { code: 'PGP_BAD_PASSPHRASE' }); }
+}
+
+function clampHours(hours) {
+  const value = Number(hours);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, MAX_UNLOCK_HOURS) : DEFAULT_UNLOCK_HOURS;
+}
+
+/** Unlock for a while. Without an address, every locked key the passphrase opens. */
+async function unlockIdentity({ email, passphrase, hours = DEFAULT_UNLOCK_HOURS }) {
+  const { identities } = store.getPgpKeys();
+  const targets = email ? [lower(email)] : Object.keys(identities).filter(a => identities[a].locked === true);
+  const opened = [];
+  let lastError = null;
+  for (const address of targets) {
+    const entry = identities[address];
+    if (!entry) { lastError = new Error('No key for that address'); continue; }
+    if (entry.locked !== true) continue;
+    try {
+      const key = await decryptStored(entry, passphrase);
+      unlocked.set(address, { key, until: Date.now() + clampHours(hours) * 3600_000 });
+      opened.push({ email: address, unlockedUntil: unlockedUntil(address) });
+    } catch (err) { lastError = err; }
+  }
+  if (!opened.length) throw lastError || new Error('No locked key to unlock');
+  return { unlocked: opened };
+}
+
+/** Forget unlocked keys now (one address, or all). */
+function lockNow(email) {
+  if (email) unlocked.delete(lower(email));
+  else unlocked.clear();
+  return { locked: true };
 }
 
 /**
@@ -192,6 +314,8 @@ function readiness({ from, to, cc, bcc }) {
     canSign: !!identities[sender],
     canEncrypt: !!identities[sender] && recipients.length > 0 && missing.length === 0,
     missing,
+    // The key exists but needs its passphrase before it can sign or encrypt.
+    locked: isLocked(sender),
   };
 }
 
@@ -221,7 +345,12 @@ function resolveFrom(account, sendAs) {
 const build = (node) => new Promise((resolve, reject) => node.build((err, out) => (err ? reject(err) : resolve(out))));
 
 /** The body and attachments as one MIME entity, without message headers. */
-async function innerEntity({ text, html, attachments }) {
+// RFC 9788 header protection: the real subject travels inside the encrypted
+// part; the outer header, which every relay and the provider can read, says
+// only this.
+const OBSCURED_SUBJECT = '[...]';
+
+async function innerEntity({ text, html, attachments, subject }, { protectSubject = false } = {}) {
   const node = new MailComposer({
     // RFC 3156 §3: signed data must survive transport unchanged. Quoted-
     // printable protects trailing whitespace and long lines, which relays
@@ -240,7 +369,11 @@ async function innerEntity({ text, html, attachments }) {
   const headerLines = raw.slice(0, split).split(/\r\n(?![ \t])/);
   // Message-level headers belong on the outer message; what is signed or
   // encrypted is the entity itself.
-  const kept = headerLines.filter(line => !/^(message-id|date|mime-version):/i.test(line));
+  let kept = headerLines.filter(line => !/^(message-id|date|mime-version):/i.test(line));
+  if (protectSubject) {
+    kept = kept.map(line => (/^content-type:/i.test(line) ? `${line}; protected-headers="v1"` : line));
+    kept.push(mimeFuncs.foldLines(`Subject: ${mimeFuncs.encodeWords(String(subject || ''), 'Q', 52)}`, 76).replace(/\r?\n$/, ''));
+  }
   // nodemailer leaves bare LFs inside 7bit parts. On the wire they become
   // CRLF, so the bytes we sign must already be CRLF or nothing verifies.
   const entity = `${kept.join('\r\n')}\r\n\r\n${raw.slice(split + 4)}`.replace(/\r?\n/g, '\r\n');
@@ -262,7 +395,7 @@ function autocryptHeader(address, publicKeyArmored) {
  *   because SMTP takes recipients from the envelope and would otherwise show
  *   Bcc to everyone.
  */
-async function protect(account, email, { encrypt = false, sign = false } = {}) {
+async function protect(account, email, { encrypt = false, sign = false, selfOnly = false } = {}) {
   if (!encrypt && !sign) throw new Error('Nothing to protect');
   const from = resolveFrom(account, email.sendAs);
   const sender = lower(from.address);
@@ -273,14 +406,17 @@ async function protect(account, email, { encrypt = false, sign = false } = {}) {
     error.code = 'PGP_NO_IDENTITY';
     throw error;
   }
-  const privateKey = await openpgp.readPrivateKey({ armoredKey: identity.privateKey });
+  const privateKey = await usablePrivateKey(sender);
 
-  const inner = await innerEntity(email);
+  // Encrypted mail hides its subject; a signed-only message has nothing to hide.
+  const inner = await innerEntity(email, { protectSubject: encrypt });
   let root;
   if (encrypt) {
-    const recipients = recipientsOf(email);
+    // A draft is encrypted to its author alone: nobody else should read it
+    // yet, and it must save before every recipient's key is known.
+    const recipients = selfOnly ? [] : recipientsOf(email);
     const missing = recipients.filter(r => !publicKeyFor(r));
-    if (!recipients.length) throw new Error('Add a recipient before encrypting');
+    if (!recipients.length && !selfOnly) throw new Error('Add a recipient before encrypting');
     if (missing.length) {
       const error = new Error(`No OpenPGP key for ${missing.join(', ')}. Import their public key, or send without encryption.`);
       error.code = 'PGP_MISSING_KEYS';
@@ -329,7 +465,7 @@ async function protect(account, email, { encrypt = false, sign = false } = {}) {
   if (email.to) root.setHeader('To', email.to);
   if (email.cc) root.setHeader('Cc', email.cc);
   if (email.bcc) root.setHeader('Bcc', email.bcc);
-  root.setHeader('Subject', email.subject || '');
+  root.setHeader('Subject', encrypt ? OBSCURED_SUBJECT : (email.subject || ''));
   root.setHeader('Date', new Date());
   root.setHeader('Message-ID', messageId);
   if (email.inReplyTo) root.setHeader('In-Reply-To', email.inReplyTo);
@@ -411,13 +547,16 @@ async function verificationKeys() {
   return keys;
 }
 
+/** Every private key usable right now, and how many are locked away. */
 async function decryptionKeys() {
   const { identities } = store.getPgpKeys();
   const keys = [];
-  for (const entry of Object.values(identities)) {
-    try { keys.push(await openpgp.readPrivateKey({ armoredKey: entry.privateKey })); } catch { /* skip */ }
+  let locked = 0;
+  for (const address of Object.keys(identities)) {
+    try { keys.push(await usablePrivateKey(address)); }
+    catch (err) { if (err.code === 'PGP_LOCKED') locked++; }
   }
-  return keys;
+  return Object.assign(keys, { locked });
 }
 
 /**
@@ -480,7 +619,9 @@ async function bodyFromEntity(entity) {
   const attachments = (parsed.attachments || [])
     .filter(a => !/application\/pgp-signature/i.test(a.contentType || ''))
     .map(a => ({ filename: a.filename, contentType: a.contentType, size: a.size, content: a.content }));
-  return { text: parsed.text || '', html: parsed.html || parsed.textAsHtml || '', attachments };
+  // A Subject inside the protected entity (RFC 9788) is the real one.
+  const subject = parsed.headers?.has('subject') ? (parsed.subject || '') : null;
+  return { text: parsed.text || '', html: parsed.html || parsed.textAsHtml || '', attachments, ...(subject !== null ? { subject } : {}) };
 }
 
 /**
@@ -552,7 +693,9 @@ async function open(raw, { from = '', fallbackText = '' } = {}) {
 
 async function decryptArmored(armored, sender, keys, { inline = false } = {}) {
   const privateKeys = await decryptionKeys();
+  const lockedResult = () => ({ text: '', html: '', attachments: [], pgp: { encrypted: true, decrypted: false, locked: true, error: 'Your OpenPGP key is locked. Unlock it with its passphrase to read this message.' } });
   if (!privateKeys.length) {
+    if (privateKeys.locked) return lockedResult();
     return { text: '', html: '', attachments: [], pgp: { encrypted: true, decrypted: false, error: 'This message is encrypted, and you have no OpenPGP key here to open it. Import your key in Settings → Encryption.' } };
   }
   try {
@@ -578,11 +721,14 @@ async function decryptArmored(armored, sender, keys, { inline = false } = {}) {
         const inner = await open(data, { from: sender });
         if (inner) { content = inner; if (!signature.signed && inner.pgp?.signed) signature = { signed: true, status: inner.pgp.status, signer: inner.pgp.signer, fingerprint: inner.pgp.fingerprint }; }
       }
-      content = content ? { text: content.text, html: content.html, attachments: content.attachments } : await bodyFromEntity(data);
+      content = content ? { text: content.text, html: content.html, attachments: content.attachments, ...(content.subject !== undefined ? { subject: content.subject } : {}) } : await bodyFromEntity(data);
     }
     return { ...content, pgp: { encrypted: true, decrypted: true, ...signature } };
   } catch (err) {
-    return { text: '', html: '', attachments: [], pgp: { encrypted: true, decrypted: false, error: /decryption key|session key|no.*key/i.test(err.message) ? 'None of your OpenPGP keys can open this message.' : `Could not decrypt: ${err.message}` } };
+    const noKey = /decryption key|session key|no.*key/i.test(err.message);
+    // The unlocked keys could not open it, but a locked one might.
+    if (noKey && privateKeys.locked) return lockedResult();
+    return { text: '', html: '', attachments: [], pgp: { encrypted: true, decrypted: false, error: noKey ? 'None of your OpenPGP keys can open this message.' : `Could not decrypt: ${err.message}` } };
   }
 }
 
@@ -592,6 +738,11 @@ module.exports = {
   importIdentity,
   exportIdentity,
   removeIdentity,
+  requirePassphrase,
+  removePassphrase,
+  unlockIdentity,
+  lockNow,
+  isLocked,
   importContactKeys,
   removeContact,
   publicKeyFor,
@@ -599,5 +750,5 @@ module.exports = {
   protect,
   looksProtected,
   open,
-  _internals: { partsOf, splitHeaderBody, headerValue, paramOf, recipientsOf, innerEntity, parsedKeys },
+  _internals: { partsOf, splitHeaderBody, headerValue, paramOf, recipientsOf, innerEntity, parsedKeys, unlocked },
 };

@@ -85,9 +85,16 @@ draft migration, new controls, validation commands, and remaining audit findings
   mail as PGP/MIME, and read encrypted or signed mail (PGP/MIME and inline).
   Correspondents' keys are imported by hand, from a key attachment, or from
   their Autocrypt header; a changed key is flagged, never silently replaced.
-  Subjects and recipients are not encrypted. The backend holds your private key
-  (encrypted at rest) so it can open mail for every client, which means a cloud
-  backend can read your encrypted mail.
+  Encrypted mail hides its subject too (RFC 9788 header protection: the
+  provider sees `[...]`), and a saved draft of an encrypted message is stored
+  encrypted to your own key. Sender and recipients stay visible, as they must
+  for delivery.
+- The backend holds your private key so it can open mail for every client.
+  By default it is stored inside the sealed state file; turn on **Require
+  passphrase** and the stored copy is passphrase-encrypted too, so a copied
+  data folder or backup cannot read your mail. Unlock it from any client;
+  it stays unlocked in memory for 8 hours or until a restart. While unlocked,
+  the backend (a cloud server, for the phone) can read your encrypted mail.
 - Credentials, cached mail, the outbox, and the search index are encrypted at
   rest (AES-256-GCM; the desktop app keeps the key in the OS keychain)
 - Messages render in a sandboxed frame where scripts can never run; remote

@@ -42,6 +42,8 @@ const ADMIN_ONLY = [
 const READ_WRITES = [
   ['POST', /^\/emails\/categorize$/],
   ['POST', /^\/pgp\/readiness$/],
+  // The passphrase is the authority; nothing stored changes.
+  ['POST', /^\/pgp\/(unlock|lock)$/],
   ['POST', /^\/emails\/rules\/preview$/],
   ['POST', /^\/emails\/[^/]+\/message\/[^/]+\/attachment\/[^/]+\/ticket$/],
   ['POST', /^\/emails\/devices$/],

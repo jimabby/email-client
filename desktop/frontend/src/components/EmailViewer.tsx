@@ -4,6 +4,7 @@ import { useEmailStore } from '../store/emailStore'
 import { confirmDialog, choiceDialog } from './DialogHost'
 import { aiApi, digestApi, emailsApi, pgpApi } from '../api/client'
 import { PgpBadge } from './PgpBadge'
+import { promptUnlockPgp } from '../lib/pgpUnlock'
 import { Avatar, bareAddress } from './Avatar'
 import { readJson, writeJson } from '../lib/storage'
 import {
@@ -214,6 +215,20 @@ export function EmailViewer() {
 
     return () => { cancelled = true }
   }, [selectedEmail?.id, selectedEmailBody, conversationCandidates])
+
+  // An encrypted message's real subject travels inside the encrypted part
+  // (RFC 9788); the provider, and so the list, only ever saw "[...]". Once the
+  // body is open, put the real one on the summary so the heading, Reply,
+  // Forward, print, and the list row all use it.
+  useEffect(() => {
+    const protectedSubject = selectedEmailBody?.pgp?.encrypted ? selectedEmailBody.subject : undefined
+    if (!selectedEmail || typeof protectedSubject !== 'string' || protectedSubject === selectedEmail.subject) return
+    const id = selectedEmail.id
+    useEmailStore.setState(s => ({
+      selectedEmail: s.selectedEmail?.id === id ? { ...s.selectedEmail, subject: protectedSubject } : s.selectedEmail,
+      emails: s.emails.map(e => (e.id === id ? { ...e, subject: protectedSubject } : e)),
+    }))
+  }, [selectedEmail?.id, selectedEmailBody])
 
   if (!selectedEmail) {
     return (
@@ -1159,8 +1174,24 @@ export function EmailViewer() {
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-7 py-6" onClick={() => { setShowMoveMenu(false); setShowSnoozeMenu(false); setShowMoreMenu(false) }}>
         {body?.pgp?.encrypted && !body.pgp.decrypted && (
-          <div role="alert" className="mb-4 rounded-xl border border-danger/30 bg-danger/8 px-4 py-3 text-[12.5px] text-danger">
-            {body.pgp.error || t('This message is encrypted, and none of your keys can open it.')}
+          <div role="alert" className="mb-4 rounded-xl border border-danger/30 bg-danger/8 px-4 py-3 text-[12.5px] text-danger flex items-center gap-3">
+            <span className="flex-1">{body.pgp.error || t('This message is encrypted, and none of your keys can open it.')}</span>
+            {body.pgp.locked && (
+              <button
+                onClick={async () => {
+                  if (!(await promptUnlockPgp())) return
+                  // Open it again now that the key can be used.
+                  const email = selectedEmail
+                  try {
+                    const fresh = await emailsApi.getBody(email.accountId, email.id, email.folder)
+                    if (useEmailStore.getState().selectedEmail?.id === email.id) useEmailStore.getState().setSelectedEmailBody(fresh)
+                  } catch { showNotification('error', t('Could not reload this message')) }
+                }}
+                className="btn-accent text-[11.5px] font-semibold px-3 py-1.5 rounded-lg flex-shrink-0"
+              >
+                {t('Unlock')}
+              </button>
+            )}
           </div>
         )}
         {(body?.pgp?.status === 'bad' || body?.pgp?.status === 'mismatch') && (

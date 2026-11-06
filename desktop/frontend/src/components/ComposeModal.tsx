@@ -10,6 +10,7 @@ import { useEmailStore, type ArchivedOriginal } from '../store/emailStore'
 import { promptDialog, confirmDialog } from './DialogHost'
 import * as localOutbox from '../lib/localOutbox'
 import { emailsApi, aiApi, pgpApi, streamAiSuggestion, type StreamHandle } from '../api/client'
+import { promptUnlockPgp } from '../lib/pgpUnlock'
 import type { AiMode, Alias, DraftAttachment, MailTemplate } from '../types/email'
 import { useT, t as translate } from '../lib/i18n'
 
@@ -273,7 +274,8 @@ export function ComposeModal() {
   // OpenPGP. The controls only appear once the sending address has a key.
   const [pgpEncrypt, setPgpEncrypt] = useState(false)
   const [pgpSign, setPgpSign] = useState(false)
-  const [pgpReady, setPgpReady] = useState<{ canSign: boolean; canEncrypt: boolean; missing: string[] } | null>(null)
+  const [pgpReady, setPgpReady] = useState<{ canSign: boolean; canEncrypt: boolean; missing: string[]; locked?: boolean } | null>(null)
+  const [pgpCheck, setPgpCheck] = useState(0)
   const [showSchedule, setShowSchedule] = useState(false)
   const [scheduledAt, setScheduledAt] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -501,7 +503,19 @@ export function ComposeModal() {
         .catch(() => setPgpReady(null))
     }, 400)
     return () => window.clearTimeout(timer)
-  }, [pgpFrom, to, cc, bcc])
+  }, [pgpFrom, to, cc, bcc, pgpCheck])
+
+  // A passphrase-protected key must be unlocked before Encrypt or Sign can
+  // mean anything; ask at the moment the user turns one on.
+  const togglePgp = async (which: 'encrypt' | 'sign') => {
+    const turningOn = which === 'encrypt' ? !pgpEncrypt : !pgpSign
+    if (turningOn && pgpReady?.locked) {
+      if (!(await promptUnlockPgp(pgpFrom))) return
+      setPgpCheck(n => n + 1)
+    }
+    if (which === 'encrypt') setPgpEncrypt(v => !v)
+    else setPgpSign(v => !v)
+  }
 
   const handleSend = async (options: { archiveOriginal?: boolean } = {}) => {
     if (isSending) return
@@ -709,9 +723,11 @@ export function ComposeModal() {
         replaceRef: prevRef, draftId: draftIdRef.current,
         inReplyTo: composeData?.replyTo?.messageId || composeData?.inReplyTo, references: composeData?.replyTo?.references || composeData?.references,
         replyToEmailId: composeData?.replyTo?.id || composeData?.replyToEmailId, replyToFolder: composeData?.replyTo?.folder || composeData?.replyToFolder,
+        // Going to be encrypted: don't leave it readable in the provider's Drafts.
+        pgp: pgpEncrypt ? { encrypt: true } : undefined,
       })
       await saveDraft(buildDraft(ref, attachmentData))
-      showNotification('success', t('Draft saved'))
+      showNotification('success', pgpEncrypt ? t('Draft saved, encrypted to your key') : t('Draft saved'))
     } catch (error) {
       autosaveStopped.current = false
       // Provider sync failed — keep a local copy so work isn't lost.
@@ -1093,7 +1109,7 @@ export function ComposeModal() {
             role="switch"
             aria-checked={pgpEncrypt}
             disabled={!pgpReady.canEncrypt}
-            onClick={() => setPgpEncrypt(v => !v)}
+            onClick={() => togglePgp('encrypt')}
             title={pgpReady.canEncrypt
               ? t('Encrypt: only the recipients can read the body and attachments. The subject is not encrypted.')
               : pgpReady.missing.length
@@ -1109,7 +1125,7 @@ export function ComposeModal() {
             role="switch"
             aria-checked={pgpSign || pgpEncrypt}
             disabled={pgpEncrypt}
-            onClick={() => setPgpSign(v => !v)}
+            onClick={() => togglePgp('sign')}
             title={pgpEncrypt ? t('Encrypted mail is always signed') : t('Sign: recipients with your key can verify it came from you, unchanged.')}
             className={`field text-[12px] px-2.5 py-1.5 !rounded-xl ${pgpSign || pgpEncrypt ? 'text-success !border-success/40' : 'text-ink-2'}`}
           >

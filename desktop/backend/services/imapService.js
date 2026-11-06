@@ -774,6 +774,15 @@ async function _findDraftsMailbox(client) {
   return 'Drafts';
 }
 
+/** Save a prebuilt RFC 822 message as a draft (the encrypted-draft path). */
+async function saveRawDraft(account, { raw }) {
+  return getConn(account).run(async (client) => {
+    const mailbox = await _findDraftsMailbox(client);
+    const res = await client.append(mailbox, raw, ['\\Draft', '\\Seen']);
+    return { type: 'imap', uid: res?.uid || null, mailbox };
+  });
+}
+
 async function saveDraft(account, draft) {
   const raw = await buildMime(account, draft);
   return getConn(account).run(async (client) => {
@@ -994,6 +1003,7 @@ async function testConnection(account) {
 
 module.exports = {
   sendRaw,
+  saveRawDraft,
   _internals: { snippetFromSource, threadRoot, referencesFromHeaders, parseHeaderBlock, shouldSaveSentCopy, uidSet },
   bulkSetFlag,
   bulkMove,

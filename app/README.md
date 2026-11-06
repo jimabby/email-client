@@ -59,7 +59,9 @@ so the phone cannot use it.
 - **Outbox**, **Rules**, **Follow-ups** - the same lists the desktop shows
 
 Messages the backend opened with OpenPGP show whether they were encrypted and
-whether the signature checks out, above the body.
+whether the signature checks out, above the body. If your key requires a
+passphrase and is locked, the message offers a passphrase field; the composer
+asks for it when you turn Encrypt on.
 
 Messages that could not reach the server wait in the phone's Outbox. They are
 retried every 30 seconds while the app is open and, after a native rebuild, by

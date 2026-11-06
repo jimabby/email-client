@@ -14,6 +14,9 @@ const pgp = require('../services/pgpService');
 // POST   /api/pgp/contacts                      { armoredKey } import public key(s)
 // POST   /api/pgp/contacts/from-attachment      { accountId, emailId, index, folder }
 // DELETE /api/pgp/contacts/:email
+// POST   /api/pgp/identities/:email/passphrase  { passphrase, enabled } require a passphrase (or stop)
+// POST   /api/pgp/unlock                        { email?, passphrase, hours? } unlock for a while
+// POST   /api/pgp/lock                          { email? } forget unlocked keys now
 // POST   /api/pgp/readiness                     { from, to, cc, bcc } can this message be signed/encrypted?
 //
 // Private-key routes are master-token only (middleware/deviceScope.js).
@@ -50,6 +53,16 @@ router.post('/identities/:email/export', async (req, res) => {
   } catch (err) { fail(res, err); }
 });
 
+// Require (or stop requiring) a passphrase for this key. Master token only.
+router.post('/identities/:email/passphrase', async (req, res) => {
+  const { passphrase, enabled, hours } = req.body || {};
+  try {
+    res.json(enabled === false
+      ? await pgp.removePassphrase(req.params.email, passphrase)
+      : await pgp.requirePassphrase(req.params.email, passphrase, { hours }));
+  } catch (err) { fail(res, err); }
+});
+
 router.delete('/identities/:email', (req, res) => {
   pgp.removeIdentity(req.params.email);
   res.json({ success: true });
@@ -77,6 +90,17 @@ router.delete('/contacts/:email', (req, res) => {
   pgp.removeContact(req.params.email);
   res.json({ success: true });
 });
+
+// Unlock a passphrase-protected key for a while. Any device may do this:
+// knowing the passphrase is the authority, and it changes nothing stored.
+// Without an email, every locked key that passphrase opens.
+router.post('/unlock', async (req, res) => {
+  const { email, passphrase, hours } = req.body || {};
+  try { res.json(await pgp.unlockIdentity({ email, passphrase, hours })); }
+  catch (err) { res.status(err.code === 'PGP_BAD_PASSPHRASE' ? 403 : 400).json({ error: err.message, code: err.code }); }
+});
+
+router.post('/lock', (req, res) => res.json(pgp.lockNow(req.body?.email)));
 
 router.post('/readiness', (req, res) => {
   const { from, to, cc, bcc } = req.body || {};

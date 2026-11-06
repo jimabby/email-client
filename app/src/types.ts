@@ -60,6 +60,8 @@ export interface PgpStatus {
   signer?: string | null;
   fingerprint?: string;
   error?: string;
+  /** Encrypted to a key that needs its passphrase first. */
+  locked?: boolean;
 }
 
 export interface DigestGroup {

@@ -46,7 +46,7 @@ test('contact import files a key under its addresses and never keeps a secret', 
 });
 
 test('readiness reports who is missing a key', () => {
-  assert.deepEqual(pgp.readiness({ from: 'me@example.com', to: 'friend@example.org' }), { canSign: true, canEncrypt: true, missing: [] });
+  assert.deepEqual(pgp.readiness({ from: 'me@example.com', to: 'friend@example.org' }), { canSign: true, canEncrypt: true, missing: [], locked: false });
   const r = pgp.readiness({ from: 'me@example.com', to: 'Friend <friend@example.org>, stranger@nowhere.example' });
   assert.equal(r.canEncrypt, false);
   assert.deepEqual(r.missing, ['stranger@nowhere.example']);
@@ -97,6 +97,19 @@ test('encrypt + sign: PGP/MIME on the wire, readable by the recipient and by us'
     format: 'binary',
   });
   assert.match(Buffer.from(decrypted.data).toString(), /plan\.txt/);
+});
+
+test('an encrypted message hides its subject; a signed one does not', async () => {
+  const encrypted = await pgp.protect(me, { ...draft, bcc: '', subject: 'Merger — 机密' }, { encrypt: true, sign: true });
+  const wire = encrypted.raw.toString();
+  assert.match(wire, /^Subject: \[\.\.\.\]$/m, 'the provider and relays only see [...]');
+  assert.doesNotMatch(wire, /Merger/);
+  const opened = await pgp.open(encrypted.raw);
+  assert.equal(opened.subject, 'Merger — 机密');
+
+  const signed = await pgp.protect(me, { ...draft, bcc: '', subject: 'Public notice' }, { sign: true });
+  assert.match(signed.raw.toString(), /^Subject: Public notice$/m);
+  assert.equal((await pgp.open(signed.raw)).subject, undefined, 'nothing protected, nothing to replace');
 });
 
 test('encrypting to someone without a key fails before anything is sent', async () => {

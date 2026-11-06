@@ -764,6 +764,14 @@ async function sendRaw(account, { raw }, draft = {}) {
   await gmail.users.messages.send({ userId: 'me', requestBody });
 }
 
+/** Save a prebuilt RFC 822 message as a draft (the encrypted-draft path). */
+async function saveRawDraft(account, { raw }) {
+  const gmail = getGmailClient(account);
+  const encoded = Buffer.from(raw).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const res = await gmail.users.drafts.create({ userId: 'me', requestBody: { message: { raw: encoded } } });
+  return { type: 'gmail', id: res.data.id || null };
+}
+
 // Save a draft to the Gmail Drafts folder (synced to all clients).
 async function saveDraft(account, draft) {
   const gmail = getGmailClient(account);
@@ -849,6 +857,7 @@ async function importMessage(account, raw, folder = 'INBOX') {
 module.exports = {
   _internals: { extractBody, messageDate, messageToSummary },
   sendRaw,
+  saveRawDraft,
   importMessage,
   getHeaders,
   getAuthUrl,

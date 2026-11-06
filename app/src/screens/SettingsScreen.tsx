@@ -114,7 +114,7 @@ export default function SettingsScreen({ navigation }: Props) {
 
       <Text style={[styles.label, { marginTop: 20 }]}>{tr('API token')}</Text>
       <Text style={styles.help}>
-        {tr("Use a device token created in desktop Settings ? Privacy ? Device access. It is kept in the phone's encrypted credential storage.")}
+        {tr("Use a device token created in desktop Settings → Privacy & Appearance → Device access. It is kept in the phone's encrypted credential storage.")}
       </Text>
       <TextInput
         value={token}

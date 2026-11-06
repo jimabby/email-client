@@ -5,11 +5,14 @@ process.env.HERMES_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-pgp-
 process.env.HERMES_SECRET_KEY = '9'.repeat(64);
 
 // IMAP stub: records what is sent and serves it back as the stored message.
-const sent = { raw: [], plain: [] };
+const sent = { raw: [], plain: [], drafts: [] };
 let stored = null;
 require.cache[require.resolve('../services/imapService')] = { exports: {
   sendRaw: async (account, message) => { sent.raw.push(message); stored = message.raw; },
   sendEmail: async (account, email) => { sent.plain.push(email); },
+  saveDraft: async (account, draft) => { sent.drafts.push({ plain: draft }); return { type: 'imap', uid: sent.drafts.length, mailbox: 'Drafts' }; },
+  saveRawDraft: async (account, message) => { sent.drafts.push({ raw: message.raw }); return { type: 'imap', uid: sent.drafts.length, mailbox: 'Drafts' }; },
+  deleteDraft: async () => {},
   fetchEmailBody: async () => ({
     from: 'Me <me@example.com>', subject: 'Plans', text: 'This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156)',
     html: '', attachments: [
@@ -94,6 +97,7 @@ test('reading it back decrypts in the response, and attachments come from the de
   assert.equal(body.pgp.decrypted, true);
   assert.equal(body.pgp.status, 'verified');
   assert.match(body.text, /Meet at noon\./);
+  assert.equal(body.subject, 'Plans', "the protected subject replaces the provider's [...]");
   assert.deepEqual(body.attachments.map(a => a.filename), ['map.txt']);
   assert.equal(body.attachments[0].content, null, 'bytes are fetched separately');
 
@@ -117,4 +121,28 @@ test('an attachment key can be imported straight from a message', async () => {
     assert.equal(res.status, 201);
     assert.equal((await res.json()).imported[0].email, 'colleague@example.net');
   } finally { imapStub.getAttachment = previous; }
+});
+
+test('a draft of an encrypted message is stored encrypted to its author, even before recipients have keys', async () => {
+  const res = await post(`/api/emails/${account.id}/drafts`, {
+    to: 'nokey@x.example', subject: 'Unfinished plan', text: 'Draft secret', draftId: 'draft-pgp-0001', pgp: { encrypt: true },
+  });
+  assert.equal(res.status, 200);
+  const saved = sent.drafts.at(-1);
+  assert.ok(saved.raw, 'went through the raw (encrypted) path');
+  const wire = saved.raw.toString();
+  assert.match(wire, /multipart\/encrypted/);
+  assert.match(wire, /^Subject: \[\.\.\.\]$/m);
+  assert.doesNotMatch(wire, /Draft secret|Unfinished plan/);
+
+  // Hermes can open its own encrypted draft.
+  const opened = await require('../services/pgpService').open(saved.raw);
+  assert.equal(opened.subject, 'Unfinished plan');
+  assert.match(opened.text, /Draft secret/);
+});
+
+test('an ordinary draft still uses the provider path', async () => {
+  const res = await post(`/api/emails/${account.id}/drafts`, { to: 'a@b.example', subject: 'Plain', text: 'Hello', draftId: 'draft-plain-0001' });
+  assert.equal(res.status, 200);
+  assert.equal(sent.drafts.at(-1).plain.subject, 'Plain');
 });

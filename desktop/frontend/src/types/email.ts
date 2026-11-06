@@ -100,6 +100,8 @@ export interface PgpStatus {
   fingerprint?: string;
   keyId?: string;
   error?: string;
+  /** Encrypted to a key that needs its passphrase first. */
+  locked?: boolean;
   learned?: { learned?: string; changed?: string };
 }
 
@@ -114,6 +116,9 @@ export interface PgpKeyInfo {
   source?: 'generated' | 'imported' | 'manual' | 'autocrypt' | 'attachment';
   publicKey?: string;
   keyChanged?: { fingerprint: string; seenAt: string } | null;
+  /** Stored passphrase-encrypted; usable only while unlocked. */
+  locked?: boolean;
+  unlockedUntil?: string | null;
 }
 
 export interface DigestGroup {

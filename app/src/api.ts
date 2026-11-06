@@ -202,7 +202,10 @@ export const api = {
 
   // ─── OpenPGP ──────────────────────────────────────────────────────────────
   pgpReadiness: (draft: { from: string; to?: string; cc?: string; bcc?: string }) =>
-    client().post<{ canSign: boolean; canEncrypt: boolean; missing: string[] }>('/pgp/readiness', draft).then((r) => r.data),
+    client().post<{ canSign: boolean; canEncrypt: boolean; missing: string[]; locked?: boolean }>('/pgp/readiness', draft).then((r) => r.data),
+  /** Unlock a passphrase-protected key on the backend for a while. */
+  pgpUnlock: (passphrase: string, email?: string) =>
+    client().post<{ unlocked: { email: string; unlockedUntil: string }[] }>('/pgp/unlock', { passphrase, email }).then((r) => r.data),
 
   // ─── Sender screener ──────────────────────────────────────────────────────
   // Listing reads a folder per account, so it gets more time than the default.
@@ -232,7 +235,9 @@ export const api = {
 
   saveDraft: (
     accountId: string,
-    data: { inReplyTo?: string; references?: string; replyToEmailId?: string; replyToFolder?: string; draftId?: string; replaceRef?: any; to?: string; cc?: string; bcc?: string; subject?: string; text?: string; html?: string; attachments?: { filename: string; contentType: string; content: string }[] }
+    data: { inReplyTo?: string; references?: string; replyToEmailId?: string; replyToFolder?: string; draftId?: string; replaceRef?: any; to?: string; cc?: string; bcc?: string; subject?: string; text?: string; html?: string; attachments?: { filename: string; contentType: string; content: string }[];
+      /** Store the provider copy encrypted to your own key. */
+      pgp?: { encrypt: boolean } }
   ) => client().post<{ ref: any }>(`/emails/${accountId}/drafts`, data).then((r) => r.data),
 
   // Real per-folder unread totals from the provider.

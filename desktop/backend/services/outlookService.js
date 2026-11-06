@@ -364,6 +364,27 @@ async function sendRaw(account, { raw }) {
   }
 }
 
+/**
+ * Save a prebuilt RFC 822 message as a draft (the encrypted-draft path).
+ * Creating a message from MIME on /me/messages leaves it in Drafts.
+ */
+async function saveRawDraft(account, { raw }) {
+  const create = (token) => fetch(`${GRAPH_ROOT}/me/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain', Prefer: ID_PREFERENCE },
+    body: Buffer.from(raw).toString('base64'),
+  });
+  let res = await create(account.accessToken);
+  if (res.status === 401) res = await create(await refreshAccessToken(account));
+  if (!res.ok) {
+    const err = new Error(`Graph API error: ${res.status} ${await res.text()}`);
+    err.status = res.status;
+    throw err;
+  }
+  const created = await res.json().catch(() => null);
+  return { type: 'outlook', id: created?.id || null };
+}
+
 /** Message-ID and References, so a raw-MIME reply threads by its headers. */
 async function getThreadingInfo(account, outlookId) {
   const data = await graphRequestWithRefresh(account, `/me/messages/${outlookId}?$select=internetMessageId,internetMessageHeaders`);
@@ -623,6 +644,7 @@ async function importMessage(account, raw, folder = 'INBOX') {
 
 module.exports = {
   sendRaw,
+  saveRawDraft,
   getThreadingInfo,
   _internals: { graphUrl, formatSender },
   importMessage,

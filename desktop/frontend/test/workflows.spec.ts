@@ -168,3 +168,17 @@ test('a sender can be sorted into a tab for good', async ({ page }) => {
   await expect.poll(() => saved).toEqual({ from: message.from, scope: 'sender', category: 'Jobs' })
   await expect.poll(() => page.evaluate(async () => (await import('/src/store/emailStore.ts')).useEmailStore.getState().emailCategories['one::INBOX::7'])).toBe('Jobs')
 })
+
+test('a message encrypted to a locked key can be unlocked from the reader', async ({ page }) => {
+  await setup(page)
+  let unlocked = ''
+  await page.route('**/api/pgp/unlock', route => { unlocked = route.request().postDataJSON().passphrase; return route.fulfill({ json: { unlocked: [{ email: 'one@example.com', unlockedUntil: new Date(Date.now() + 3600000).toISOString() }] } }) })
+  await openMessage(page, { text: '', pgp: { encrypted: true, decrypted: false, locked: true, error: 'Your OpenPGP key is locked. Unlock it with its passphrase to read this message.' } })
+  // After unlocking, the reader asks for the message again and gets it open.
+  await page.route('**/api/emails/one/message/**', route => route.fulfill({ json: { from: message.from, to: message.to, subject: 'Plans', date: message.date, text: 'Now readable.', html: '', attachments: [], pgp: { encrypted: true, decrypted: true } } }))
+  await page.getByRole('alert').getByRole('button', { name: 'Unlock' }).click()
+  await page.getByRole('dialog').locator('input[type=password]').fill('correct horse battery')
+  await page.getByRole('dialog').getByRole('button', { name: 'Unlock' }).click()
+  await expect.poll(() => unlocked).toBe('correct horse battery')
+  await expect(page.getByText('Now readable.')).toBeVisible()
+})

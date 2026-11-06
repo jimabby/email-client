@@ -46,4 +46,14 @@ const aiLimiter = make({ windowMs: 60_000, limit: 40, name: 'AI' });
 // once the window closes.
 const sendLimiter = make({ windowMs: 60_000, limit: 30, name: 'send' });
 
-module.exports = { apiLimiter, webhookLimiter, aiLimiter, sendLimiter, isLoopback };
+// Each attempt is a guess at an OpenPGP passphrase. Not exempt for loopback:
+// the point is to slow guessing by anything holding a token, local or not.
+const pgpUnlockLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many unlock attempts — wait a few minutes and try again.' },
+});
+
+module.exports = { apiLimiter, webhookLimiter, aiLimiter, sendLimiter, pgpUnlockLimiter, isLoopback };

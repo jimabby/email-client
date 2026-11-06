@@ -468,6 +468,8 @@ export const emailsApi = {
   // ─── Server-synced drafts ────────────────────────────────────────────────
   sharedDrafts: () => api.get<(import('../types/email').Draft & { html?: string })[]>('/emails/shared-drafts').then(r => r.data),
   saveServerDraft: (accountId: string, data: {
+    /** Store the provider copy encrypted to your own key. */
+    pgp?: { encrypt: boolean }
     to?: string
     cc?: string
     bcc?: string
@@ -680,5 +682,11 @@ export const pgpApi = {
     api.post<{ imported: { email: string; fingerprint: string }[] }>('/pgp/contacts/from-attachment', { accountId, emailId, index, folder, pgp }).then(r => r.data.imported),
   removeContact: (email: string) => api.delete(`/pgp/contacts/${encodeURIComponent(email)}`),
   readiness: (draft: { from: string; to?: string; cc?: string; bcc?: string }) =>
-    api.post<{ canSign: boolean; canEncrypt: boolean; missing: string[] }>('/pgp/readiness', draft).then(r => r.data),
+    api.post<{ canSign: boolean; canEncrypt: boolean; missing: string[]; locked?: boolean }>('/pgp/readiness', draft).then(r => r.data),
+  /** Start (enabled) or stop requiring a passphrase for this key. */
+  setPassphraseRequired: (email: string, passphrase: string, enabled: boolean) =>
+    api.post(`/pgp/identities/${encodeURIComponent(email)}/passphrase`, { passphrase, enabled }).then(r => r.data),
+  unlock: (passphrase: string, email?: string, hours?: number) =>
+    api.post<{ unlocked: { email: string; unlockedUntil: string }[] }>('/pgp/unlock', { passphrase, email, hours }).then(r => r.data),
+  lock: (email?: string) => api.post('/pgp/lock', { email }).then(r => r.data),
 }

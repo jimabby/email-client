@@ -7,7 +7,7 @@ const cors = require('cors');
 const apiAuth = require('./middleware/apiAuth');
 const { deviceScope, normalizeScope } = require('./middleware/deviceScope');
 const { hostGuard, isLoopbackHost } = require('./middleware/hostGuard');
-const { apiLimiter, webhookLimiter, aiLimiter, sendLimiter, isLoopback } = require('./middleware/rateLimit');
+const { apiLimiter, webhookLimiter, aiLimiter, sendLimiter, pgpUnlockLimiter, isLoopback } = require('./middleware/rateLimit');
 const store = require('./store');
 
 const app = express();
@@ -115,6 +115,8 @@ app.use('/api/ai', aiLimiter);
 // Categorisation calls the AI provider for every uncached message.
 app.use('/api/emails/categorize', aiLimiter);
 app.use('/api/emails/:accountId/send', sendLimiter);
+app.use('/api/pgp/unlock', pgpUnlockLimiter);
+app.use('/api/pgp/identities/:email/passphrase', pgpUnlockLimiter);
 
 // Provider callbacks and signed webhook endpoints cannot send the Hermes token.
 // Everything else under /api is private, including account metadata and AI APIs.

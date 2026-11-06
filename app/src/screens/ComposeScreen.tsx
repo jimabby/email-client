@@ -1,6 +1,7 @@
 import { sendChecks } from '../../../shared/sendChecks';
 import { queueOffline, offlineUnavailable } from '../offline';
 import { ensureBackgroundDelivery } from '../backgroundOutbox';
+import UnlockKey from '../components/UnlockKey';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
@@ -103,7 +104,9 @@ export default function ComposeScreen({ navigation, route }: Props) {
   const [followUpDays, setFollowUpDays] = useState(0);
   // OpenPGP: the toggle appears once this account's address has a key.
   const [pgpEncrypt, setPgpEncrypt] = useState(false);
-  const [pgpReady, setPgpReady] = useState<{ canSign: boolean; canEncrypt: boolean; missing: string[] } | null>(null);
+  const [pgpReady, setPgpReady] = useState<{ canSign: boolean; canEncrypt: boolean; missing: string[]; locked?: boolean } | null>(null);
+  const [pgpCheck, setPgpCheck] = useState(0);
+  const [showUnlock, setShowUnlock] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => {
       api.pgpReadiness({ from: account.email, to, cc, bcc })
@@ -111,7 +114,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
         .catch(() => setPgpReady(null));
     }, 500);
     return () => clearTimeout(timer);
-  }, [account.email, to, cc, bcc]);
+  }, [account.email, to, cc, bcc, pgpCheck]);
   const [followUpOpen, setFollowUpOpen] = useState(false);
 
   // Draft help. The previous text is kept so one tap puts it back.
@@ -275,6 +278,8 @@ export default function ComposeScreen({ navigation, route }: Props) {
         subject: subject.trim(),
         text,
         html: bodyHtml(),
+        // Going to be encrypted: don't leave it readable in the provider's Drafts.
+        ...(pgpEncrypt ? { pgp: { encrypt: true } } : {}),
       });
       serverRef.current = saved.ref;
       await persist();
@@ -376,7 +381,7 @@ export default function ComposeScreen({ navigation, route }: Props) {
 
         {draftError ? <Text style={{ color: t.danger, padding: 12 }}>{tr('Draft could not be saved')}: {draftError}</Text> : <Text style={{ color: t.textMuted, padding: 12 }}>{tr('Draft saved automatically on this device')}</Text>}
         <TouchableOpacity onPress={attach} style={styles.tool}><Text style={styles.toolText}>{tr('Attach files')}</Text></TouchableOpacity>
-        {attachments.map((file, index) => <TouchableOpacity key={index} onPress={() => setAttachments(items => items.filter((_, i) => i !== index))}><Text style={styles.toolText}>{file.filename} ? {tr('Remove')}</Text></TouchableOpacity>)}
+        {attachments.map((file, index) => <TouchableOpacity key={index} onPress={() => setAttachments(items => items.filter((_, i) => i !== index))}><Text style={styles.toolText}>{file.filename} · {tr('Remove')}</Text></TouchableOpacity>)}
         <View style={styles.toolRow}>
           {aiAvailable && (
             <TouchableOpacity style={styles.tool} onPress={() => setAiOpen(true)} disabled={aiBusy}>
@@ -394,7 +399,8 @@ export default function ComposeScreen({ navigation, route }: Props) {
             <TouchableOpacity
               style={styles.tool}
               disabled={!pgpReady.canEncrypt}
-              onPress={() => setPgpEncrypt(v => !v)}
+              // A locked key has to be unlocked before Encrypt means anything.
+              onPress={() => { if (!pgpEncrypt && pgpReady.locked) { setShowUnlock(true); return; } setPgpEncrypt(v => !v); }}
               accessibilityRole="switch"
               accessibilityState={{ checked: pgpEncrypt, disabled: !pgpReady.canEncrypt }}
               accessibilityHint={pgpReady.canEncrypt
@@ -412,6 +418,13 @@ export default function ComposeScreen({ navigation, route }: Props) {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {showUnlock && pgpReady?.locked && (
+          <View style={{ paddingHorizontal: 12 }}>
+            <Text style={{ color: t.textMuted }}>{tr('Your encryption key is locked. Enter its passphrase to encrypt this message.')}</Text>
+            <UnlockKey email={account.email} onUnlocked={() => { setShowUnlock(false); setPgpEncrypt(true); setPgpCheck(n => n + 1); }} />
+          </View>
+        )}
 
         <TextInput
           value={text}
